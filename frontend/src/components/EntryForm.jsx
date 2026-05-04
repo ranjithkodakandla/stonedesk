@@ -108,7 +108,11 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
     
     try {
       await axios.post(`${API_BASE}/projects/${project.id}/pieces/batch`, piecesToCreate);
-      setFormData({ part: '', category: 'Vanity', drawing: '', length: '', width: '', qty: 1, unit: '', bldg_floor_flat: '', sink_type: 'No Sink', sink_cut: '-', tap_holes: '-', grooves: '-', edge: 'None', radius: '-', notes: '' });
+      setFormData({ 
+        part: '', category: 'Vanity', drawing: '', length: '', width: '', qty: 1, unit: '', 
+        building: '', floor: '', flat: '', sink_type: 'No Sink', sink_cut: '-', 
+        tap_holes: '-', grooves: '-', edge: 'None', radius: '-', notes: '' 
+      });
       setLiveCalc({ sqft: 0, kg: 0 });
       alert('Pieces added successfully!');
       onDataChange();
