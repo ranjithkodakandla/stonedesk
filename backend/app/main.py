@@ -102,6 +102,10 @@ app.add_middleware(
 )
 
 # API Routes
+@app.get("/")
+def root():
+    return {"status": "online", "message": "StoneDesk API is running"}
+
 @app.get("/api/projects/")
 def get_projects():
     db = SessionLocal()
