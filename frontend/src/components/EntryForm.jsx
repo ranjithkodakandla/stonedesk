@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
@@ -12,6 +12,17 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
     edge: 'None', radius: '-', notes: ''
   });
   const [liveCalc, setLiveCalc] = useState({ sqft: 0, kg: 0 });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showSpinner, setShowSpinner] = useState(false);
+  const spinnerTimerRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (spinnerTimerRef.current) {
+        clearTimeout(spinnerTimerRef.current);
+      }
+    };
+  }, []);
 
   const partOptions = { 
     Vanity: ['Vanity Top', 'Back Splash', 'Side Splash', 'Main Top'], 
@@ -78,6 +89,7 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!formData.part || formData.length === '' || formData.width === '') { 
       alert('Please fill Part, Length, and Depth'); 
       return; 
@@ -121,6 +133,11 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
     }
     
     try {
+      setIsSubmitting(true);
+      setShowSpinner(false);
+      spinnerTimerRef.current = setTimeout(() => {
+        setShowSpinner(true);
+      }, 3000);
       await axios.post(`${API_BASE}/projects/${project.id}/pieces/batch`, piecesToCreate);
       setFormData({ 
         part: '', category: 'Vanity', drawing: '', length: '', width: '', qty: 1, unit: '', 
@@ -133,6 +150,13 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
     } catch (error) { 
       console.error(error); 
       alert('Error adding pieces'); 
+    } finally {
+      if (spinnerTimerRef.current) {
+        clearTimeout(spinnerTimerRef.current);
+        spinnerTimerRef.current = null;
+      }
+      setShowSpinner(false);
+      setIsSubmitting(false);
     }
   };
 
@@ -175,9 +199,21 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
             <div className="col-span-2"><label className="label-text">Floor</label><input name="floor" value={formData.floor} onChange={handleChange} className="input-field" placeholder="e.g., 2,3" /></div>
             <div className="col-span-2"><label className="label-text">Flat</label><input name="flat" value={formData.flat} onChange={handleChange} className="input-field" placeholder="e.g., 203,303" /></div>
           </div>
-          <div className="border-t border-[#e2e8f0] px-5 py-4 bg-[#f8fafc] rounded-b-lg flex justify-between items-center">
+          <div className="relative border-t border-[#e2e8f0] px-5 py-4 bg-[#f8fafc] rounded-b-lg flex justify-between items-center">
             <div className="text-sm text-[#475569] font-medium">Live Calculation: <span className={liveCalc.sqft ? 'text-[#2563eb] font-bold ml-2' : 'text-[#94a3b8] ml-2'}>{liveCalc.sqft ? `${liveCalc.sqft.toFixed(2)} sq ft / ${liveCalc.kg.toFixed(1)} kg` : '— sq ft / — kg'}</span></div>
-            <button type="submit" className="btn-primary">+ Add Piece</button>
+            <button type="submit" disabled={isSubmitting} className={`btn-primary inline-flex items-center gap-2 ${isSubmitting ? 'opacity-70 cursor-not-allowed' : ''}`}>
+              {showSpinner && (
+                <span className="inline-flex h-4 w-4 items-center justify-center">
+                  <span className="h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                </span>
+              )}
+              <span>{showSpinner ? 'Saving...' : '+ Add Piece'}</span>
+            </button>
+            {showSpinner && (
+              <div className="absolute right-5 -top-10 rounded-md border border-[#cbd5e1] bg-white px-3 py-1.5 text-xs text-[#475569] shadow-sm">
+                Saving piece data...
+              </div>
+            )}
           </div>
         </form>
       </div>
