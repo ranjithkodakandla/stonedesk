@@ -19,11 +19,25 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
     Other: ['Laundry Top', 'Bar Top', 'Other'] 
   };
 
+  const partCategoryMap = Object.entries(partOptions).reduce((acc, [category, parts]) => {
+    parts.forEach((part) => {
+      acc[part] = category;
+    });
+    return acc;
+  }, {});
+
   const handleChange = (e) => {
     let value = e.target.value;
     if (e.target.type === 'number') {
       value = value === '' ? '' : parseFloat(value);
     }
+
+    if (e.target.name === 'part') {
+      const derivedCategory = partCategoryMap[value] || formData.category;
+      setFormData({ ...formData, part: value, category: derivedCategory });
+      return;
+    }
+
     setFormData({ ...formData, [e.target.name]: value });
     
     if (e.target.name === 'length' || e.target.name === 'width') {
@@ -142,7 +156,7 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
         <form onSubmit={handleSubmit}>
           <div className="p-5 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
             <div className="col-span-2"><label className="label-text">Part Description</label><select name="part" value={formData.part} onChange={handleChange} className="input-field" required><option value="">Select...</option>{Object.entries(partOptions).map(([cat, parts]) => <optgroup label={cat} key={cat}>{parts.map(p => <option key={p}>{p}</option>)}</optgroup>)}</select></div>
-            <div><label className="label-text">Category</label><select name="category" value={formData.category} onChange={handleChange} className="input-field"><option>Vanity</option><option>Kitchen</option><option>Laundry</option><option>Island</option><option>Splashes</option><option>Utility</option></select></div>
+            <div><label className="label-text">Category</label><select name="category" value={formData.category} onChange={handleChange} className="input-field"><option>Vanity</option><option>Kitchen</option><option>Laundry</option><option>Island</option><option>Splashes</option><option>Utility</option><option>Other</option></select></div>
             <div><label className="label-text">Drawing #</label><input name="drawing" value={formData.drawing} onChange={handleChange} className="input-field" /></div>
             <div><label className="label-text">Length (in)</label><input name="length" type="number" step="0.125" value={formData.length} onChange={handleChange} className="input-field" required /></div>
             <div><label className="label-text">Depth (in)</label><input name="width" type="number" step="0.125" value={formData.width} onChange={handleChange} className="input-field" required /></div>

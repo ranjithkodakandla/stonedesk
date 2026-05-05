@@ -14,7 +14,7 @@ StoneDesk is a full-stack application designed to help stone fabricators manage 
 ## Tech Stack
 
 *   **Frontend**: React, Vite, Tailwind CSS, Axios
-*   **Backend**: Python, FastAPI, SQLAlchemy, SQLite, openpyxl
+*   **Backend**: Python, FastAPI, MongoDB, openpyxl
 
 ## Getting Started (Docker)
 
@@ -22,13 +22,15 @@ The easiest way to run the application is using Docker Compose.
 
 1.  Make sure you have Docker and Docker Compose installed.
 2.  Open a terminal in the root directory of the project.
-3.  Run the following command:
+3.  Set `MONGODB_URI` in `backend/.env` or use the provided Docker Compose Mongo service.
+    The backend now fails closed if Mongo is unavailable unless `ALLOW_MEMORY_FALLBACK=true` is explicitly set for local debugging.
+4.  Run the following command:
 
     ```bash
     docker-compose up --build
     ```
 
-4.  The application will be available at:
+5.  The application will be available at:
     *   **Frontend**: http://localhost:5173
     *   **Backend API**: http://localhost:8000/docs (Swagger UI)
 
@@ -42,7 +44,8 @@ If you prefer to run the application without Docker:
 2.  Create a virtual environment: `python -m venv venv`
 3.  Activate the environment: `source venv/bin/activate` (Mac/Linux) or `venv\Scripts\activate` (Windows)
 4.  Install dependencies: `pip install -r requirements.txt`
-5.  Start the server: `uvicorn app.main:app --reload`
+5.  Set `MONGODB_URI` and `MONGODB_DB` in your environment.
+6.  Start the server: `uvicorn app.main:app --reload`
 
 ### Frontend
 
