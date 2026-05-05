@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
@@ -7,14 +7,38 @@ const CrateGrid = ({ pieces, crates, assignments, project, onDataChange }) => {
   const [strategy, setStrategy] = useState('smart');
   const [maxWeight, setMaxWeight] = useState(1000);
   const [insights, setInsights] = useState(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [showSpinner, setShowSpinner] = useState(false);
+  const spinnerTimerRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (spinnerTimerRef.current) {
+        clearTimeout(spinnerTimerRef.current);
+      }
+    };
+  }, []);
 
   const autoGenerate = async () => {
+    if (isGenerating) return;
     try {
+      setIsGenerating(true);
+      setShowSpinner(false);
+      spinnerTimerRef.current = setTimeout(() => {
+        setShowSpinner(true);
+      }, 3000);
       await axios.post(`${API_BASE}/projects/${project.id}/crates/auto-generate`, { group_by: strategy, max_weight: maxWeight });
       onDataChange();
       alert('Crates generated successfully');
     } catch (e) {
       alert('Error generating crates');
+    } finally {
+      if (spinnerTimerRef.current) {
+        clearTimeout(spinnerTimerRef.current);
+        spinnerTimerRef.current = null;
+      }
+      setShowSpinner(false);
+      setIsGenerating(false);
     }
   };
 
@@ -98,7 +122,21 @@ const CrateGrid = ({ pieces, crates, assignments, project, onDataChange }) => {
           </select>
         </div>
         <div><label className="label-text">Max Weight (kg)</label><input type="number" className="input-field w-32" value={maxWeight} onChange={(e)=>setMaxWeight(Number(e.target.value))} /></div>
-        <button onClick={autoGenerate} className="btn-primary mb-[2px]">Auto-Generate Crates</button>
+        <div className="relative">
+          <button onClick={autoGenerate} disabled={isGenerating} className={`btn-primary mb-[2px] inline-flex items-center gap-2 ${isGenerating ? 'opacity-70 cursor-not-allowed' : ''}`}>
+            {showSpinner && (
+              <span className="inline-flex h-4 w-4 items-center justify-center">
+                <span className="h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
+              </span>
+            )}
+            <span>{showSpinner ? 'Generating...' : 'Auto-Generate Crates'}</span>
+          </button>
+          {showSpinner && (
+            <div className="absolute left-0 top-full mt-2 rounded-md border border-[#cbd5e1] bg-white px-3 py-1.5 text-xs text-[#475569] shadow-sm">
+              Building crate plan...
+            </div>
+          )}
+        </div>
       </div>
 
       {insights && hasCrates && (
