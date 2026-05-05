@@ -37,16 +37,16 @@ const PiecesTable = ({ pieces, project, onDelete }) => {
              const wt = getWeight(p);
              return (
                <tr key={p.id} className="border-b border-[#f1f5f9] hover:bg-[#f8fafc] transition-colors">
-                 <td className="p-3 font-semibold text-[#1e293b]">{p.part}</td><td className="p-3">{p.category}</td>
-                 <td className="p-3">{p.drawing}</td><td className="p-3">{p.unit}</td>
+                 <td className="p-3 font-semibold text-[#1e293b] text-left">{p.part}</td><td className="p-3 text-left">{p.category}</td>
+                 <td className="p-3 text-left">{p.drawing}</td><td className="p-3 text-left">{p.unit}</td>
                  <td className="p-3 text-right">{p.length.toFixed(2)}</td><td className="p-3 text-right">{p.width.toFixed(2)}</td>
                  <td className="p-3 text-center text-[#2563eb] font-bold">{p.qty}</td><td className="p-3">{p.sink_type}</td>
                  <td className="p-3 text-center">{p.sink_cut}</td><td className="p-3 text-center">{p.tap_holes}</td><td className="p-3">{p.edge}</td>
                  <td className="p-3 text-right text-[#64748b]">{sqft.toFixed(2)}</td>
                  <td className="p-3 text-right text-[#64748b]">{wt.toFixed(1)}</td>
-                 <td className="p-3 text-[#64748b]">{p.building}</td>
-                 <td className="p-3 text-[#64748b]">{p.floor}</td>
-                 <td className="p-3 text-[#64748b]">{p.flat}</td>
+                 <td className="p-3 text-left text-[#64748b]">{p.building}</td>
+                 <td className="p-3 text-left text-[#64748b]">{p.floor}</td>
+                 <td className="p-3 text-left text-[#64748b]">{p.flat}</td>
                  <td className="p-3 text-center"><button onClick={() => onDelete(p.id)} className="text-[#dc2626] hover:text-[#991b1b] font-medium text-xs px-3 py-1 bg-[#fef2f2] hover:bg-[#fee2e2] rounded-md border border-[#fecaca] transition-colors">Delete</button></td>
                </tr>
              );

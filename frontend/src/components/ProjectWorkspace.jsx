@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import axios from 'axios';
 import Logo from './Logo';
 import EntryForm from './EntryForm';
@@ -38,9 +38,12 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
      return ((p.length * p.width) / 144) * factor * p.qty;
    };
 
-   const totalSqFt = pieces.reduce((s, p) => s + ((p.length * p.width) / 144) * p.qty, 0);
-   const totalWeight = pieces.reduce((s, p) => s + getWeight(p), 0);
-   const uniqueDrawings = new Set(pieces.map(p => p.drawing).filter(Boolean)).size;
+   const { totalSqFt, totalWeight, uniqueDrawings } = useMemo(() => {
+     const sqFt = pieces.reduce((s, p) => s + ((p.length * p.width) / 144) * p.qty, 0);
+     const weight = pieces.reduce((s, p) => s + getWeight(p), 0);
+     const drawings = new Set(pieces.map(p => p.drawing).filter(Boolean)).size;
+     return { totalSqFt: sqFt, totalWeight: weight, uniqueDrawings: drawings };
+   }, [pieces, project.material, project.thickness]);
 
    const exportExcel = () => {
      if (pieces.length === 0) return alert("No pieces to export!");

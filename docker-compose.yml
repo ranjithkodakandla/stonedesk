@@ -1,14 +1,22 @@
 version: '3.8'
 services:
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
   backend:
     build: ./backend
     ports:
       - "8000:8000"
     volumes:
       - ./backend/app:/app/app
-      - ./data:/app/data
     environment:
-      - DATABASE_URL=sqlite:///./data/stonedesk.db
+      - MONGODB_URI=mongodb://mongo:27017/stonedesk
+      - MONGODB_DB=stonedesk
+    depends_on:
+      - mongo
   frontend:
     build: ./frontend
     ports:
@@ -18,3 +26,5 @@ services:
       - ./frontend/index.html:/app/index.html
     depends_on:
       - backend
+volumes:
+  mongo-data:
