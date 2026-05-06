@@ -29,7 +29,7 @@ def create_crate(crate: schemas.CrateCreate, db: Session = Depends(get_db)):
 
 @router.post("/auto-generate")
 def auto_generate(strategy: CrateStrategyRequest, db: Session = Depends(get_db)):
-    from ..services.crate_strategy import auto_generate_crates
+    from ..services.crate_strategy import auto_generate_crates, estimate_crate_dimensions
     
     project = db.query(models.Project).first()
     if not project:
@@ -57,11 +57,20 @@ def auto_generate(strategy: CrateStrategyRequest, db: Session = Depends(get_db))
         last_crate = db.query(models.Crate).order_by(models.Crate.id.desc()).first()
         next_num = int(last_crate.crate_id[2:]) + 1 if last_crate else 1
         crate_id = f"CR{next_num:04d}"
+        dims = estimate_crate_dimensions(crate_pieces, project.material, project.thickness, strategy.max_weight or 1000)
         
         db_crate = models.Crate(
             crate_id=crate_id, 
             name=crate_name, 
-            max_weight=strategy.max_weight or 1000
+            max_weight=strategy.max_weight or 1000,
+            internal_length=dims["internal_length"],
+            internal_width=dims["internal_width"],
+            internal_height=dims["internal_height"],
+            external_length=dims["external_length"],
+            external_width=dims["external_width"],
+            external_height=dims["external_height"],
+            sqft=dims["sqft"],
+            weight=dims["weight"],
         )
         db.add(db_crate)
         db.flush()

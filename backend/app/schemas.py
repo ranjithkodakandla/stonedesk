@@ -37,6 +37,8 @@ class PieceBase(BaseModel):
     building: str = ""
     floor: str = ""
     flat: str = ""
+    edge_area: str = ""
+    edge_polish_machine: float = 0.0
 
 class PieceCreate(PieceBase):
     project_id: int = 1
@@ -50,6 +52,14 @@ class PieceResponse(PieceBase):
 class CrateBase(BaseModel):
     name: str
     max_weight: float = 1000
+    internal_length: float = 0.0
+    internal_width: float = 0.0
+    internal_height: float = 0.0
+    external_length: float = 0.0
+    external_width: float = 0.0
+    external_height: float = 0.0
+    sqft: float = 0.0
+    weight: float = 0.0
 
 class CrateCreate(CrateBase):
     pass

@@ -9,7 +9,7 @@ def create_excel_export(pieces: List[Piece], crates: List[Crate], assignments: L
     wb = Workbook()
     ws1 = wb.active
     ws1.title = "Line Items"
-    headers = ["#", "Part", "Category", "Material", "Thickness", "Drawing", "Unit", "Length", "Depth", "Qty", "Sink", "Cutouts", "Tap", "Grooves", "Edge", "Radius", "SqFt ea", "SqFt tot", "kg ea", "kg tot", "Building", "Floor", "Flat", "Notes"]
+    headers = ["#", "Part", "Category", "Material", "Thickness", "Drawing", "Unit", "Length", "Depth", "Qty", "Sink", "Cutouts", "Tap", "Grooves", "Edge", "Edge Area", "Edge Polish area", "Radius", "SqFt ea", "SqFt tot", "kg ea", "kg tot", "Building", "Floor", "Flat", "Notes"]
     for col, h in enumerate(headers, 1):
         ws1.cell(row=1, column=col, value=h)
     for idx, p in enumerate(pieces, 1):
@@ -29,15 +29,17 @@ def create_excel_export(pieces: List[Piece], crates: List[Crate], assignments: L
         ws1.cell(row=idx+1, column=13, value=p.tap_holes or "-")
         ws1.cell(row=idx+1, column=14, value=p.grooves or "-")
         ws1.cell(row=idx+1, column=15, value=p.edge or "-")
-        ws1.cell(row=idx+1, column=16, value=p.radius or "-")
-        ws1.cell(row=idx+1, column=17, value=round(sqft, 2))
-        ws1.cell(row=idx+1, column=18, value=round(sqft * p.qty, 2))
-        ws1.cell(row=idx+1, column=19, value=round(sqft * 7.5, 2))
-        ws1.cell(row=idx+1, column=20, value=round(sqft * 7.5 * p.qty, 2))
-        ws1.cell(row=idx+1, column=21, value=p.building or "")
-        ws1.cell(row=idx+1, column=22, value=p.floor or "")
-        ws1.cell(row=idx+1, column=23, value=p.flat or "")
-        ws1.cell(row=idx+1, column=24, value=p.notes or "")
+        ws1.cell(row=idx+1, column=16, value=getattr(p, "edge_area", "") or "-")
+        ws1.cell(row=idx+1, column=17, value=getattr(p, "edge_polish_machine", 0.0) or 0)
+        ws1.cell(row=idx+1, column=18, value=p.radius or "-")
+        ws1.cell(row=idx+1, column=19, value=round(sqft, 2))
+        ws1.cell(row=idx+1, column=20, value=round(sqft * p.qty, 2))
+        ws1.cell(row=idx+1, column=21, value=round(sqft * 7.5, 2))
+        ws1.cell(row=idx+1, column=22, value=round(sqft * 7.5 * p.qty, 2))
+        ws1.cell(row=idx+1, column=23, value=p.building or "")
+        ws1.cell(row=idx+1, column=24, value=p.floor or "")
+        ws1.cell(row=idx+1, column=25, value=p.flat or "")
+        ws1.cell(row=idx+1, column=26, value=p.notes or "")
     output = BytesIO()
     wb.save(output)
     output.seek(0)

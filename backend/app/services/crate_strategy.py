@@ -2,6 +2,49 @@ from typing import List, Dict, Tuple
 from ..models import Piece
 from .calculator import calculate_weight
 
+def estimate_crate_dimensions(pieces: List[Piece], material: str, thickness: str, max_weight: float) -> Dict[str, float]:
+    if not pieces:
+        return {
+            "internal_length": 0.0,
+            "internal_width": 0.0,
+            "internal_height": 0.0,
+            "external_length": 0.0,
+            "external_width": 0.0,
+            "external_height": 0.0,
+            "sqft": 0.0,
+            "weight": 0.0,
+        }
+
+    lengths = [float(piece.length or 0) for piece in pieces]
+    widths = [float(piece.width or 0) for piece in pieces]
+    total_sqft = sum(((float(piece.length or 0) * float(piece.width or 0)) / 144.0) * int(piece.qty or 1) for piece in pieces)
+    total_weight = sum(calculate_weight(piece.length, piece.width, material, thickness) * int(piece.qty or 1) for piece in pieces)
+    total_qty = sum(int(piece.qty or 1) for piece in pieces)
+
+    longest_piece = max(lengths) if lengths else 0.0
+    widest_piece = max(widths) if widths else 0.0
+
+    internal_length = max(longest_piece + 6.0, 0.0)
+    internal_width = max(widest_piece + 6.0, 0.0)
+    internal_height = max(
+        24.0,
+        18.0 + (total_qty * 1.25),
+        18.0 + (total_weight / 75.0 if total_weight else 0.0),
+        18.0 + (total_sqft / 18.0 if total_sqft else 0.0),
+    )
+    internal_height = min(internal_height, 60.0)
+
+    return {
+        "internal_length": round(internal_length, 1),
+        "internal_width": round(internal_width, 1),
+        "internal_height": round(internal_height, 1),
+        "external_length": round(internal_length + 3.0, 1),
+        "external_width": round(internal_width + 3.0, 1),
+        "external_height": round(internal_height + 6.0, 1),
+        "sqft": round(total_sqft, 2),
+        "weight": round(total_weight, 2),
+    }
+
 def group_by_type(pieces: List[Piece], material: str, thickness: str) -> Dict[str, List[Piece]]:
     groups = {}
     for piece in pieces:

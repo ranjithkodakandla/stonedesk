@@ -200,6 +200,8 @@ def piece_response(doc: Dict[str, Any]) -> Dict[str, Any]:
         "qty": doc.get("qty", 1),
         "unit": doc.get("unit", ""),
         "edge": doc.get("edge", ""),
+        "edge_area": doc.get("edge_area", ""),
+        "edge_polish_machine": doc.get("edge_polish_machine", 0.0),
         "radius": doc.get("radius", "-"),
         "sink_type": doc.get("sink_type", "No Sink"),
         "sink_cut": doc.get("sink_cut", "-"),
@@ -220,6 +222,14 @@ def crate_response(doc: Dict[str, Any]) -> Dict[str, Any]:
         "crate_id": doc.get("crate_id", ""),
         "name": doc.get("name", ""),
         "max_weight": doc.get("max_weight", 1000.0),
+        "internal_length": doc.get("internal_length", 0.0),
+        "internal_width": doc.get("internal_width", 0.0),
+        "internal_height": doc.get("internal_height", 0.0),
+        "external_length": doc.get("external_length", 0.0),
+        "external_width": doc.get("external_width", 0.0),
+        "external_height": doc.get("external_height", 0.0),
+        "sqft": doc.get("sqft", 0.0),
+        "weight": doc.get("weight", 0.0),
         "created_at": as_iso(doc.get("created_at")),
     }
 
@@ -258,21 +268,101 @@ def weight_factor(material: str, thickness: str) -> float:
     return factors.get(material, factors["Other"]).get(thickness, 6.5)
 
 
+def calculate_edge_polish_machine(length: float, width: float, edge_area: str) -> float:
+    try:
+        l = float(length)
+        w = float(width)
+    except (TypeError, ValueError):
+        return 0.0
+
+    if l <= 0 or w <= 0 or not edge_area:
+        return 0.0
+
+    perimeter = 2 * (l + w)
+    if edge_area in {"4 Sides", "Perimeter"}:
+        return perimeter
+    if edge_area == "3 Sides":
+        return 2 * max(l, w) + min(l, w)
+    if edge_area == "2 Sides":
+        return 2 * max(l, w)
+    if edge_area == "1 Side":
+        return max(l, w)
+    return 0.0
+
+
 def piece_weight(piece: Dict[str, Any], material: str, thickness: str) -> float:
     sqft = (float(piece.get("length", 0)) * float(piece.get("width", 0))) / 144.0
     return sqft * weight_factor(material, thickness) * int(piece.get("qty", 1))
+
+
+def estimate_crate_dimensions(
+    pieces: List[Dict[str, Any]],
+    material: str,
+    thickness: str,
+    max_weight: float,
+) -> Dict[str, Any]:
+    if not pieces:
+        return {
+            "internal_length": 0.0,
+            "internal_width": 0.0,
+            "internal_height": 0.0,
+            "external_length": 0.0,
+            "external_width": 0.0,
+            "external_height": 0.0,
+            "sqft": 0.0,
+            "weight": 0.0,
+        }
+
+    lengths = [float(piece.get("length", 0) or 0) for piece in pieces]
+    widths = [float(piece.get("width", 0) or 0) for piece in pieces]
+    total_sqft = sum(((float(piece.get("length", 0) or 0) * float(piece.get("width", 0) or 0)) / 144.0) * int(piece.get("qty", 1) or 1) for piece in pieces)
+    total_weight = sum(piece_weight(piece, material, thickness) for piece in pieces)
+    total_qty = sum(int(piece.get("qty", 1) or 1) for piece in pieces)
+
+    longest_piece = max(lengths) if lengths else 0.0
+    widest_piece = max(widths) if widths else 0.0
+
+    # Internal sizing uses the largest piece plus handling clearance.
+    clearance = 6.0
+    internal_length = max(longest_piece + clearance, 0.0)
+    internal_width = max(widest_piece + clearance, 0.0)
+
+    # Height is a heuristic based on stack count and weight. Stone crates need
+    # enough headroom for edge protectors, separators, and lifting access.
+    height_from_qty = 18.0 + (total_qty * 1.25)
+    height_from_weight = 18.0 + (total_weight / 75.0 if total_weight else 0.0)
+    height_from_area = 18.0 + (total_sqft / 18.0 if total_sqft else 0.0)
+    internal_height = max(24.0, height_from_qty, height_from_weight, height_from_area)
+    internal_height = min(internal_height, 60.0)
+
+    # External sizing adds crate walls, runners, and a little top/bottom slack.
+    wall_allowance = 3.0
+    height_allowance = 6.0
+    external_length = internal_length + wall_allowance
+    external_width = internal_width + wall_allowance
+    external_height = internal_height + height_allowance
+
+    return {
+        "internal_length": round(internal_length, 1),
+        "internal_width": round(internal_width, 1),
+        "internal_height": round(internal_height, 1),
+        "external_length": round(external_length, 1),
+        "external_width": round(external_width, 1),
+        "external_height": round(external_height, 1),
+        "sqft": round(total_sqft, 2),
+        "weight": round(total_weight, 2),
+        "max_weight": max_weight,
+    }
 
 
 def group_pieces(pieces: List[Dict[str, Any]], strategy: str) -> Dict[str, List[Dict[str, Any]]]:
     groups: Dict[str, List[Dict[str, Any]]] = {}
     for piece in pieces:
         if strategy in {"unit", "apartment", "destination"}:
-            key_parts = [
-                str(piece.get("building", "")).strip(),
-                str(piece.get("floor", "")).strip(),
-                str(piece.get("flat", "")).strip(),
-            ]
-            key = "-".join(part for part in key_parts if part)
+            building = str(piece.get("building", "")).strip()
+            floor = str(piece.get("floor", "")).strip()
+            flat = str(piece.get("flat", "")).strip()
+            key = " / ".join(part for part in [building, f"Floor {floor}" if floor else "", f"Flat {flat}" if flat else ""] if part)
             if not key:
                 key = "Uncategorized Unit"
         elif strategy in {"family", "type"}:
@@ -481,6 +571,7 @@ def crate_insights(project_id: int) -> Dict[str, Any]:
     for crate in crates:
         crate_pieces = pieces_by_crate.get(crate["id"], [])
         crate_weight = sum(piece_weight(piece, material, thickness) for piece in crate_pieces)
+        dims = estimate_crate_dimensions(crate_pieces, material, thickness, crate.get("max_weight", 1000))
         utilization = (crate_weight / crate.get("max_weight", 1)) * 100 if crate.get("max_weight", 0) else 0
         total_weight += crate_weight
         crate_rows.append(
@@ -493,6 +584,13 @@ def crate_insights(project_id: int) -> Dict[str, Any]:
                 "total_weight": round(crate_weight, 2),
                 "utilization": round(utilization, 1),
                 "items": len(crate_pieces),
+                "internal_length": dims["internal_length"],
+                "internal_width": dims["internal_width"],
+                "internal_height": dims["internal_height"],
+                "external_length": dims["external_length"],
+                "external_width": dims["external_width"],
+                "external_height": dims["external_height"],
+                "sqft": dims["sqft"],
             }
         )
 
@@ -555,6 +653,9 @@ def crate_insights(project_id: int) -> Dict[str, Any]:
         len(underfilled),
     )
 
+    from .services.container_planner import build_container_plan
+    loading_plan = build_container_plan(crate_rows)
+
     return {
         "total_weight": round(total_weight, 2),
         "crate_count": len(crate_rows),
@@ -564,6 +665,7 @@ def crate_insights(project_id: int) -> Dict[str, Any]:
         "distinct_families": distinct_families,
         "distinct_destinations": distinct_destinations,
         "container_plan": plan,
+        "container_loading_plan": loading_plan,
         "crates": crate_rows,
         "underfilled_crates": underfilled,
     }
@@ -585,6 +687,30 @@ class PieceCreate(BaseModel):
     tap_holes: str = "-"
     grooves: str = "-"
     edge: str = "None"
+    edge_area: str = ""
+    edge_polish_machine: float = 0.0
+    radius: str = "-"
+    notes: str = ""
+
+
+class PieceUpdate(BaseModel):
+    part: str = ""
+    category: str = ""
+    drawing: str = ""
+    length: float = 0.0
+    width: float = 0.0
+    qty: int = 1
+    unit: str = ""
+    building: str = ""
+    floor: str = ""
+    flat: str = ""
+    sink_type: str = "No Sink"
+    sink_cut: str = "-"
+    tap_holes: str = "-"
+    grooves: str = "-"
+    edge: str = "None"
+    edge_area: str = ""
+    edge_polish_machine: float = 0.0
     radius: str = "-"
     notes: str = ""
 
@@ -690,6 +816,7 @@ def get_pieces(project_id: int):
 @app.post("/api/projects/{project_id}/pieces/")
 def create_piece(project_id: int, piece: PieceCreate):
     piece_id = next_sequence("piece")
+    edge_polish_machine = piece.edge_polish_machine or calculate_edge_polish_machine(piece.length, piece.width, piece.edge_area)
     doc = {
         "id": piece_id,
         "project_id": project_id,
@@ -708,6 +835,8 @@ def create_piece(project_id: int, piece: PieceCreate):
         "tap_holes": piece.tap_holes,
         "grooves": piece.grooves,
         "edge": piece.edge,
+        "edge_area": piece.edge_area,
+        "edge_polish_machine": edge_polish_machine,
         "radius": piece.radius,
         "notes": piece.notes,
         "created_at": utc_now(),
@@ -721,6 +850,7 @@ def create_pieces_batch(project_id: int, pieces_data: List[PieceCreate]):
     docs = []
     for piece in pieces_data:
         piece_id = next_sequence("piece")
+        edge_polish_machine = piece.edge_polish_machine or calculate_edge_polish_machine(piece.length, piece.width, piece.edge_area)
         docs.append(
             {
                 "id": piece_id,
@@ -740,6 +870,8 @@ def create_pieces_batch(project_id: int, pieces_data: List[PieceCreate]):
                 "tap_holes": piece.tap_holes,
                 "grooves": piece.grooves,
                 "edge": piece.edge,
+                "edge_area": piece.edge_area,
+                "edge_polish_machine": edge_polish_machine,
                 "radius": piece.radius,
                 "notes": piece.notes,
                 "created_at": utc_now(),
@@ -766,6 +898,38 @@ def delete_piece(piece_id: int):
     if piece:
         assignments_col.delete_many({"project_id": piece["project_id"], "piece_id": piece_id})
     pieces_col.delete_one({"id": piece_id})
+    return {"message": "ok"}
+
+
+@app.put("/api/pieces/{piece_id}")
+def update_piece(piece_id: int, piece: PieceUpdate):
+    existing = pieces_col.find_one({"id": piece_id}, {"project_id": 1})
+    if not existing:
+        return {"message": "ok"}
+
+    edge_polish_machine = piece.edge_polish_machine or calculate_edge_polish_machine(piece.length, piece.width, piece.edge_area)
+    update = {
+        "part": piece.part,
+        "category": piece.category,
+        "drawing": piece.drawing,
+        "length": piece.length,
+        "width": piece.width,
+        "qty": piece.qty,
+        "unit": piece.unit,
+        "building": piece.building,
+        "floor": piece.floor,
+        "flat": piece.flat,
+        "sink_type": piece.sink_type,
+        "sink_cut": piece.sink_cut,
+        "tap_holes": piece.tap_holes,
+        "grooves": piece.grooves,
+        "edge": piece.edge,
+        "edge_area": piece.edge_area,
+        "edge_polish_machine": edge_polish_machine,
+        "radius": piece.radius,
+        "notes": piece.notes,
+    }
+    pieces_col.update_one({"id": piece_id}, {"$set": update})
     return {"message": "ok"}
 
 
@@ -796,12 +960,26 @@ def get_crates(project_id: int):
 @app.post("/api/projects/{project_id}/crates/")
 def create_crate(project_id: int, data: Dict[str, Any]):
     serial = crate_serial_for_project(project_id)
+    internal_length = float(data.get("internal_length", 0) or 0)
+    internal_width = float(data.get("internal_width", 0) or 0)
+    internal_height = float(data.get("internal_height", 0) or 0)
+    external_length = float(data.get("external_length", 0) or 0)
+    external_width = float(data.get("external_width", 0) or 0)
+    external_height = float(data.get("external_height", 0) or 0)
     crate = {
         "id": next_sequence("crate"),
         "project_id": project_id,
         "crate_id": f"CR{serial:04d}",
         "name": data.get("name") or f"Crate {serial}",
         "max_weight": float(data.get("max_weight", 1000) or 1000),
+        "internal_length": internal_length,
+        "internal_width": internal_width,
+        "internal_height": internal_height,
+        "external_length": external_length,
+        "external_width": external_width,
+        "external_height": external_height,
+        "sqft": float(data.get("sqft", 0) or 0),
+        "weight": float(data.get("weight", 0) or 0),
         "created_at": utc_now(),
     }
     crates_col.insert_one(crate)
@@ -845,12 +1023,26 @@ def auto_generate(project_id: int, data: Dict[str, Any]):
     crate_docs = []
     assignment_docs = []
     for crate in generated:
+        dims = estimate_crate_dimensions(
+            crate["pieces"],
+            project.get("material", "Granite"),
+            project.get("thickness", "3CM"),
+            crate["max_weight"],
+        )
         crate_doc = {
             "id": next_sequence("crate"),
             "project_id": project_id,
             "crate_id": crate["crate_id"],
             "name": crate["name"],
             "max_weight": crate["max_weight"],
+            "internal_length": dims["internal_length"],
+            "internal_width": dims["internal_width"],
+            "internal_height": dims["internal_height"],
+            "external_length": dims["external_length"],
+            "external_width": dims["external_width"],
+            "external_height": dims["external_height"],
+            "sqft": dims["sqft"],
+            "weight": dims["weight"],
             "created_at": utc_now(),
         }
         crate_docs.append(crate_doc)
@@ -1037,7 +1229,23 @@ def export_excel(project_id: int):
         )
 
     ws3 = wb.create_sheet("Crate_Plan")
-    ws3.append(["Crate #", "Crate Name", "Project", "Max Kg", "Total Kg", "Items", "Assigned By", "Date"])
+    ws3.append([
+        "Crate #",
+        "Crate Name",
+        "Project",
+        "Int L",
+        "Int W",
+        "Int H",
+        "Ext L",
+        "Ext W",
+        "Ext H",
+        "Max Kg",
+        "Total Kg",
+        "Sq Ft",
+        "Items",
+        "Assigned By",
+        "Date",
+    ])
     for crate in crates:
         c_pieces = pieces_by_crate.get(crate["id"], [])
         total_kg = sum(piece_weight(piece, project.get("material", "Granite"), project.get("thickness", "3CM")) for piece in c_pieces)
@@ -1046,8 +1254,15 @@ def export_excel(project_id: int):
                 crate["crate_id"],
                 crate["name"],
                 project.get("name", ""),
+                crate.get("internal_length", 0),
+                crate.get("internal_width", 0),
+                crate.get("internal_height", 0),
+                crate.get("external_length", 0),
+                crate.get("external_width", 0),
+                crate.get("external_height", 0),
                 crate.get("max_weight", 1000),
                 round(total_kg, 2),
+                round(sum((piece["length"] * piece["width"]) / 144 * piece["qty"] for piece in c_pieces), 2),
                 len(c_pieces),
                 "System",
                 date.today().isoformat(),
