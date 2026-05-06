@@ -35,6 +35,8 @@ class Piece(Base):
     building = Column(String, default="")
     floor = Column(String, default="")
     flat = Column(String, default="")
+    edge_area = Column(String, default="")
+    edge_polish_machine = Column(Float, default=0.0)
     created_at = Column(DateTime, default=func.now())
 
 class Crate(Base):
@@ -43,6 +45,14 @@ class Crate(Base):
     crate_id = Column(String, unique=True, index=True)
     name = Column(String)
     max_weight = Column(Float, default=1000)
+    internal_length = Column(Float, default=0.0)
+    internal_width = Column(Float, default=0.0)
+    internal_height = Column(Float, default=0.0)
+    external_length = Column(Float, default=0.0)
+    external_width = Column(Float, default=0.0)
+    external_height = Column(Float, default=0.0)
+    sqft = Column(Float, default=0.0)
+    weight = Column(Float, default=0.0)
     created_at = Column(DateTime, default=func.now())
 
 class Assignment(Base):

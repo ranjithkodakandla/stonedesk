@@ -194,6 +194,68 @@ const CrateGrid = ({ pieces, crates, assignments, project, onDataChange }) => {
               Hold the booking until the crate mix is tighter. For stone export, that usually means merging same-family items until fill gets closer to 85-95% and the crate count drops enough to make the container decision obvious.
             </div>
           )}
+
+          {insights.container_loading_plan && insights.container_loading_plan.containers.length > 0 && (
+            <div className="mt-6 border-t pt-4">
+              <div className="font-semibold text-[#1e293b] mb-4">Container Loading Plan (Top-Down View)</div>
+              <div className="space-y-6">
+                {insights.container_loading_plan.containers.map((container, idx) => (
+                  <div key={container.id} className="border border-[#cbd5e1] rounded-md p-4 bg-[#f8fafc]">
+                    <div className="flex justify-between items-center mb-3">
+                      <div className="font-bold text-[#1e293b]">Container {idx + 1} ({container.type})</div>
+                      <div className="text-sm text-[#475569]">
+                        {container.used_weight.toLocaleString()} kg / {container.max_weight.toLocaleString()} kg max
+                        <span className="mx-2">|</span>
+                        {container.used_length.toFixed(1)}" / {container.max_length.toFixed(1)}" used
+                      </div>
+                    </div>
+                    {/* Container bounding box */}
+                    <div 
+                      className="relative border-2 border-[#94a3b8] bg-white overflow-hidden rounded-sm"
+                      style={{ 
+                        width: '100%', 
+                        // Keep aspect ratio roughly consistent. 92 is the width. 
+                        // Let's say length 470 represents 100% width. Then height is 92 / 470 * 100%
+                        aspectRatio: `${container.max_length} / ${container.max_width}`,
+                        minHeight: '120px'
+                      }}
+                    >
+                      {/* Door indicator */}
+                      <div className="absolute right-0 top-0 bottom-0 w-2 bg-amber-400 flex items-center justify-center writing-vertical" title="Doors">
+                      </div>
+                      
+                      {container.placements.map((p, i) => {
+                        const leftPct = (p.x / container.max_length) * 100;
+                        const topPct = (p.y / container.max_width) * 100;
+                        const widthPct = (p.length / container.max_length) * 100;
+                        const heightPct = (p.width / container.max_width) * 100;
+                        
+                        return (
+                          <div 
+                            key={i}
+                            className="absolute border border-white bg-blue-500/80 text-white flex flex-col items-center justify-center text-[10px] overflow-hidden hover:bg-blue-600 transition-colors cursor-help"
+                            style={{
+                              left: `${leftPct}%`,
+                              top: `${topPct}%`,
+                              width: `${widthPct}%`,
+                              height: `${heightPct}%`,
+                            }}
+                            title={`${p.name} (${p.crate_id})\nDim: ${p.length}"L x ${p.width}"W\nWeight: ${p.weight} kg${p.rotated ? '\n(Rotated)' : ''}`}
+                          >
+                            <span className="font-bold truncate px-1 w-full text-center">{p.crate_id}</span>
+                            {heightPct > 15 && widthPct > 5 && (
+                              <span className="text-[8px] opacity-80 truncate">{p.weight}kg</span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="text-xs text-center mt-2 text-[#64748b]">Front (Nose) &larr;  Container Length  &rarr; Back (Doors)</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
       {!hasCrates && (
@@ -232,6 +294,10 @@ const CrateGrid = ({ pieces, crates, assignments, project, onDataChange }) => {
                 <div>
                   <div className="font-bold text-[#1e293b]">{c.name}</div>
                   <div className="text-xs text-[#2563eb] font-medium mt-1">{c.crate_id}</div>
+                  <div className="text-[11px] text-[#64748b] mt-1 leading-5">
+                    <div>Int: {Number(c.internal_length || 0).toFixed(1)} x {Number(c.internal_width || 0).toFixed(1)} x {Number(c.internal_height || 0).toFixed(1)} in</div>
+                    <div>Ext: {Number(c.external_length || 0).toFixed(1)} x {Number(c.external_width || 0).toFixed(1)} x {Number(c.external_height || 0).toFixed(1)} in</div>
+                  </div>
                   <div className={`text-[10px] uppercase tracking-wide mt-1 inline-flex px-2 py-1 rounded-full ${fillState.badge}`}>{fillState.label}</div>
                 </div>
                 <button onClick={() => deleteCrate(c.id)} className="text-xs text-[#dc2626] hover:text-[#991b1b] bg-[#fef2f2] hover:bg-[#fee2e2] border border-[#fecaca] px-3 py-1 rounded-md transition-colors">Delete</button>

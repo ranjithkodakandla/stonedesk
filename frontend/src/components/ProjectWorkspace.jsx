@@ -74,7 +74,7 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
          <div className="flex gap-2 mb-4 border-b border-[#e2e8f0]">
             {['Entry', 'Summary', 'Crate Plan'].map(tab => (<button key={tab.toLowerCase()} onClick={() => setActiveTab(tab.toLowerCase())} className={`px-6 py-2.5 text-sm font-medium transition-colors rounded-t-lg ${activeTab === tab.toLowerCase() ? 'bg-white border-t border-x border-[#e2e8f0] text-[#2563eb] shadow-sm relative top-[1px]' : 'text-[#64748b] hover:text-[#1e293b] hover:bg-[#f1f5f9]'}`}>{tab}</button>))}
          </div>
-         {activeTab === 'entry' && <><EntryForm project={project} setProject={setProject} onDataChange={fetchData} /><PiecesTable pieces={pieces} project={project} onDelete={async (id) => { await axios.delete(`${API_BASE}/pieces/${id}`); fetchData(); alert('Piece deleted'); }} /></>}
+         {activeTab === 'entry' && <><EntryForm project={project} setProject={setProject} onDataChange={fetchData} /><PiecesTable pieces={pieces} project={project} onDelete={async (id) => { await axios.delete(`${API_BASE}/pieces/${id}`); fetchData(); alert('Piece deleted'); }} onDataChange={fetchData} /></>}
          {activeTab === 'summary' && <SummaryTab pieces={pieces} project={project} />}
          {activeTab === 'crate plan' && <CrateGrid pieces={pieces} crates={crates} assignments={assignments} project={project} onDataChange={fetchData} />}
 
