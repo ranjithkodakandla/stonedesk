@@ -9,42 +9,26 @@ import {
   summarizeDraftContainers,
 } from '../utils/plannerUtils';
 
+const EMPTY_CRATES = [];
+
 const PlannerContainerTab = () => {
-  const {
-    insights,
-    crates,
-    manualContainers,
-    manualContainerDirty,
-    isRefreshing,
-    selectedContainerId,
-    setSelectedContainerId,
-    selectedPlacementCrateId,
-    setSelectedPlacementCrateId,
-    addManualContainer,
-    removeManualContainer,
-    updateManualContainerType,
-    addCrateToManualContainer,
-    updateManualPlacement,
-    removeManualPlacement,
-    resetManualContainerPlan,
-  } = usePlannerStore((state) => ({
-    insights: state.insights,
-    crates: state.insights?.crates || [],
-    manualContainers: state.manualContainers,
-    manualContainerDirty: state.manualContainerDirty,
-    isRefreshing: state.isRefreshing,
-    selectedContainerId: state.selectedContainerId,
-    setSelectedContainerId: state.setSelectedContainerId,
-    selectedPlacementCrateId: state.selectedPlacementCrateId,
-    setSelectedPlacementCrateId: state.setSelectedPlacementCrateId,
-    addManualContainer: state.addManualContainer,
-    removeManualContainer: state.removeManualContainer,
-    updateManualContainerType: state.updateManualContainerType,
-    addCrateToManualContainer: state.addCrateToManualContainer,
-    updateManualPlacement: state.updateManualPlacement,
-    removeManualPlacement: state.removeManualPlacement,
-    resetManualContainerPlan: state.resetManualContainerPlan,
-  }));
+  const insights = usePlannerStore((state) => state.insights);
+  const manualContainers = usePlannerStore((state) => state.manualContainers);
+  const manualContainerDirty = usePlannerStore((state) => state.manualContainerDirty);
+  const isRefreshing = usePlannerStore((state) => state.isRefreshing);
+  const selectedContainerId = usePlannerStore((state) => state.selectedContainerId);
+  const setSelectedContainerId = usePlannerStore((state) => state.setSelectedContainerId);
+  const selectedPlacementCrateId = usePlannerStore((state) => state.selectedPlacementCrateId);
+  const setSelectedPlacementCrateId = usePlannerStore((state) => state.setSelectedPlacementCrateId);
+  const addManualContainer = usePlannerStore((state) => state.addManualContainer);
+  const removeManualContainer = usePlannerStore((state) => state.removeManualContainer);
+  const updateManualContainerType = usePlannerStore((state) => state.updateManualContainerType);
+  const addCrateToManualContainer = usePlannerStore((state) => state.addCrateToManualContainer);
+  const updateManualPlacement = usePlannerStore((state) => state.updateManualPlacement);
+  const removeManualPlacement = usePlannerStore((state) => state.removeManualPlacement);
+  const resetManualContainerPlan = usePlannerStore((state) => state.resetManualContainerPlan);
+
+  const crates = useMemo(() => insights?.crates || EMPTY_CRATES, [insights]);
 
   const [addCrateValue, setAddCrateValue] = useState('');
   const canvasRef = useRef(null);
@@ -66,11 +50,12 @@ const PlannerContainerTab = () => {
     || selectedContainer?.placements[0]
     || null;
 
+  const selectedPlacementCrateIdResolved = selectedPlacement?.crate_id ?? null;
   useEffect(() => {
-    if (selectedPlacement && selectedPlacement.crate_id !== selectedPlacementCrateId) {
-      setSelectedPlacementCrateId(selectedPlacement.crate_id);
+    if (selectedPlacementCrateIdResolved != null && selectedPlacementCrateIdResolved !== selectedPlacementCrateId) {
+      setSelectedPlacementCrateId(selectedPlacementCrateIdResolved);
     }
-  }, [selectedPlacement, selectedPlacementCrateId, setSelectedPlacementCrateId]);
+  }, [selectedPlacementCrateIdResolved, selectedPlacementCrateId, setSelectedPlacementCrateId]);
 
   useEffect(() => {
     const handleMove = (event) => {

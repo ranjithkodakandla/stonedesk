@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { usePlannerStore } from '../store/plannerStore';
 import { buildRecommendationReasons, formatNumber, summarizeWarnings } from '../utils/plannerUtils';
+import { printCratePlan, printContainerPlan } from '../utils/printUtils';
 
 const KpiCard = ({ label, value, accent = 'text-[#0f172a]' }) => (
   <div className="rounded-[24px] border border-[#e2e8f0] bg-white px-4 py-4 shadow-sm">
@@ -9,22 +10,31 @@ const KpiCard = ({ label, value, accent = 'text-[#0f172a]' }) => (
   </div>
 );
 
+const PACKING_MODES = [
+  {
+    id: 'category',
+    label: 'Category-Based',
+    subtitle: 'Fabrication efficiency',
+    desc: 'Groups by part type (Vanity, Kitchen, Island). Best for fabrication and handling.',
+  },
+  {
+    id: 'flat',
+    label: 'Flat-Based',
+    subtitle: 'Installation efficiency',
+    desc: 'Groups by apartment/flat. One crate per flat when possible. Best for on-site delivery.',
+  },
+];
+
 const PlannerSummaryTab = () => {
-  const {
-    project,
-    insights,
-    isWorkspaceLoading,
-    setActiveTab,
-    setPreferredContainerMode,
-    exportWorkbook,
-  } = usePlannerStore((state) => ({
-    project: state.project,
-    insights: state.insights,
-    isWorkspaceLoading: state.isWorkspaceLoading,
-    setActiveTab: state.setActiveTab,
-    setPreferredContainerMode: state.setPreferredContainerMode,
-    exportWorkbook: state.exportWorkbook,
-  }));
+  const project = usePlannerStore((state) => state.project);
+  const insights = usePlannerStore((state) => state.insights);
+  const crates = usePlannerStore((state) => state.crates);
+  const isWorkspaceLoading = usePlannerStore((state) => state.isWorkspaceLoading);
+  const isRefreshing = usePlannerStore((state) => state.isRefreshing);
+  const setActiveTab = usePlannerStore((state) => state.setActiveTab);
+  const setPreferredContainerMode = usePlannerStore((state) => state.setPreferredContainerMode);
+  const exportWorkbook = usePlannerStore((state) => state.exportWorkbook);
+  const regenerateWithStrategy = usePlannerStore((state) => state.regenerateWithStrategy);
 
   const warningSummary = useMemo(
     () => summarizeWarnings(insights?.exceptions || []),
@@ -57,8 +67,58 @@ const PlannerSummaryTab = () => {
 
   const activeMode = project.preferred_container_mode || 'recommended';
 
+  const currentPackingMode = crates.length > 0
+    ? (crates[0]?.packing_mode || 'category')
+    : 'category';
+
   return (
     <div className="space-y-6">
+      {/* Packing Mode Selector */}
+      <div className="rounded-[32px] border border-[#dbe4f0] bg-white p-6 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <div className="text-xs uppercase tracking-[0.22em] text-[#64748b]">Packing Strategy</div>
+            <div className="mt-1 text-2xl font-semibold text-[#0f172a]">Choose how crates are grouped</div>
+          </div>
+          {isRefreshing && (
+            <div className="flex items-center gap-2 text-sm text-[#64748b]">
+              <span className="inline-block h-4 w-4 rounded-full border-2 border-[#1d4ed8] border-t-transparent animate-spin" />
+              Regenerating...
+            </div>
+          )}
+        </div>
+        <div className="mt-5 grid gap-4 md:grid-cols-2">
+          {PACKING_MODES.map((mode) => {
+            const isActive = currentPackingMode === mode.id;
+            return (
+              <button
+                key={mode.id}
+                type="button"
+                disabled={isRefreshing}
+                onClick={() => {
+                  if (!isActive) regenerateWithStrategy(mode.id);
+                }}
+                className={`rounded-[28px] border p-5 text-left transition-all ${
+                  isActive
+                    ? 'border-[#1d4ed8] bg-[#eff6ff] shadow-[0_0_0_3px_rgba(29,78,216,0.1)]'
+                    : 'border-[#e2e8f0] bg-[#f8fafc] hover:border-[#bfdbfe] hover:bg-white'
+                } ${isRefreshing ? 'opacity-60 cursor-wait' : ''}`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-lg font-semibold text-[#0f172a]">{mode.label}</div>
+                  {isActive && (
+                    <span className="rounded-full bg-[#dbeafe] px-3 py-1 text-[11px] font-semibold text-[#1d4ed8]">
+                      Active
+                    </span>
+                  )}
+                </div>
+                <div className="mt-1 text-sm font-medium text-[#1d4ed8]">{mode.subtitle}</div>
+                <div className="mt-2 text-sm text-[#475569]">{mode.desc}</div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
       <div className="grid gap-6 xl:grid-cols-[1.3fr,0.7fr]">
         <div className="rounded-[36px] border border-[#dbe4f0] bg-[radial-gradient(circle_at_top_left,_rgba(37,99,235,0.12),_transparent_30%),linear-gradient(135deg,_#ffffff,_#f8fbff)] p-7 shadow-sm">
           <div className="text-xs uppercase tracking-[0.26em] text-[#64748b]">Step 1</div>
@@ -86,6 +146,12 @@ const PlannerSummaryTab = () => {
             </button>
             <button type="button" className="btn-primary bg-[#059669] hover:bg-[#047857]" onClick={exportWorkbook}>
               Export Excel
+            </button>
+            <button type="button" className="btn-primary bg-[#7c3aed] hover:bg-[#6d28d9]" onClick={() => printCratePlan(project, insights)}>
+              🖨 Print Crate Plan
+            </button>
+            <button type="button" className="btn-primary bg-[#7c3aed] hover:bg-[#6d28d9]" onClick={() => printContainerPlan(project, insights)}>
+              🖨 Print Container Plan
             </button>
           </div>
         </div>

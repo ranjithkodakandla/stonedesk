@@ -1,58 +1,90 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import Logo from './Logo';
-import SourceDataModal from './SourceDataModal';
+import EntryForm from './EntryForm';
+import PiecesTable from './PiecesTable';
 import PlannerSummaryTab from './PlannerSummaryTab';
 import PlannerCrateTab from './PlannerCrateTab';
 import PlannerContainerTab from './PlannerContainerTab';
 import { usePlannerStore } from '../store/plannerStore';
 import { formatNumber, getPieceWeight } from '../utils/plannerUtils';
 
-const tabs = [
+const plannerSubTabs = [
   { id: 'summary', label: 'Summary / Insights', step: 'Step 1' },
   { id: 'crate-plan', label: 'Crate Plan', step: 'Step 2' },
   { id: 'container-loading', label: 'Container Loading', step: 'Step 3' },
 ];
 
 const ProjectWorkspace = ({ projectId, goBack }) => {
-  const {
-    project,
-    pieces,
-    activeTab,
-    sourceDataOpen,
-    initialize,
-    setActiveTab,
-    openSourceData,
-    closeSourceData,
-    setProjectDraft,
-    refreshWorkspace,
-    deletePiece,
-    exportWorkbook,
-  } = usePlannerStore((state) => ({
-    project: state.project,
-    pieces: state.pieces,
-    activeTab: state.activeTab,
-    sourceDataOpen: state.sourceDataOpen,
-    initialize: state.initialize,
-    setActiveTab: state.setActiveTab,
-    openSourceData: state.openSourceData,
-    closeSourceData: state.closeSourceData,
-    setProjectDraft: state.setProjectDraft,
-    refreshWorkspace: state.refreshWorkspace,
-    deletePiece: state.deletePiece,
-    exportWorkbook: state.exportWorkbook,
-  }));
+  const project = usePlannerStore((state) => state.project);
+  const pieces = usePlannerStore((state) => state.pieces);
+  const crates = usePlannerStore((state) => state.crates);
+  const activeTab = usePlannerStore((state) => state.activeTab);
+  const isWorkspaceLoading = usePlannerStore((state) => state.isWorkspaceLoading);
+  const isRefreshing = usePlannerStore((state) => state.isRefreshing);
+  const initialize = usePlannerStore((state) => state.initialize);
+  const setActiveTab = usePlannerStore((state) => state.setActiveTab);
+  const setProjectDraft = usePlannerStore((state) => state.setProjectDraft);
+  const refreshWorkspace = usePlannerStore((state) => state.refreshWorkspace);
+  const deletePiece = usePlannerStore((state) => state.deletePiece);
+  const exportWorkbook = usePlannerStore((state) => state.exportWorkbook);
+  const exportSourceData = usePlannerStore((state) => state.exportSourceData);
+  const generatePlan = usePlannerStore((state) => state.generatePlan);
+
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [mainTab, setMainTab] = useState('source-data'); // 'source-data' | 'planning'
 
   useEffect(() => {
     initialize(projectId);
   }, [initialize, projectId]);
 
+  const hasPlan = crates.length > 0;
   const totalWeight = pieces.reduce((sum, piece) => sum + getPieceWeight(piece, project), 0);
   const totalSqFt = pieces.reduce((sum, piece) => sum + ((Number(piece.length || 0) * Number(piece.width || 0)) / 144) * (Number(piece.qty) || 1), 0);
+  const totalQty = pieces.reduce((sum, p) => sum + (Number(p.qty) || 1), 0);
+
+  const handleGeneratePlan = async () => {
+    if (pieces.length === 0) {
+      alert('Please add at least one part before generating a plan.');
+      return;
+    }
+    setIsGenerating(true);
+    try {
+      await generatePlan();
+      setMainTab('planning');
+    } catch (err) {
+      console.error('Generate plan failed:', err);
+      alert('Failed to generate plan. Please try again.');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // When plan exists and user navigates here, default to planning tab
+  useEffect(() => {
+    if (hasPlan && mainTab === 'source-data') {
+      // Keep source-data as default when user first loads
+    }
+  }, [hasPlan]);
+
+  if (isWorkspaceLoading) {
+    return (
+      <div className="min-h-screen bg-[linear-gradient(180deg,_#f6f8fc,_#f8fafc)] text-[#1e293b] flex items-center justify-center">
+        <div className="text-center">
+          <div className="inline-flex h-10 w-10 items-center justify-center mb-4">
+            <span className="h-10 w-10 rounded-full border-[3px] border-[#1d4ed8] border-t-transparent animate-spin" />
+          </div>
+          <div className="text-sm text-[#64748b]">Loading project...</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[linear-gradient(180deg,_#f6f8fc,_#f8fafc)] text-[#1e293b]">
       <div className="mx-auto max-w-[1600px] px-5 py-6 lg:px-8">
         <div className="rounded-[36px] border border-[#dbe4f0] bg-white shadow-sm">
+
+          {/* ── Header Bar ── */}
           <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#edf2f7] px-6 py-5">
             <div className="flex items-center gap-5">
               <button
@@ -64,26 +96,24 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
               </button>
               <Logo />
             </div>
-
             <div className="flex flex-wrap gap-3">
-              <button type="button" className="btn-primary" onClick={openSourceData}>
-                Manage Source Data
-              </button>
-              <button
-                type="button"
-                className={`btn-primary bg-[#059669] hover:bg-[#047857] ${pieces.length === 0 ? 'cursor-not-allowed opacity-50' : ''}`}
-                onClick={exportWorkbook}
-                disabled={pieces.length === 0}
-              >
-                Export Final Plan
-              </button>
+              {hasPlan && (
+                <button
+                  type="button"
+                  className="btn-primary bg-[#059669] hover:bg-[#047857]"
+                  onClick={exportWorkbook}
+                >
+                  Export Final Plan
+                </button>
+              )}
             </div>
           </div>
 
+          {/* ── Project Info Header ── */}
           <div className="border-b border-[#edf2f7] px-6 py-6">
             <div className="flex flex-wrap items-start justify-between gap-6">
               <div>
-                <div className="text-xs uppercase tracking-[0.24em] text-[#64748b]">Planning Workspace</div>
+                <div className="text-xs uppercase tracking-[0.24em] text-[#64748b]">Project</div>
                 <div className="mt-2 text-3xl font-semibold text-[#0f172a]">
                   {project.name || `Project #${projectId}`}
                 </div>
@@ -99,7 +129,7 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
               <div className="grid gap-3 sm:grid-cols-3">
                 <div className="rounded-[24px] border border-[#e2e8f0] bg-[#f8fafc] px-4 py-4">
                   <div className="text-xs uppercase tracking-[0.16em] text-[#64748b]">Total Parts</div>
-                  <div className="mt-2 text-2xl font-semibold text-[#0f172a]">{pieces.reduce((sum, piece) => sum + (Number(piece.qty) || 1), 0)}</div>
+                  <div className="mt-2 text-2xl font-semibold text-[#0f172a]">{totalQty}</div>
                 </div>
                 <div className="rounded-[24px] border border-[#e2e8f0] bg-[#f8fafc] px-4 py-4">
                   <div className="text-xs uppercase tracking-[0.16em] text-[#64748b]">Total Sq Ft</div>
@@ -111,43 +141,133 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
                 </div>
               </div>
             </div>
+          </div>
 
-            <div className="mt-6 flex flex-wrap gap-3">
-              {tabs.map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`rounded-[24px] border px-4 py-3 text-left transition-all ${
-                    activeTab === tab.id
-                      ? 'border-[#1d4ed8] bg-[#eff6ff] text-[#1d4ed8] shadow-sm'
-                      : 'border-[#dbe4f0] bg-[#f8fafc] text-[#334155] hover:bg-white'
-                  }`}
-                >
-                  <div className="text-xs uppercase tracking-[0.16em]">{tab.step}</div>
-                  <div className="mt-1 text-sm font-semibold">{tab.label}</div>
-                </button>
-              ))}
+          {/* ── Main Tabs: Source Data | Planning ── */}
+          <div className="border-b border-[#edf2f7] px-6 py-4">
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setMainTab('source-data')}
+                className={`rounded-full px-5 py-2.5 text-sm font-semibold transition-all ${
+                  mainTab === 'source-data'
+                    ? 'bg-[#1d4ed8] text-white shadow-sm'
+                    : 'bg-[#f1f5f9] text-[#334155] hover:bg-[#e2e8f0]'
+                }`}
+              >
+                Source Data
+              </button>
+              <button
+                type="button"
+                disabled={!hasPlan}
+                onClick={() => hasPlan && setMainTab('planning')}
+                className={`rounded-full px-5 py-2.5 text-sm font-semibold transition-all ${
+                  mainTab === 'planning'
+                    ? 'bg-[#1d4ed8] text-white shadow-sm'
+                    : !hasPlan
+                    ? 'bg-[#f1f5f9] text-[#94a3b8] cursor-not-allowed'
+                    : 'bg-[#f1f5f9] text-[#334155] hover:bg-[#e2e8f0]'
+                }`}
+              >
+                Planning Workspace
+                {!hasPlan && <span className="ml-2 text-[10px] text-[#94a3b8]">(Generate plan first)</span>}
+              </button>
             </div>
           </div>
 
-          <div className="px-6 py-6">
-            {activeTab === 'summary' && <PlannerSummaryTab />}
-            {activeTab === 'crate-plan' && <PlannerCrateTab />}
-            {activeTab === 'container-loading' && <PlannerContainerTab />}
-          </div>
+          {/* ── Tab Content ── */}
+
+          {/* ▸ Tab 1: Source Data */}
+          {mainTab === 'source-data' && (
+            <>
+              <div className="px-6 py-6">
+                <EntryForm
+                  project={project}
+                  setProject={setProjectDraft}
+                  onDataChange={refreshWorkspace}
+                />
+                <PiecesTable
+                  pieces={pieces}
+                  project={project}
+                  onDelete={deletePiece}
+                  onDataChange={refreshWorkspace}
+                />
+              </div>
+
+              {/* Source Data Footer */}
+              <div className="sticky bottom-0 border-t border-[#edf2f7] bg-white px-6 py-5 rounded-b-[36px]">
+                <div className="flex items-center justify-between flex-wrap gap-4">
+                  <div className="text-sm text-[#64748b]">
+                    {pieces.length === 0
+                      ? 'Add parts above to enable plan generation'
+                      : `${totalQty} parts ready • ${formatNumber(totalSqFt, 1)} sq ft • ${formatNumber(totalWeight, 0)} kg`}
+                  </div>
+                  <div className="flex gap-3">
+                    {pieces.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={exportSourceData}
+                        className="rounded-full border border-[#cbd5e1] bg-white px-5 py-3 text-sm font-semibold text-[#334155] hover:bg-[#f8fafc] transition-all"
+                      >
+                        ↓ Download Source Data
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={pieces.length === 0 || isGenerating}
+                      onClick={handleGeneratePlan}
+                      className={`inline-flex items-center gap-2 rounded-full px-8 py-3 text-sm font-semibold text-white shadow-sm transition-all ${
+                        pieces.length === 0 || isGenerating
+                          ? 'bg-[#94a3b8] cursor-not-allowed'
+                          : 'bg-[#1d4ed8] hover:bg-[#1e40af] hover:shadow-md'
+                      }`}
+                    >
+                      {isGenerating && (
+                        <span className="inline-flex h-4 w-4 items-center justify-center">
+                          <span className="h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                        </span>
+                      )}
+                      {isGenerating ? 'Generating Plan...' : hasPlan ? 'Regenerate Plan →' : 'Generate Plan →'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* ▸ Tab 2: Planning Workspace */}
+          {mainTab === 'planning' && hasPlan && (
+            <>
+              <div className="border-b border-[#edf2f7] px-6 py-4">
+                <div className="flex flex-wrap gap-3">
+                  {plannerSubTabs.map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setActiveTab(tab.id)}
+                      className={`rounded-[24px] border px-4 py-3 text-left transition-all ${
+                        activeTab === tab.id
+                          ? 'border-[#1d4ed8] bg-[#eff6ff] text-[#1d4ed8] shadow-sm'
+                          : 'border-[#dbe4f0] bg-[#f8fafc] text-[#334155] hover:bg-white'
+                      }`}
+                    >
+                      <div className="text-xs uppercase tracking-[0.16em]">{tab.step}</div>
+                      <div className="mt-1 text-sm font-semibold">{tab.label}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="px-6 py-6">
+                {activeTab === 'summary' && <PlannerSummaryTab />}
+                {activeTab === 'crate-plan' && <PlannerCrateTab />}
+                {activeTab === 'container-loading' && <PlannerContainerTab />}
+              </div>
+            </>
+          )}
+
         </div>
       </div>
-
-      <SourceDataModal
-        isOpen={sourceDataOpen}
-        onClose={closeSourceData}
-        project={project}
-        setProject={setProjectDraft}
-        pieces={pieces}
-        onDeletePiece={deletePiece}
-        onDataChange={refreshWorkspace}
-      />
     </div>
   );
 };

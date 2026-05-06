@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 import certifi
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pymongo import MongoClient, ReturnDocument
@@ -387,77 +387,295 @@ def estimate_crate_dimensions(
     }
 
 
-def group_pieces(pieces: List[Dict[str, Any]], strategy: str) -> Dict[str, List[Dict[str, Any]]]:
-    groups: Dict[str, List[Dict[str, Any]]] = {}
-    for piece in pieces:
-        if strategy in {"unit", "apartment", "destination"}:
-            building = str(piece.get("building", "")).strip()
-            floor = str(piece.get("floor", "")).strip()
-            flat = str(piece.get("flat", "")).strip()
-            key = " / ".join(part for part in [building, f"Floor {floor}" if floor else "", f"Flat {flat}" if flat else ""] if part)
-            if not key:
-                key = "Uncategorized Unit"
-        elif strategy in {"family", "type"}:
-            key = piece.get("category") or "Uncategorized Family"
-        elif strategy == "smart":
-            destination_parts = [
-                str(piece.get("building", "")).strip(),
-                str(piece.get("floor", "")).strip(),
-                str(piece.get("flat", "")).strip(),
-            ]
-            destination = "-".join(part for part in destination_parts if part)
-            if destination:
-                key = f"{destination}"
-            else:
-                key = piece.get("category") or "Smart Mixed"
-        else:
-            key = piece.get("category") or "Uncategorized Type"
-        groups.setdefault(key, []).append(piece)
-    return groups
+CRATE_TEMPLATES: Dict[str, Dict[str, Any]] = {
+    "Vanity":   {"max_weight": 900,  "ideal_weight": (400, 750),  "max_pieces": 25, "label": "Vanity"},
+    "Kitchen":  {"max_weight": 1200, "ideal_weight": (500, 1000), "max_pieces": 18, "label": "Kitchen"},
+    "Island":   {"max_weight": 1500, "ideal_weight": (600, 1200), "max_pieces": 12, "label": "Island"},
+    "Splashes": {"max_weight": 650,  "ideal_weight": (200, 500),  "max_pieces": 40, "label": "Side Tops / Splashes"},
+    "Laundry":  {"max_weight": 900,  "ideal_weight": (400, 750),  "max_pieces": 25, "label": "Laundry"},
+    "Utility":  {"max_weight": 1100, "ideal_weight": (400, 900),  "max_pieces": 20, "label": "Utility"},
+    "Other":    {"max_weight": 1100, "ideal_weight": (400, 900),  "max_pieces": 20, "label": "Mixed / Other"},
+}
 
 
-def distribute_into_crates(
+def _get_template(category: str) -> Dict[str, Any]:
+    return CRATE_TEMPLATES.get(category, CRATE_TEMPLATES["Other"])
+
+
+def _piece_destination_key(piece: Dict[str, Any]) -> str:
+    building = str(piece.get("building", "")).strip()
+    floor = str(piece.get("floor", "")).strip()
+    flat = str(piece.get("flat", "")).strip()
+    parts = [p for p in [building, floor, flat] if p]
+    return " / ".join(parts) if parts else ""
+
+
+def _piece_flat_key(piece: Dict[str, Any]) -> str:
+    building = str(piece.get("building", "")).strip()
+    floor = str(piece.get("floor", "")).strip()
+    flat = str(piece.get("flat", "")).strip()
+    parts = [p for p in [building, floor, flat] if p]
+    return " / ".join(parts) if parts else "No Location"
+
+
+def _piece_floor_key(piece: Dict[str, Any]) -> str:
+    building = str(piece.get("building", "")).strip()
+    floor = str(piece.get("floor", "")).strip()
+    parts = [p for p in [building, floor] if p]
+    return " / ".join(parts) if parts else "No Location"
+
+
+def _piece_building_key(piece: Dict[str, Any]) -> str:
+    building = str(piece.get("building", "")).strip()
+    return building if building else "No Location"
+
+
+def _weight_band_status(total_weight: float, template: Dict[str, Any]) -> str:
+    ideal_lo, ideal_hi = template["ideal_weight"]
+    if ideal_lo <= total_weight <= ideal_hi:
+        return "ideal"
+    elif total_weight < ideal_lo:
+        return "below_ideal"
+    else:
+        return "above_ideal"
+
+
+def _distribute_pieces(
     pieces: List[Dict[str, Any]],
-    max_pieces: Optional[int],
     max_weight: float,
+    max_pieces: int,
     material: str,
     thickness: str,
 ) -> List[List[Dict[str, Any]]]:
+    """Greedy bin-pack sorted by length desc then weight desc."""
     if not pieces:
         return []
-
     sorted_pieces = sorted(
         pieces,
-        key=lambda piece: (
-            piece_weight(piece, material, thickness),
-            float(piece.get("length", 0)) * float(piece.get("width", 0)),
+        key=lambda p: (
+            float(p.get("length", 0)),
+            piece_weight(p, material, thickness),
         ),
         reverse=True,
     )
-
     crates: List[List[Dict[str, Any]]] = []
-    current_crate: List[Dict[str, Any]] = []
-    current_weight = 0.0
-
-    for piece in sorted_pieces:
-        p_weight = piece_weight(piece, material, thickness)
-        would_exceed_pieces = max_pieces is not None and len(current_crate) + 1 > max_pieces
-        would_exceed_weight = current_weight + p_weight > max_weight
-
-        if current_crate and (would_exceed_pieces or would_exceed_weight):
-            crates.append(current_crate)
-            current_crate = [piece]
-            current_weight = p_weight
-            continue
-
-        current_crate.append(piece)
-        current_weight += p_weight
-
-    if current_crate:
-        crates.append(current_crate)
-
+    current: List[Dict[str, Any]] = []
+    current_wt = 0.0
+    for p in sorted_pieces:
+        pw = piece_weight(p, material, thickness)
+        if current and (len(current) >= max_pieces or current_wt + pw > max_weight):
+            crates.append(current)
+            current = [p]
+            current_wt = pw
+        else:
+            current.append(p)
+            current_wt += pw
+    if current:
+        crates.append(current)
     return crates
 
+
+def _crate_weight(pieces: List[Dict[str, Any]], material: str, thickness: str) -> float:
+    return sum(piece_weight(p, material, thickness) for p in pieces)
+
+
+def _dominant_category(pieces: List[Dict[str, Any]]) -> str:
+    counts: Dict[str, int] = {}
+    for p in pieces:
+        cat = p.get("category") or "Other"
+        counts[cat] = counts.get(cat, 0) + 1
+    return max(counts, key=counts.get) if counts else "Other"
+
+
+# ─── Strategy 1: Category-Based ──────────────────────────────────────────────
+
+def strategy_category_based(
+    pieces: List[Dict[str, Any]],
+    user_max_weight: float,
+    material: str,
+    thickness: str,
+) -> List[Dict[str, Any]]:
+    """Group by category, then sub-group by destination within each category."""
+    # Primary grouping: by category
+    by_category: Dict[str, List[Dict[str, Any]]] = {}
+    for p in pieces:
+        cat = p.get("category") or "Other"
+        by_category.setdefault(cat, []).append(p)
+
+    generated: List[Dict[str, Any]] = []
+    serial = 1
+
+    for category, cat_pieces in sorted(by_category.items()):
+        template = _get_template(category)
+        effective_max_weight = min(user_max_weight, template["max_weight"])
+        effective_max_pieces = template["max_pieces"]
+
+        # Secondary grouping: by destination within category
+        by_dest: Dict[str, List[Dict[str, Any]]] = {}
+        for p in cat_pieces:
+            dest = _piece_destination_key(p) or category
+            by_dest.setdefault(dest, []).append(p)
+
+        for dest_name, dest_pieces in sorted(by_dest.items()):
+            batches = _distribute_pieces(
+                dest_pieces, effective_max_weight, effective_max_pieces, material, thickness
+            )
+            for batch in batches:
+                total_wt = _crate_weight(batch, material, thickness)
+                crate_name = f"{category} — {dest_name}" if dest_name != category else category
+                generated.append({
+                    "serial": serial,
+                    "name": f"{crate_name}-{serial}",
+                    "pieces": batch,
+                    "max_weight": effective_max_weight,
+                    "crate_type": template["label"],
+                    "packing_mode": "category",
+                    "primary_flat": "",
+                    "secondary_flats": [],
+                    "weight_band_status": _weight_band_status(total_wt, template),
+                    "grouping_reason": f"Grouped by {category} category" + (
+                        f", destination {dest_name}" if dest_name != category else ""
+                    ),
+                })
+                serial += 1
+
+    return generated
+
+
+# ─── Strategy 2: Flat-Based ──────────────────────────────────────────────────
+
+def strategy_flat_based(
+    pieces: List[Dict[str, Any]],
+    user_max_weight: float,
+    material: str,
+    thickness: str,
+) -> List[Dict[str, Any]]:
+    """Group by flat/apartment. Try single-crate-per-flat, split if needed, merge underfilled."""
+    # Step 1: Group by flat
+    by_flat: Dict[str, List[Dict[str, Any]]] = {}
+    for p in pieces:
+        key = _piece_flat_key(p)
+        by_flat.setdefault(key, []).append(p)
+
+    # Step 2+3: Try single crate per flat, split if exceeds
+    raw_crates: List[Dict[str, Any]] = []
+    for flat_key, flat_pieces in sorted(by_flat.items()):
+        total_wt = _crate_weight(flat_pieces, material, thickness)
+        if total_wt <= user_max_weight and len(flat_pieces) <= 30:
+            # Fits in one crate
+            dom_cat = _dominant_category(flat_pieces)
+            template = _get_template(dom_cat)
+            raw_crates.append({
+                "pieces": flat_pieces,
+                "primary_flat": flat_key,
+                "secondary_flats": [],
+                "crate_type": template["label"],
+                "weight": total_wt,
+                "max_weight": user_max_weight,
+                "grouping_reason": f"All parts for {flat_key}",
+                "floor_key": _piece_floor_key(flat_pieces[0]),
+                "building_key": _piece_building_key(flat_pieces[0]),
+                "weight_band_status": _weight_band_status(total_wt, template),
+            })
+        else:
+            # Split by category within flat
+            by_cat: Dict[str, List[Dict[str, Any]]] = {}
+            for p in flat_pieces:
+                cat = p.get("category") or "Other"
+                by_cat.setdefault(cat, []).append(p)
+
+            for cat, cat_pieces in sorted(by_cat.items()):
+                template = _get_template(cat)
+                eff_max = min(user_max_weight, template["max_weight"])
+                batches = _distribute_pieces(cat_pieces, eff_max, template["max_pieces"], material, thickness)
+                for batch in batches:
+                    wt = _crate_weight(batch, material, thickness)
+                    raw_crates.append({
+                        "pieces": batch,
+                        "primary_flat": flat_key,
+                        "secondary_flats": [],
+                        "crate_type": template["label"],
+                        "weight": wt,
+                        "max_weight": eff_max,
+                        "grouping_reason": f"{cat} parts for {flat_key} (split due to weight/size)",
+                        "floor_key": _piece_floor_key(batch[0]),
+                        "building_key": _piece_building_key(batch[0]),
+                        "weight_band_status": _weight_band_status(wt, template),
+                    })
+
+    # Step 4: Merge underfilled crates with nearby flats
+    underfill_threshold = user_max_weight * 0.40
+    merged_flags = [False] * len(raw_crates)
+
+    for i, crate in enumerate(raw_crates):
+        if merged_flags[i] or crate["weight"] >= underfill_threshold:
+            continue
+        # Try to merge with nearby crate
+        best_j = None
+        best_priority = 999
+        for j, other in enumerate(raw_crates):
+            if i == j or merged_flags[j]:
+                continue
+            combined_wt = crate["weight"] + other["weight"]
+            combined_count = len(crate["pieces"]) + len(other["pieces"])
+            if combined_wt > user_max_weight or combined_count > 30:
+                continue
+            # Priority: same floor > same building > different
+            if crate["floor_key"] == other["floor_key"] and crate["floor_key"] != "No Location":
+                priority = 1
+            elif crate["building_key"] == other["building_key"] and crate["building_key"] != "No Location":
+                priority = 2
+            else:
+                continue  # Don't merge across buildings
+            if priority < best_priority or (priority == best_priority and other["weight"] < crate["weight"]):
+                best_j = j
+                best_priority = priority
+
+        if best_j is not None:
+            other = raw_crates[best_j]
+            crate["pieces"] = crate["pieces"] + other["pieces"]
+            crate["weight"] = crate["weight"] + other["weight"]
+            if other["primary_flat"] and other["primary_flat"] != crate["primary_flat"]:
+                crate["secondary_flats"] = list(set(
+                    crate["secondary_flats"] + [other["primary_flat"]] + other["secondary_flats"]
+                ))
+            dom_cat = _dominant_category(crate["pieces"])
+            template = _get_template(dom_cat)
+            crate["crate_type"] = template["label"]
+            crate["weight_band_status"] = _weight_band_status(crate["weight"], template)
+            merge_label = f" + {other['primary_flat']}" if other["primary_flat"] != crate["primary_flat"] else ""
+            crate["grouping_reason"] = f"Merged: {crate['primary_flat']}{merge_label} (underfilled crates combined)"
+            merged_flags[best_j] = True
+
+    # Build final output
+    generated: List[Dict[str, Any]] = []
+    serial = 1
+    for i, crate in enumerate(raw_crates):
+        if merged_flags[i]:
+            continue
+        flat_label = crate["primary_flat"]
+        if crate["secondary_flats"]:
+            flat_label += " + " + ", ".join(crate["secondary_flats"][:2])
+            if len(crate["secondary_flats"]) > 2:
+                flat_label += f" +{len(crate['secondary_flats']) - 2} more"
+        generated.append({
+            "serial": serial,
+            "name": f"{flat_label}-{serial}",
+            "pieces": crate["pieces"],
+            "max_weight": crate["max_weight"],
+            "crate_type": crate["crate_type"],
+            "packing_mode": "flat",
+            "primary_flat": crate["primary_flat"],
+            "secondary_flats": crate["secondary_flats"],
+            "weight_band_status": crate["weight_band_status"],
+            "grouping_reason": crate["grouping_reason"],
+        })
+        serial += 1
+
+    return generated
+
+
+# ─── Orchestrator ─────────────────────────────────────────────────────────────
 
 def auto_generate_crates(
     pieces: List[Dict[str, Any]],
@@ -471,31 +689,12 @@ def auto_generate_crates(
         return []
 
     effective_max_weight = max_weight if max_weight and max_weight > 0 else 1000.0
-    groups = group_pieces(pieces, strategy)
 
-    generated: List[Dict[str, Any]] = []
-    serial = 1
-    for group_name, group_pieces_list in groups.items():
-        batches = distribute_into_crates(
-            group_pieces_list,
-            max_pieces=max_pieces,
-            max_weight=effective_max_weight,
-            material=material,
-            thickness=thickness,
-        )
-        for batch in batches:
-            generated.append(
-                {
-                    "serial": serial,
-                    "crate_id": f"CR{serial:04d}",
-                    "name": f"{group_name}-{serial}",
-                    "pieces": batch,
-                    "max_weight": effective_max_weight,
-                }
-            )
-            serial += 1
-
-    return generated
+    if strategy == "flat":
+        return strategy_flat_based(pieces, effective_max_weight, material, thickness)
+    else:
+        # "category", "smart", "type", or any other value → category-based
+        return strategy_category_based(pieces, effective_max_weight, material, thickness)
 
 
 def crate_group_name(crate_name: str) -> str:
@@ -1250,6 +1449,12 @@ def auto_generate(project_id: int, data: Dict[str, Any]):
             "external_height": dims["external_height"],
             "sqft": dims["sqft"],
             "weight": dims["weight"],
+            "crate_type": crate.get("crate_type", "Mixed / Other"),
+            "packing_mode": crate.get("packing_mode", "category"),
+            "primary_flat": crate.get("primary_flat", ""),
+            "secondary_flats": crate.get("secondary_flats", []),
+            "weight_band_status": crate.get("weight_band_status", ""),
+            "grouping_reason": crate.get("grouping_reason", ""),
             "created_at": utc_now(),
         }
         next_serial += 1
@@ -1384,237 +1589,341 @@ def delete_manual_container_plan(project_id: int):
 
 @app.get("/api/projects/{project_id}/crates/insights")
 def get_crate_insights(project_id: int):
-    return crate_insights(project_id)
+    try:
+        return crate_insights(project_id)
+    except Exception as e:
+        print(f"INSIGHTS ERROR for project {project_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to compute insights: {str(e)}")
+
+
+@app.get("/api/projects/{project_id}/export-source-data")
+def export_source_data(project_id: int):
+    """Export source data (project info + pieces) as Excel for proforma invoices."""
+    project = projects_col.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    pieces = sorted(pieces_col.find({"project_id": project_id}, {"_id": 0}), key=lambda doc: doc["id"])
+    if not pieces:
+        raise HTTPException(status_code=400, detail="No parts in this project yet.")
+
+    try:
+        import openpyxl
+        wb = openpyxl.Workbook()
+
+        ws1 = wb.active
+        ws1.title = "Project Info"
+        ws1.append(["StoneDesk — Source Data Export"])
+        ws1.append([])
+        ws1.append(["Project Name", project.get("name", "")])
+        ws1.append(["Customer", project.get("customer", "")])
+        ws1.append(["Job Number", project.get("job_number", "")])
+        ws1.append(["Material", project.get("material", "Granite")])
+        ws1.append(["Thickness", project.get("thickness", "3CM")])
+        ws1.append(["Export Date", date.today().isoformat()])
+        ws1.append([])
+        total_qty = sum(int(p.get("qty", 1) or 1) for p in pieces)
+        total_sqft = sum((float(p.get("length", 0)) * float(p.get("width", 0)) / 144.0) * int(p.get("qty", 1) or 1) for p in pieces)
+        total_weight = sum(
+            planning_piece_weight(p, project.get("material", "Granite"), project.get("thickness", "3CM")) * int(p.get("qty", 1) or 1)
+            for p in pieces
+        )
+        ws1.append(["Total Parts", total_qty])
+        ws1.append(["Total Sq Ft", round(total_sqft, 2)])
+        ws1.append(["Total Weight (kg)", round(total_weight, 2)])
+
+        ws2 = wb.create_sheet("Parts List")
+        ws2.append([
+            "Part", "Category", "Drawing", "Length", "Width", "Qty",
+            "Sq Ft", "Weight (kg)", "Unit", "Building", "Floor", "Flat",
+            "Sink Type", "Sink Cut", "Tap Holes", "Grooves",
+            "Edge", "Edge Area", "Edge Polish Machine",
+            "Fragility", "Delivery Priority", "Notes",
+        ])
+        mat = project.get("material", "Granite")
+        thick = project.get("thickness", "3CM")
+        for p in pieces:
+            qty = int(p.get("qty", 1) or 1)
+            sqft = round((float(p.get("length", 0)) * float(p.get("width", 0)) / 144.0) * qty, 2)
+            wt = round(planning_piece_weight(p, mat, thick) * qty, 2)
+            ws2.append([
+                p.get("part", ""), p.get("category", ""), p.get("drawing", ""),
+                p.get("length", 0), p.get("width", 0), qty,
+                sqft, wt,
+                p.get("unit", ""), p.get("building", ""), p.get("floor", ""), p.get("flat", ""),
+                p.get("sink_type", "No Sink"), p.get("sink_cut", "-"),
+                p.get("tap_holes", "-"), p.get("grooves", "-"),
+                p.get("edge", "None"), p.get("edge_area", ""), p.get("edge_polish_machine", 0),
+                p.get("fragility", "Standard"), p.get("delivery_priority", "Standard"),
+                p.get("notes", ""),
+            ])
+
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename=SourceData_{project.get('name', 'Project')}_{date.today()}.xlsx"},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"SOURCE DATA EXPORT ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Source data export failed: {str(e)}")
 
 
 @app.get("/api/projects/{project_id}/export")
 def export_excel(project_id: int):
     project = projects_col.find_one({"id": project_id}, {"_id": 0})
     if not project:
-        return {"message": "project not found"}
+        raise HTTPException(status_code=404, detail="Project not found")
 
     pieces = sorted(pieces_col.find({"project_id": project_id}, {"_id": 0}), key=lambda doc: doc["id"])
-    assignments = list(assignments_col.find({"project_id": project_id}, {"_id": 0}))
-    pieces_by_crate = pieces_grouped_by_crate(pieces, assignments)
-    snapshot = project_planning_snapshot(project_id)
-    loading_plan = build_container_plan(
-        snapshot["crate_rows"],
-        manual_plan=project.get("manual_container_plan"),
-        preferred_mode=project.get("preferred_container_mode"),
-    )
+    if not pieces:
+        raise HTTPException(status_code=400, detail="Cannot export: no parts in this project. Add parts first.")
 
-    import openpyxl
-    wb = openpyxl.Workbook()
+    crates_raw = list(crates_col.find({"project_id": project_id}, {"_id": 0}))
+    if not crates_raw:
+        raise HTTPException(status_code=400, detail="Cannot export: no crates generated. Generate a plan first.")
 
-    ws1 = wb.active
-    ws1.title = "Summary"
-    ws1.append(["StoneDesk Planning Summary"])
-    ws1.append([])
-    ws1.append(["Project", project.get("name", "")])
-    ws1.append(["Customer", project.get("customer", "")])
-    ws1.append(["Job Number", project.get("job_number", "")])
-    ws1.append(["Material", project.get("material", "Granite")])
-    ws1.append(["Thickness", project.get("thickness", "3CM")])
-    ws1.append(["Crate Wood Type", project.get("crate_wood_type", "Pine")])
-    ws1.append(["Crate Wood Thickness (in)", project.get("crate_wood_thickness", 1.25)])
-    ws1.append(["Export Date", date.today().isoformat()])
-    ws1.append([])
-    ws1.append(["KPI", "Value"])
-    ws1.append(["Crates Created", len(snapshot["crate_rows"])])
-    ws1.append(["Total Stone Weight (kg)", snapshot["total_weight"]])
-    ws1.append(["Shipment Weight incl. Tare (kg)", snapshot["total_gross_weight"]])
-    ws1.append(["Total Sq Ft", snapshot["total_sqft"]])
-    ws1.append(["Average Fill %", snapshot["average_fill_percent"]])
-    ws1.append(["Average Gross Weight Util %", snapshot["average_gross_utilization"]])
-    ws1.append(["Recommended Booking", loading_plan["recommendation"]["booking_action"]])
-    ws1.append(["Recommended Mode", loading_plan["recommendation"]["mode_label"]])
-    ws1.append(["Recommendation Reason", loading_plan["recommendation"]["reason"]])
-    ws1.append([])
-    ws1.append(["Alternative Options"])
-    for option in loading_plan["options"]:
-        option_line = (
-            f"{option['label']} | feasible={option['feasible']} | "
-            f"avg weight util {option['average_weight_utilization']:.0f}% | "
-            f"avg length util {option['average_length_utilization']:.0f}% | "
-            f"cost index {option['cost_index']:.2f}"
+    try:
+        assignments = list(assignments_col.find({"project_id": project_id}, {"_id": 0}))
+        pieces_by_crate = pieces_grouped_by_crate(pieces, assignments)
+        snapshot = project_planning_snapshot(project_id)
+        loading_plan = build_container_plan(
+            snapshot["crate_rows"],
+            manual_plan=project.get("manual_container_plan"),
+            preferred_mode=project.get("preferred_container_mode"),
         )
-        ws1.append([option_line])
 
-    ws2 = wb.create_sheet("Crates")
-    ws2.append(
-        [
-            "Crate ID",
-            "Crate Name",
-            "Destination Group",
-            "Family Group",
-            "Locked",
-            "Custom",
-            "Int L",
-            "Int W",
-            "Int H",
-            "Ext L",
-            "Ext W",
-            "Ext H",
-            "Wood Type",
-            "Wood Thickness",
-            "Tare Wt",
-            "Net Wt",
-            "Gross Wt",
-            "Fill %",
-            "Gross Util %",
-            "Center of Gravity",
-            "Forklift Entry",
-            "Stackable",
-            "Reinforcement",
-            "Reserved Space %",
-            "Status",
-            "Handling Notes",
-        ]
-    )
-    for crate in snapshot["crate_rows"]:
-        cog = crate["center_of_gravity"]
+        import openpyxl
+        wb = openpyxl.Workbook()
+
+        ws1 = wb.active
+        ws1.title = "Summary"
+        ws1.append(["StoneDesk Planning Summary"])
+        ws1.append([])
+        ws1.append(["Project", project.get("name", "")])
+        ws1.append(["Customer", project.get("customer", "")])
+        ws1.append(["Job Number", project.get("job_number", "")])
+        ws1.append(["Material", project.get("material", "Granite")])
+        ws1.append(["Thickness", project.get("thickness", "3CM")])
+        ws1.append(["Crate Wood Type", project.get("crate_wood_type", "Pine")])
+        ws1.append(["Crate Wood Thickness (in)", project.get("crate_wood_thickness", 1.25)])
+        ws1.append(["Export Date", date.today().isoformat()])
+        ws1.append([])
+        ws1.append(["KPI", "Value"])
+        ws1.append(["Crates Created", len(snapshot["crate_rows"])])
+        ws1.append(["Total Stone Weight (kg)", snapshot.get("total_weight", 0)])
+        ws1.append(["Shipment Weight incl. Tare (kg)", snapshot.get("total_gross_weight", 0)])
+        ws1.append(["Total Sq Ft", snapshot.get("total_sqft", 0)])
+        ws1.append(["Average Fill %", snapshot.get("average_fill_percent", 0)])
+        ws1.append(["Average Gross Weight Util %", snapshot.get("average_gross_utilization", 0)])
+
+        recommendation = loading_plan.get("recommendation") or {}
+        ws1.append(["Recommended Booking", recommendation.get("booking_action", "N/A")])
+        ws1.append(["Recommended Mode", recommendation.get("mode_label", "N/A")])
+        ws1.append(["Recommendation Reason", recommendation.get("reason", "")])
+        ws1.append([])
+        ws1.append(["Alternative Options"])
+        for option in loading_plan.get("options", []):
+            option_line = (
+                f"{option.get('label', '?')} | feasible={option.get('feasible', False)} | "
+                f"avg weight util {option.get('average_weight_utilization', 0):.0f}% | "
+                f"avg length util {option.get('average_length_utilization', 0):.0f}% | "
+                f"cost index {option.get('cost_index', 0):.2f}"
+            )
+            ws1.append([option_line])
+
+        ws2 = wb.create_sheet("Crates")
         ws2.append(
             [
-                crate["crate_id"],
-                crate["name"],
-                crate["destination_group"],
-                crate["family_group"],
-                crate["locked"],
-                crate["custom"],
-                crate["internal_length"],
-                crate["internal_width"],
-                crate["internal_height"],
-                crate["external_length"],
-                crate["external_width"],
-                crate["external_height"],
-                crate["wood_type"],
-                crate["wood_thickness"],
-                crate["tare_weight"],
-                crate["total_weight"],
-                crate["gross_weight"],
-                crate["fill_percent"],
-                crate["gross_utilization"],
-                f"{cog['x']}, {cog['y']}, {cog['z']}",
-                crate["forklift_entry"],
-                crate["stackable"],
-                crate["reinforcement"],
-                crate["reserved_space_pct"],
-                crate["efficiency_status"],
-                crate["handling_notes"],
+                "Crate ID",
+                "Crate Name",
+                "Destination Group",
+                "Family Group",
+                "Locked",
+                "Custom",
+                "Int L",
+                "Int W",
+                "Int H",
+                "Ext L",
+                "Ext W",
+                "Ext H",
+                "Wood Type",
+                "Wood Thickness",
+                "Tare Wt",
+                "Net Wt",
+                "Gross Wt",
+                "Fill %",
+                "Gross Util %",
+                "Center of Gravity",
+                "Forklift Entry",
+                "Stackable",
+                "Reinforcement",
+                "Reserved Space %",
+                "Status",
+                "Handling Notes",
             ]
         )
-
-    ws3 = wb.create_sheet("Crate Contents")
-    ws3.append(
-        [
-            "Crate ID",
-            "Crate Name",
-            "Piece ID",
-            "Part",
-            "Category",
-            "Drawing",
-            "Unit",
-            "Building",
-            "Floor",
-            "Flat",
-            "Length",
-            "Depth",
-            "Qty",
-            "Stone Wt (kg)",
-            "Orientation",
-            "Sink Type",
-            "Cutouts",
-            "Tap Holes",
-            "Grooves",
-            "Edge",
-            "Notes",
-        ]
-    )
-    for crate in snapshot["crate_rows"]:
-        crate_pieces = pieces_by_crate.get(crate["id"], [])
-        for piece in crate_pieces:
-            ws3.append(
+        for crate in snapshot["crate_rows"]:
+            cog = crate.get("center_of_gravity") or {"x": 0, "y": 0, "z": 0}
+            ws2.append(
                 [
-                    crate["crate_id"],
-                    crate["name"],
-                    piece["id"],
-                    piece.get("part", ""),
-                    piece.get("category", ""),
-                    piece.get("drawing", ""),
-                    piece.get("unit", ""),
-                    piece.get("building", ""),
-                    piece.get("floor", ""),
-                    piece.get("flat", ""),
-                    piece.get("length", 0),
-                    piece.get("width", 0),
-                    piece.get("qty", 1),
-                    round(planning_piece_weight(piece, project.get("material", "Granite"), project.get("thickness", "3CM")), 2),
-                    crate["orientation_constraints"],
-                    piece.get("sink_type", "No Sink"),
-                    piece.get("sink_cut", "-"),
-                    piece.get("tap_holes", "-"),
-                    piece.get("grooves", "-"),
-                    piece.get("edge", "-"),
-                    piece.get("notes", ""),
+                    crate.get("crate_id", ""),
+                    crate.get("name", ""),
+                    crate.get("destination_group", ""),
+                    crate.get("family_group", ""),
+                    crate.get("locked", False),
+                    crate.get("custom", False),
+                    crate.get("internal_length", 0),
+                    crate.get("internal_width", 0),
+                    crate.get("internal_height", 0),
+                    crate.get("external_length", 0),
+                    crate.get("external_width", 0),
+                    crate.get("external_height", 0),
+                    crate.get("wood_type", ""),
+                    crate.get("wood_thickness", 0),
+                    crate.get("tare_weight", 0),
+                    crate.get("total_weight", 0),
+                    crate.get("gross_weight", 0),
+                    crate.get("fill_percent", 0),
+                    crate.get("gross_utilization", 0),
+                    f"{cog.get('x', 0)}, {cog.get('y', 0)}, {cog.get('z', 0)}",
+                    crate.get("forklift_entry", ""),
+                    crate.get("stackable", False),
+                    crate.get("reinforcement", False),
+                    crate.get("reserved_space_pct", 0),
+                    crate.get("efficiency_status", ""),
+                    crate.get("handling_notes", ""),
                 ]
             )
 
-    ws4 = wb.create_sheet("Container Plan")
-    ws4.append(
-        [
-            "Container ID",
-            "Type",
-            "Crate ID",
-            "Crate Name",
-            "Destination",
-            "X",
-            "Y",
-            "Length",
-            "Width",
-            "Gross Wt",
-            "Loading Order",
-            "Unload Order",
-            "Rotated",
-            "Container Warnings",
-        ]
-    )
-    for container in loading_plan["containers"]:
-        warnings = "; ".join(container.get("warnings", []))
-        for placement in container.get("placements", []):
-            ws4.append(
-                [
-                    container["id"],
-                    container["type"],
-                    placement["crate_id"],
-                    placement["name"],
-                    placement.get("destination_group", ""),
-                    placement["x"],
-                    placement["y"],
-                    placement["length"],
-                    placement["width"],
-                    placement["weight"],
-                    placement["loading_order"],
-                    placement["unload_order"],
-                    placement["rotated"],
-                    warnings,
-                ]
-            )
+        ws3 = wb.create_sheet("Crate Contents")
+        ws3.append(
+            [
+                "Crate ID",
+                "Crate Name",
+                "Piece ID",
+                "Part",
+                "Category",
+                "Drawing",
+                "Unit",
+                "Building",
+                "Floor",
+                "Flat",
+                "Length",
+                "Depth",
+                "Qty",
+                "Stone Wt (kg)",
+                "Orientation",
+                "Sink Type",
+                "Cutouts",
+                "Tap Holes",
+                "Grooves",
+                "Edge",
+                "Notes",
+            ]
+        )
+        for crate in snapshot["crate_rows"]:
+            crate_pieces = pieces_by_crate.get(crate["id"], [])
+            for piece in crate_pieces:
+                ws3.append(
+                    [
+                        crate.get("crate_id", ""),
+                        crate.get("name", ""),
+                        piece.get("id", ""),
+                        piece.get("part", ""),
+                        piece.get("category", ""),
+                        piece.get("drawing", ""),
+                        piece.get("unit", ""),
+                        piece.get("building", ""),
+                        piece.get("floor", ""),
+                        piece.get("flat", ""),
+                        piece.get("length", 0),
+                        piece.get("width", 0),
+                        piece.get("qty", 1),
+                        round(planning_piece_weight(piece, project.get("material", "Granite"), project.get("thickness", "3CM")), 2),
+                        crate.get("orientation_constraints", ""),
+                        piece.get("sink_type", "No Sink"),
+                        piece.get("sink_cut", "-"),
+                        piece.get("tap_holes", "-"),
+                        piece.get("grooves", "-"),
+                        piece.get("edge", "-"),
+                        piece.get("notes", ""),
+                    ]
+                )
 
-    ws5 = wb.create_sheet("Exceptions / warnings")
-    ws5.append(["Scope", "ID", "Name", "Severity", "Message"])
-    for row in snapshot["exception_rows"]:
-        ws5.append([row["scope"], row["id"], row["name"], row["severity"], row["message"]])
-    for row in snapshot["underfilled_crates"]:
-        ws5.append(["crate", row["crate_id"], row["name"], row["status"], row["suggestion"]])
-    for container in loading_plan["containers"]:
-        for warning in container.get("warnings", []):
-            ws5.append(["container", container["id"], container["type"], "yellow", warning])
+        ws4 = wb.create_sheet("Container Plan")
+        ws4.append(
+            [
+                "Container ID",
+                "Type",
+                "Crate ID",
+                "Crate Name",
+                "Destination",
+                "X",
+                "Y",
+                "Length",
+                "Width",
+                "Gross Wt",
+                "Loading Order",
+                "Unload Order",
+                "Rotated",
+                "Container Warnings",
+            ]
+        )
+        for container in loading_plan.get("containers", []):
+            warnings = "; ".join(container.get("warnings", []))
+            for placement in container.get("placements", []):
+                ws4.append(
+                    [
+                        container.get("id", ""),
+                        container.get("type", ""),
+                        placement.get("crate_id", ""),
+                        placement.get("name", ""),
+                        placement.get("destination_group", ""),
+                        placement.get("x", 0),
+                        placement.get("y", 0),
+                        placement.get("length", 0),
+                        placement.get("width", 0),
+                        placement.get("weight", 0),
+                        placement.get("loading_order", 0),
+                        placement.get("unload_order", 0),
+                        placement.get("rotated", False),
+                        warnings,
+                    ]
+                )
 
-    output = BytesIO()
-    wb.save(output)
-    output.seek(0)
-    return StreamingResponse(
-        output,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename=StoneDesk_{date.today()}.xlsx"},
-    )
+        ws5 = wb.create_sheet("Exceptions - Warnings")
+        ws5.append(["Scope", "ID", "Name", "Severity", "Message"])
+        for row in snapshot.get("exception_rows", []):
+            ws5.append([row.get("scope", ""), row.get("id", ""), row.get("name", ""), row.get("severity", ""), row.get("message", "")])
+        for row in snapshot.get("underfilled_crates", []):
+            ws5.append(["crate", row.get("crate_id", ""), row.get("name", ""), row.get("status", ""), row.get("suggestion", "")])
+        for container in loading_plan.get("containers", []):
+            for warning in container.get("warnings", []):
+                ws5.append(["container", container.get("id", ""), container.get("type", ""), "yellow", warning])
+
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename=StoneDesk_{date.today()}.xlsx"},
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"EXPORT ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
+

@@ -49,16 +49,24 @@ export const usePlannerStore = create((set, get) => ({
     if (!projectId) return;
     set(firstLoad ? { isWorkspaceLoading: true } : { isRefreshing: true });
     try {
-      const [projectRes, piecesRes, cratesRes, assignmentsRes, insightsRes] = await Promise.all([
+      const [projectRes, piecesRes, cratesRes, assignmentsRes] = await Promise.all([
         axios.get(`${API_BASE}/projects/${projectId}`),
         axios.get(`${API_BASE}/projects/${projectId}/pieces/`),
         axios.get(`${API_BASE}/projects/${projectId}/crates/`),
         axios.get(`${API_BASE}/projects/${projectId}/crates/assignments`),
-        axios.get(`${API_BASE}/projects/${projectId}/crates/insights`),
       ]);
 
+      // Insights fetch is non-fatal — workspace must still load if this fails
+      let insightsData = null;
+      try {
+        const insightsRes = await axios.get(`${API_BASE}/projects/${projectId}/crates/insights`);
+        insightsData = insightsRes.data;
+      } catch (err) {
+        console.warn('Insights fetch failed (non-fatal):', err.message);
+      }
+
       const manualContainers = buildEditableContainersFromPlan(
-        insightsRes.data?.container_loading_plan?.containers || []
+        insightsData?.container_loading_plan?.containers || []
       );
 
       set((state) => ({
@@ -66,13 +74,15 @@ export const usePlannerStore = create((set, get) => ({
         pieces: piecesRes.data || [],
         crates: cratesRes.data || [],
         assignments: buildAssignmentMap(assignmentsRes.data || []),
-        insights: insightsRes.data,
+        insights: insightsData,
         manualContainers,
         manualContainerDirty: false,
         selectedContainerId: withSelectedContainer(manualContainers, state.selectedContainerId),
         selectedPlacementCrateId: null,
-        selectedCrateId: withSelectedCrate(cratesRes.data || [], insightsRes.data?.crates || [], state.selectedCrateId),
+        selectedCrateId: withSelectedCrate(cratesRes.data || [], insightsData?.crates || [], state.selectedCrateId),
       }));
+    } catch (err) {
+      console.error('Workspace refresh failed:', err);
     } finally {
       set({ isWorkspaceLoading: false, isRefreshing: false });
     }
@@ -101,6 +111,33 @@ export const usePlannerStore = create((set, get) => ({
   autoGenerateCrates: async (payload) => {
     await axios.post(`${API_BASE}/projects/${get().projectId}/crates/auto-generate`, payload);
     await get().refreshWorkspace();
+  },
+
+  generatePlan: async (packingMode = 'category') => {
+    set({ isRefreshing: true });
+    try {
+      await axios.post(`${API_BASE}/projects/${get().projectId}/crates/auto-generate`, {
+        group_by: packingMode,
+        max_weight: 1000,
+      });
+      await get().refreshWorkspace();
+      set({ activeTab: 'summary' });
+    } finally {
+      set({ isRefreshing: false });
+    }
+  },
+
+  regenerateWithStrategy: async (strategy) => {
+    set({ isRefreshing: true });
+    try {
+      await axios.post(`${API_BASE}/projects/${get().projectId}/crates/auto-generate`, {
+        group_by: strategy,
+        max_weight: 1000,
+      });
+      await get().refreshWorkspace();
+    } finally {
+      set({ isRefreshing: false });
+    }
   },
 
   updateCrate: async (crateId, payload) => {
@@ -250,10 +287,66 @@ export const usePlannerStore = create((set, get) => ({
     await get().refreshWorkspace();
   },
 
-  exportWorkbook: () => {
+  exportWorkbook: async () => {
     const projectId = get().projectId;
     if (!projectId) return;
-    window.open(`${API_BASE}/projects/${projectId}/export`, '_blank');
+    try {
+      const response = await fetch(`${API_BASE}/projects/${projectId}/export`);
+      if (!response.ok) {
+        let message = 'Export failed.';
+        try {
+          const errorData = await response.json();
+          message = errorData.detail || message;
+        } catch (_) { /* not json */ }
+        alert(message);
+        return;
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const disposition = response.headers.get('Content-Disposition') || '';
+      const filenameMatch = disposition.match(/filename=([^;]+)/);
+      link.download = filenameMatch ? filenameMatch[1] : `StoneDesk_export.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Export error:', err);
+      alert('Export failed. Please regenerate plan or contact support.');
+    }
+  },
+
+  exportSourceData: async () => {
+    const projectId = get().projectId;
+    if (!projectId) return;
+    try {
+      const response = await fetch(`${API_BASE}/projects/${projectId}/export-source-data`);
+      if (!response.ok) {
+        let message = 'Source data export failed.';
+        try {
+          const errorData = await response.json();
+          message = errorData.detail || message;
+        } catch (_) { /* not json */ }
+        alert(message);
+        return;
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const disposition = response.headers.get('Content-Disposition') || '';
+      const filenameMatch = disposition.match(/filename=([^;]+)/);
+      link.download = filenameMatch ? filenameMatch[1] : `SourceData_export.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Source data export error:', err);
+      alert('Source data export failed.');
+    }
   },
 
   clearAllProjectData: async () => {

@@ -14,33 +14,18 @@ const statusStyles = {
 };
 
 const PlannerCrateTab = () => {
-  const {
-    project,
-    pieces,
-    crates,
-    assignments,
-    insights,
-    selectedCrateId,
-    setSelectedCrateId,
-    updateCrate,
-    mergeCrates,
-    assignPiece,
-    unassignPiece,
-    createCustomCrate,
-  } = usePlannerStore((state) => ({
-    project: state.project,
-    pieces: state.pieces,
-    crates: state.crates,
-    assignments: state.assignments,
-    insights: state.insights,
-    selectedCrateId: state.selectedCrateId,
-    setSelectedCrateId: state.setSelectedCrateId,
-    updateCrate: state.updateCrate,
-    mergeCrates: state.mergeCrates,
-    assignPiece: state.assignPiece,
-    unassignPiece: state.unassignPiece,
-    createCustomCrate: state.createCustomCrate,
-  }));
+  const project = usePlannerStore((state) => state.project);
+  const pieces = usePlannerStore((state) => state.pieces);
+  const crates = usePlannerStore((state) => state.crates);
+  const assignments = usePlannerStore((state) => state.assignments);
+  const insights = usePlannerStore((state) => state.insights);
+  const selectedCrateId = usePlannerStore((state) => state.selectedCrateId);
+  const setSelectedCrateId = usePlannerStore((state) => state.setSelectedCrateId);
+  const updateCrate = usePlannerStore((state) => state.updateCrate);
+  const mergeCrates = usePlannerStore((state) => state.mergeCrates);
+  const assignPiece = usePlannerStore((state) => state.assignPiece);
+  const unassignPiece = usePlannerStore((state) => state.unassignPiece);
+  const createCustomCrate = usePlannerStore((state) => state.createCustomCrate);
 
   const [detailDraft, setDetailDraft] = useState(null);
   const [selectedPieceIds, setSelectedPieceIds] = useState([]);
@@ -60,6 +45,7 @@ const PlannerCrateTab = () => {
     [insights]
   );
 
+  const selectedCrateIdStable = selectedCrate?.id;
   useEffect(() => {
     if (!selectedCrate) {
       setDetailDraft(null);
@@ -81,7 +67,7 @@ const PlannerCrateTab = () => {
       custom: Boolean(selectedCrate.custom),
     });
     setSelectedPieceIds([]);
-  }, [selectedCrate]);
+  }, [selectedCrateIdStable]);
 
   const buildPayload = (overrides = {}) => {
     if (!selectedCrate || !detailDraft) return null;
@@ -221,8 +207,43 @@ const PlannerCrateTab = () => {
           <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${statusStyles[selectedCrate.efficiency_status] || statusStyles.yellow}`}>
             {selectedCrate.efficiency_status}
           </span>
+          {selectedCrate.crate_type && (
+            <span className="rounded-full border border-[#c7d2fe] bg-[#eef2ff] px-3 py-1 text-xs font-semibold text-[#4338ca]">
+              {selectedCrate.crate_type}
+            </span>
+          )}
+          {selectedCrate.packing_mode && (
+            <span className="rounded-full border border-[#bbf7d0] bg-[#f0fdf4] px-3 py-1 text-xs font-semibold text-[#166534]">
+              {selectedCrate.packing_mode === 'flat' ? 'Flat-Based' : 'Category-Based'}
+            </span>
+          )}
+          {selectedCrate.weight_band_status && (
+            <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+              selectedCrate.weight_band_status === 'ideal'
+                ? 'border-[#bbf7d0] bg-[#f0fdf4] text-[#166534]'
+                : selectedCrate.weight_band_status === 'below_ideal'
+                ? 'border-[#fde68a] bg-[#fffbeb] text-[#92400e]'
+                : 'border-[#fecaca] bg-[#fef2f2] text-[#991b1b]'
+            }`}>
+              {selectedCrate.weight_band_status === 'ideal' ? 'Ideal Weight' : selectedCrate.weight_band_status === 'below_ideal' ? 'Below Ideal' : 'Above Ideal'}
+            </span>
+          )}
         </div>
-
+        {(selectedCrate.primary_flat || selectedCrate.grouping_reason) && (
+          <div className="mt-3 flex flex-wrap gap-2 text-xs text-[#475569]">
+            {selectedCrate.primary_flat && (
+              <span className="rounded-lg border border-[#e2e8f0] bg-[#f8fafc] px-2 py-1">
+                📍 {selectedCrate.primary_flat}
+                {selectedCrate.secondary_flats?.length > 0 && ` + ${selectedCrate.secondary_flats.join(', ')}`}
+              </span>
+            )}
+            {selectedCrate.grouping_reason && (
+              <span className="rounded-lg border border-[#e2e8f0] bg-[#f8fafc] px-2 py-1">
+                {selectedCrate.grouping_reason}
+              </span>
+            )}
+          </div>
+        )}
         <div className="mt-5 grid gap-3 md:grid-cols-2">
           <div>
             <label className="label-text">Crate Name</label>
