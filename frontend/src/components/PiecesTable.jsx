@@ -10,6 +10,8 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
   const [isSaving, setIsSaving] = useState(false);
 
   const getWeight = (p) => {
+     const override = Number(p.weight_override || 0);
+     if (override > 0) return override;
      const factors = { Granite: { '2CM': 5.5, '3CM': 7.5, 'Mixed': 6.5 }, Quartz: { '2CM': 4.75, '3CM': 6.75, 'Mixed': 5.75 }, Marble: { '2CM': 6.0, '3CM': 8.0, 'Mixed': 7.0 } };
      const factor = (factors[project.material] || factors['Granite'])[project.thickness] || 7.5;
      return ((p.length * p.width) / 144) * factor;
@@ -56,6 +58,11 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
       sink_cut: piece.sink_cut || '-',
       tap_holes: piece.tap_holes || '-',
       grooves: piece.grooves || '-',
+      fragility: piece.fragility || 'Standard',
+      orientation: piece.orientation || 'Auto',
+      delivery_priority: piece.delivery_priority || 'Standard',
+      stack_preference: piece.stack_preference || 'Auto',
+      weight_override: piece.weight_override ?? '',
       edge: piece.edge || 'None',
       edge_area: piece.edge_area || '',
       edge_polish_machine: piece.edge_polish_machine || 0,
@@ -87,6 +94,11 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
       sink_cut: { enabled: false, value: '-' },
       tap_holes: { enabled: false, value: '-' },
       grooves: { enabled: false, value: '-' },
+      fragility: { enabled: false, value: 'Standard' },
+      orientation: { enabled: false, value: 'Auto' },
+      delivery_priority: { enabled: false, value: 'Standard' },
+      stack_preference: { enabled: false, value: 'Auto' },
+      weight_override: { enabled: false, value: '' },
       edge: { enabled: false, value: 'None' },
       edge_area: { enabled: false, value: '' },
       radius: { enabled: false, value: '-' },
@@ -112,6 +124,7 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
     if (!editDraft) return;
     setIsSaving(true);
     try {
+      const numericFields = new Set(['length', 'width', 'qty', 'weight_override']);
       const targetPieces = editMode === 'bulk'
         ? pieces.filter((piece) => selectedIds.includes(piece.id))
         : pieces.filter((piece) => piece.id === editDraft.id);
@@ -132,6 +145,11 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
           sink_cut: editMode === 'bulk' ? piece.sink_cut : (editDraft.sink_cut || '-'),
           tap_holes: editMode === 'bulk' ? piece.tap_holes : (editDraft.tap_holes || '-'),
           grooves: editMode === 'bulk' ? piece.grooves : (editDraft.grooves || '-'),
+          fragility: editMode === 'bulk' ? piece.fragility : (editDraft.fragility || 'Standard'),
+          orientation: editMode === 'bulk' ? piece.orientation : (editDraft.orientation || 'Auto'),
+          delivery_priority: editMode === 'bulk' ? piece.delivery_priority : (editDraft.delivery_priority || 'Standard'),
+          stack_preference: editMode === 'bulk' ? piece.stack_preference : (editDraft.stack_preference || 'Auto'),
+          weight_override: editMode === 'bulk' ? (Number(piece.weight_override) || 0) : (Number(editDraft.weight_override) || 0),
           edge: editMode === 'bulk' ? piece.edge : (editDraft.edge || 'None'),
           edge_area: editMode === 'bulk' ? piece.edge_area : (editDraft.edge_area || ''),
           edge_polish_machine: editMode === 'bulk'
@@ -145,8 +163,8 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
           Object.entries(editDraft).forEach(([field, config]) => {
             if (!config?.enabled) return;
             if (config.value === '' && config.value !== 0) return;
-            payload[field] = field === 'length' || field === 'width' || field === 'qty'
-              ? Number(config.value) || payload[field]
+            payload[field] = numericFields.has(field)
+              ? Number(config.value)
               : config.value;
           });
           payload.edge_polish_machine = calculateEdgePolishMachine(payload.length, payload.width, payload.edge_area);
@@ -172,6 +190,10 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
     tapHoles: ['-', '0', '1', '2', '3', '4', '5', '6'],
     grooves: ['-', '0', '1', '2', '3', '4'],
     radius: ['-', '1', '2', '3', '4'],
+    fragility: ['Standard', 'Fragile', 'High'],
+    orientation: ['Auto', 'No Rotate', 'Long Edge Vertical', 'Finished Face Protected'],
+    deliveryPriority: ['Standard', 'First Off', 'Last Off', 'Rush'],
+    stacking: ['Auto', 'No Stack', 'Stack Allowed'],
   }), []);
 
   const toggleSelection = (id) => {
@@ -268,6 +290,7 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
               <th className="p-3">Building</th>
               <th className="p-3">Floor</th>
               <th className="p-3">Flat</th>
+              <th className="p-3">Planner</th>
               <th className="p-3 text-center">Actions</th>
             </tr>
           </thead>
@@ -302,6 +325,10 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
                   <td className="p-3 text-left text-[#64748b]">{p.building}</td>
                   <td className="p-3 text-left text-[#64748b]">{p.floor}</td>
                   <td className="p-3 text-left text-[#64748b]">{p.flat}</td>
+                  <td className="p-3 text-xs text-[#64748b]">
+                    <div>{p.delivery_priority || 'Standard'} · {p.fragility || 'Standard'}</div>
+                    <div>{p.stack_preference || 'Auto'}{p.weight_override ? ` · ${Number(p.weight_override).toFixed(1)}kg ea` : ''}</div>
+                  </td>
                   <td className="p-3 text-center">
                     <div className="flex items-center justify-center gap-2">
                       <button
@@ -318,7 +345,7 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
                 </tr>
               );
             })}
-            {pieces.length === 0 && <tr><td colSpan="19" className="p-8 text-center text-[#64748b] italic">No pieces added to this project yet.</td></tr>}
+            {pieces.length === 0 && <tr><td colSpan="20" className="p-8 text-center text-[#64748b] italic">No pieces added to this project yet.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -355,6 +382,11 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
                   <div><label className="label-text">Cutouts</label><select value={editDraft.sink_cut || '-'} onChange={(e) => handleEditChange('sink_cut', e.target.value)} className="input-field">{pieceFormOptions.cutouts.map((item) => <option key={item}>{item}</option>)}</select></div>
                   <div><label className="label-text">Tap Holes</label><select value={editDraft.tap_holes || '-'} onChange={(e) => handleEditChange('tap_holes', e.target.value)} className="input-field">{pieceFormOptions.tapHoles.map((item) => <option key={item}>{item}</option>)}</select></div>
                   <div><label className="label-text">Grooves</label><select value={editDraft.grooves || '-'} onChange={(e) => handleEditChange('grooves', e.target.value)} className="input-field">{pieceFormOptions.grooves.map((item) => <option key={item}>{item}</option>)}</select></div>
+                  <div><label className="label-text">Fragility</label><select value={editDraft.fragility || 'Standard'} onChange={(e) => handleEditChange('fragility', e.target.value)} className="input-field">{pieceFormOptions.fragility.map((item) => <option key={item}>{item}</option>)}</select></div>
+                  <div><label className="label-text">Orientation</label><select value={editDraft.orientation || 'Auto'} onChange={(e) => handleEditChange('orientation', e.target.value)} className="input-field">{pieceFormOptions.orientation.map((item) => <option key={item}>{item}</option>)}</select></div>
+                  <div><label className="label-text">Delivery Priority</label><select value={editDraft.delivery_priority || 'Standard'} onChange={(e) => handleEditChange('delivery_priority', e.target.value)} className="input-field">{pieceFormOptions.deliveryPriority.map((item) => <option key={item}>{item}</option>)}</select></div>
+                  <div><label className="label-text">Stacking</label><select value={editDraft.stack_preference || 'Auto'} onChange={(e) => handleEditChange('stack_preference', e.target.value)} className="input-field">{pieceFormOptions.stacking.map((item) => <option key={item}>{item}</option>)}</select></div>
+                  <div><label className="label-text">Weight Override (kg ea)</label><input type="number" step="0.1" value={editDraft.weight_override || ''} onChange={(e) => handleEditChange('weight_override', e.target.value)} className="input-field" /></div>
                   <div><label className="label-text">Building</label><input value={editDraft.building || ''} onChange={(e) => handleEditChange('building', e.target.value)} className="input-field" /></div>
                   <div><label className="label-text">Floor</label><input value={editDraft.floor || ''} onChange={(e) => handleEditChange('floor', e.target.value)} className="input-field" /></div>
                   <div><label className="label-text">Flat</label><input value={editDraft.flat || ''} onChange={(e) => handleEditChange('flat', e.target.value)} className="input-field" /></div>
@@ -379,6 +411,11 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
                   {renderBulkField('sink_cut', 'Cutouts', <select value={editDraft.sink_cut.value} onChange={(e) => setBulkValue('sink_cut', e.target.value)} className="input-field">{pieceFormOptions.cutouts.map((item) => <option key={item}>{item}</option>)}</select>)}
                   {renderBulkField('tap_holes', 'Tap Holes', <select value={editDraft.tap_holes.value} onChange={(e) => setBulkValue('tap_holes', e.target.value)} className="input-field">{pieceFormOptions.tapHoles.map((item) => <option key={item}>{item}</option>)}</select>)}
                   {renderBulkField('grooves', 'Grooves', <select value={editDraft.grooves.value} onChange={(e) => setBulkValue('grooves', e.target.value)} className="input-field">{pieceFormOptions.grooves.map((item) => <option key={item}>{item}</option>)}</select>)}
+                  {renderBulkField('fragility', 'Fragility', <select value={editDraft.fragility.value} onChange={(e) => setBulkValue('fragility', e.target.value)} className="input-field">{pieceFormOptions.fragility.map((item) => <option key={item}>{item}</option>)}</select>)}
+                  {renderBulkField('orientation', 'Orientation', <select value={editDraft.orientation.value} onChange={(e) => setBulkValue('orientation', e.target.value)} className="input-field">{pieceFormOptions.orientation.map((item) => <option key={item}>{item}</option>)}</select>)}
+                  {renderBulkField('delivery_priority', 'Delivery Priority', <select value={editDraft.delivery_priority.value} onChange={(e) => setBulkValue('delivery_priority', e.target.value)} className="input-field">{pieceFormOptions.deliveryPriority.map((item) => <option key={item}>{item}</option>)}</select>)}
+                  {renderBulkField('stack_preference', 'Stacking', <select value={editDraft.stack_preference.value} onChange={(e) => setBulkValue('stack_preference', e.target.value)} className="input-field">{pieceFormOptions.stacking.map((item) => <option key={item}>{item}</option>)}</select>)}
+                  {renderBulkField('weight_override', 'Weight Override (kg ea)', <input type="number" step="0.1" value={editDraft.weight_override.value} onChange={(e) => setBulkValue('weight_override', e.target.value)} className="input-field" />)}
                   {renderBulkField('building', 'Building', <input value={editDraft.building.value} onChange={(e) => setBulkValue('building', e.target.value)} className="input-field" />)}
                   {renderBulkField('floor', 'Floor', <input value={editDraft.floor.value} onChange={(e) => setBulkValue('floor', e.target.value)} className="input-field" />)}
                   {renderBulkField('flat', 'Flat', <input value={editDraft.flat.value} onChange={(e) => setBulkValue('flat', e.target.value)} className="input-field" />)}

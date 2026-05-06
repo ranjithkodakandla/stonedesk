@@ -10,6 +10,7 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
     part: '', category: 'Vanity', drawing: '', length: '', width: '', qty: 1,
     unit: '', building: '', floor: '', flat: '',
     sink_type: 'No Sink', sink_cut: '-', tap_holes: '-', grooves: '-',
+    fragility: 'Standard', orientation: 'Auto', delivery_priority: 'Standard', stack_preference: 'Auto', weight_override: '',
     edge: 'None', edge_area: '', radius: '-', notes: ''
   });
   const [matrixData, setMatrixData] = useState({
@@ -57,14 +58,19 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
 
     setFormData({ ...formData, [e.target.name]: value });
     
-    if (e.target.name === 'length' || e.target.name === 'width') {
+    if (e.target.name === 'length' || e.target.name === 'width' || e.target.name === 'weight_override') {
       const length = e.target.name === 'length' ? value : formData.length;
       const width = e.target.name === 'width' ? value : formData.width;
+      const weightOverride = e.target.name === 'weight_override' ? value : formData.weight_override;
       if (length !== '' && width !== '' && !isNaN(length) && !isNaN(width)) {
         const sqft = (length * width) / 144;
-        const factors = { Granite: { '2CM': 5.5, '3CM': 7.5, 'Mixed': 6.5 }, Quartz: { '2CM': 4.75, '3CM': 6.75, 'Mixed': 5.75 }, Marble: { '2CM': 6.0, '3CM': 8.0, 'Mixed': 7.0 } };
-        const factor = (factors[project.material] || factors['Granite'])[project.thickness] || 7.5;
-        setLiveCalc({ sqft: sqft, kg: sqft * factor });
+        if (Number(weightOverride) > 0) {
+          setLiveCalc({ sqft: sqft, kg: Number(weightOverride) });
+        } else {
+          const factors = { Granite: { '2CM': 5.5, '3CM': 7.5, 'Mixed': 6.5 }, Quartz: { '2CM': 4.75, '3CM': 6.75, 'Mixed': 5.75 }, Marble: { '2CM': 6.0, '3CM': 8.0, 'Mixed': 7.0 } };
+          const factor = (factors[project.material] || factors['Granite'])[project.thickness] || 7.5;
+          setLiveCalc({ sqft: sqft, kg: sqft * factor });
+        }
       } else {
         setLiveCalc({ sqft: 0, kg: 0 });
       }
@@ -83,6 +89,7 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
         [e.target.name]: e.target.value
       });
       console.log("Project details auto-saved.");
+      onDataChange?.();
     } catch (err) {
       console.error("Failed to save project details", err);
     }
@@ -310,6 +317,11 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
               sink_cut: formData.sink_cut || "-",
               tap_holes: formData.tap_holes || "-",
               grooves: formData.grooves || "-",
+              fragility: formData.fragility || "Standard",
+              orientation: formData.orientation || "Auto",
+              delivery_priority: formData.delivery_priority || "Standard",
+              stack_preference: formData.stack_preference || "Auto",
+              weight_override: Number(formData.weight_override) || 0,
               edge: formData.edge || "None",
               edge_area: formData.edge_area || "",
               edge_polish_machine: edgePolishMachine,
@@ -351,13 +363,18 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
               length: formData.length,
               width: formData.width,
               unit: formData.unit || "",
-              sink_type: formData.sink_type || "No Sink",
-              sink_cut: formData.sink_cut || "-",
-              tap_holes: formData.tap_holes || "-",
-              grooves: formData.grooves || "-",
-              edge: formData.edge || "None",
-              edge_area: formData.edge_area || "",
-              edge_polish_machine: edgePolishMachine,
+                  sink_type: formData.sink_type || "No Sink",
+                  sink_cut: formData.sink_cut || "-",
+                  tap_holes: formData.tap_holes || "-",
+                  grooves: formData.grooves || "-",
+                  fragility: formData.fragility || "Standard",
+                  orientation: formData.orientation || "Auto",
+                  delivery_priority: formData.delivery_priority || "Standard",
+                  stack_preference: formData.stack_preference || "Auto",
+                  weight_override: Number(formData.weight_override) || 0,
+                  edge: formData.edge || "None",
+                  edge_area: formData.edge_area || "",
+                  edge_polish_machine: edgePolishMachine,
               radius: formData.radius || "-",
               notes: formData.notes || ""
           };
@@ -387,13 +404,18 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
           length: formData.length,
           width: formData.width,
           unit: formData.unit || "",
-          sink_type: formData.sink_type || "No Sink",
-          sink_cut: formData.sink_cut || "-",
-          tap_holes: formData.tap_holes || "-",
-          grooves: formData.grooves || "-",
-          edge: formData.edge || "None",
-          edge_area: formData.edge_area || "",
-          edge_polish_machine: edgePolishMachine,
+              sink_type: formData.sink_type || "No Sink",
+              sink_cut: formData.sink_cut || "-",
+              tap_holes: formData.tap_holes || "-",
+              grooves: formData.grooves || "-",
+              fragility: formData.fragility || "Standard",
+              orientation: formData.orientation || "Auto",
+              delivery_priority: formData.delivery_priority || "Standard",
+              stack_preference: formData.stack_preference || "Auto",
+              weight_override: Number(formData.weight_override) || 0,
+              edge: formData.edge || "None",
+              edge_area: formData.edge_area || "",
+              edge_polish_machine: edgePolishMachine,
           radius: formData.radius || "-",
           notes: formData.notes || "",
           qty: 1,
@@ -414,7 +436,8 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
       setFormData({ 
         part: '', category: 'Vanity', drawing: '', length: '', width: '', qty: 1, unit: '', 
         building: '', floor: '', flat: '', sink_type: 'No Sink', sink_cut: '-', 
-        tap_holes: '-', grooves: '-', edge: 'None', edge_area: '', edge_polish_machine: 0, radius: '-', notes: '' 
+        tap_holes: '-', grooves: '-', fragility: 'Standard', orientation: 'Auto', delivery_priority: 'Standard',
+        stack_preference: 'Auto', weight_override: '', edge: 'None', edge_area: '', edge_polish_machine: 0, radius: '-', notes: '' 
       });
       setMatrixData({ buildings: '', floors: '', cells: {} });
       setLiveCalc({ sqft: 0, kg: 0 });
@@ -439,13 +462,18 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
         <div className="mb-4">
           <h2 className="text-lg font-bold text-[#1e293b]">Project Details</h2>
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-8 gap-4">
           <div><label className="label-text">Project Name</label><input name="name" value={project.name || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
           <div><label className="label-text">Material</label><select name="material" value={project.material} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field"><option>Granite</option><option>Quartz</option><option>Marble</option></select></div>
           <div><label className="label-text">Thickness</label><select name="thickness" value={project.thickness} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field"><option>2CM</option><option>3CM</option><option>Mixed</option></select></div>
+          <div><label className="label-text">Crate Wood</label><select name="crate_wood_type" value={project.crate_wood_type || 'Pine'} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field"><option>Pine</option><option>Rubberwood</option><option>Plywood</option><option>Hardwood</option></select></div>
+          <div><label className="label-text">Wood Thick. (in)</label><input type="number" step="0.125" min="0.5" name="crate_wood_thickness" value={project.crate_wood_thickness ?? 1.25} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
           <div><label className="label-text">Customer</label><input name="customer" value={project.customer || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
           <div><label className="label-text">Job #</label><input name="job_number" value={project.job_number || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
           <div><label className="label-text">Date</label><input type="date" name="date" value={project.date || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
+        </div>
+        <div className="mt-3 text-xs text-[#64748b]">
+          These two crate assumptions are used by the planner for tare weight, external size allowances, and fabrication-ready crate recommendations.
         </div>
       </div>
 
@@ -482,6 +510,11 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
             <div><label className="label-text">Grooves</label><select name="grooves" value={formData.grooves} onChange={handleChange} className="input-field font-sans"><option value="-">-</option><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select></div>
             <div className="col-span-2"><label className="label-text">Unit Name</label><input name="unit" value={formData.unit} onChange={handleChange} className="input-field" /></div>
             <div className="col-span-3"><label className="label-text">Notes</label><input name="notes" value={formData.notes} onChange={handleChange} className="input-field" /></div>
+            <div><label className="label-text">Fragility</label><select name="fragility" value={formData.fragility} onChange={handleChange} className="input-field"><option>Standard</option><option>Fragile</option><option>High</option></select></div>
+            <div><label className="label-text">Orientation</label><select name="orientation" value={formData.orientation} onChange={handleChange} className="input-field"><option>Auto</option><option>No Rotate</option><option>Long Edge Vertical</option><option>Finished Face Protected</option></select></div>
+            <div><label className="label-text">Delivery Priority</label><select name="delivery_priority" value={formData.delivery_priority} onChange={handleChange} className="input-field"><option>Standard</option><option>First Off</option><option>Last Off</option><option>Rush</option></select></div>
+            <div><label className="label-text">Stacking</label><select name="stack_preference" value={formData.stack_preference} onChange={handleChange} className="input-field"><option>Auto</option><option>No Stack</option><option>Stack Allowed</option></select></div>
+            <div><label className="label-text">Weight Override (kg ea)</label><input name="weight_override" type="number" step="0.1" value={formData.weight_override} onChange={handleChange} className="input-field" placeholder="Optional" /></div>
             {entryMode === 'simple' && (
               <>
                 <div className="col-span-2"><label className="label-text">Building</label><input name="building" value={formData.building} onChange={handleChange} className="input-field" placeholder="e.g., 5,6" /></div>

@@ -1,97 +1,275 @@
-import React, { useMemo, useState, useEffect } from 'react';
-import axios from 'axios';
+import React, { useEffect, useState } from 'react';
 import Logo from './Logo';
 import EntryForm from './EntryForm';
 import PiecesTable from './PiecesTable';
-import SummaryTab from './SummaryTab';
-import CrateGrid from './CrateGrid';
+import PlannerSummaryTab from './PlannerSummaryTab';
+import PlannerCrateTab from './PlannerCrateTab';
+import PlannerContainerTab from './PlannerContainerTab';
+import { usePlannerStore } from '../store/plannerStore';
+import { formatNumber, getPieceWeight } from '../utils/plannerUtils';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+const plannerSubTabs = [
+  { id: 'summary', label: 'Summary / Insights', step: 'Step 1' },
+  { id: 'crate-plan', label: 'Crate Plan', step: 'Step 2' },
+  { id: 'container-loading', label: 'Container Loading', step: 'Step 3' },
+];
 
 const ProjectWorkspace = ({ projectId, goBack }) => {
-   const [activeTab, setActiveTab] = useState('entry');
-   const [project, setProject] = useState({ id: projectId, name: '', material: 'Granite', thickness: '3CM', customer: '', job_number: '', date: '' });
-   const [pieces, setPieces] = useState([]);
-   const [crates, setCrates] = useState([]);
-   const [assignments, setAssignments] = useState({});
+  const project = usePlannerStore((state) => state.project);
+  const pieces = usePlannerStore((state) => state.pieces);
+  const crates = usePlannerStore((state) => state.crates);
+  const activeTab = usePlannerStore((state) => state.activeTab);
+  const isWorkspaceLoading = usePlannerStore((state) => state.isWorkspaceLoading);
+  const isRefreshing = usePlannerStore((state) => state.isRefreshing);
+  const initialize = usePlannerStore((state) => state.initialize);
+  const setActiveTab = usePlannerStore((state) => state.setActiveTab);
+  const setProjectDraft = usePlannerStore((state) => state.setProjectDraft);
+  const refreshWorkspace = usePlannerStore((state) => state.refreshWorkspace);
+  const deletePiece = usePlannerStore((state) => state.deletePiece);
+  const exportWorkbook = usePlannerStore((state) => state.exportWorkbook);
+  const exportSourceData = usePlannerStore((state) => state.exportSourceData);
+  const generatePlan = usePlannerStore((state) => state.generatePlan);
 
-   const fetchData = async () => {
-     try {
-       const [projRes, pRes, cRes, aRes] = await Promise.all([ 
-           axios.get(`${API_BASE}/projects/${projectId}`),
-           axios.get(`${API_BASE}/projects/${projectId}/pieces/`), 
-           axios.get(`${API_BASE}/projects/${projectId}/crates/`), 
-           axios.get(`${API_BASE}/projects/${projectId}/crates/assignments`) 
-       ]);
-       if (projRes.data) setProject(projRes.data);
-       setPieces(pRes.data); setCrates(cRes.data);
-       const assignMap = {}; aRes.data.forEach(a => assignMap[a.piece_id] = a.crate_id);
-       setAssignments(assignMap);
-     } catch (e) { console.error("Error fetching data", e); alert('Failed to load project data.'); }
-   };
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [mainTab, setMainTab] = useState('source-data'); // 'source-data' | 'planning'
 
-   useEffect(() => { fetchData(); }, [projectId]);
+  useEffect(() => {
+    initialize(projectId);
+  }, [initialize, projectId]);
 
-   const getWeight = (p) => {
-     const factors = { Granite: { '2CM': 5.5, '3CM': 7.5, 'Mixed': 6.5 }, Quartz: { '2CM': 4.75, '3CM': 6.75, 'Mixed': 5.75 }, Marble: { '2CM': 6.0, '3CM': 8.0, 'Mixed': 7.0 } };
-     const factor = (factors[project.material] || factors['Granite'])[project.thickness] || 7.5;
-     return ((p.length * p.width) / 144) * factor * p.qty;
-   };
+  const hasPlan = crates.length > 0;
+  const totalWeight = pieces.reduce((sum, piece) => sum + getPieceWeight(piece, project), 0);
+  const totalSqFt = pieces.reduce((sum, piece) => sum + ((Number(piece.length || 0) * Number(piece.width || 0)) / 144) * (Number(piece.qty) || 1), 0);
+  const totalQty = pieces.reduce((sum, p) => sum + (Number(p.qty) || 1), 0);
 
-   const { totalSqFt, totalWeight, uniqueDrawings } = useMemo(() => {
-     const sqFt = pieces.reduce((s, p) => s + ((p.length * p.width) / 144) * p.qty, 0);
-     const weight = pieces.reduce((s, p) => s + getWeight(p), 0);
-     const drawings = new Set(pieces.map(p => p.drawing).filter(Boolean)).size;
-     return { totalSqFt: sqFt, totalWeight: weight, uniqueDrawings: drawings };
-   }, [pieces, project.material, project.thickness]);
+  const handleGeneratePlan = async () => {
+    if (pieces.length === 0) {
+      alert('Please add at least one part before generating a plan.');
+      return;
+    }
+    setIsGenerating(true);
+    try {
+      await generatePlan();
+      setMainTab('planning');
+    } catch (err) {
+      console.error('Generate plan failed:', err);
+      alert('Failed to generate plan. Please try again.');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
 
-   const exportExcel = () => {
-     if (pieces.length === 0) return alert("No pieces to export!");
-     window.open(`${API_BASE}/projects/${projectId}/export`, '_blank');
-   };
+  // When plan exists and user navigates here, default to planning tab
+  useEffect(() => {
+    if (hasPlan && mainTab === 'source-data') {
+      // Keep source-data as default when user first loads
+    }
+  }, [hasPlan]);
 
-   const clearAll = async () => {
-      if (window.confirm('Clear all pieces and crates?')) { 
-          await axios.delete(`${API_BASE}/projects/${projectId}/crates/`); 
-          await axios.delete(`${API_BASE}/projects/${projectId}/pieces/`); 
-          fetchData();
-          alert('Project data cleared!');
-      }
-   };
+  if (isWorkspaceLoading) {
+    return (
+      <div className="min-h-screen bg-[linear-gradient(180deg,_#f6f8fc,_#f8fafc)] text-[#1e293b] flex items-center justify-center">
+        <div className="text-center">
+          <div className="inline-flex h-10 w-10 items-center justify-center mb-4">
+            <span className="h-10 w-10 rounded-full border-[3px] border-[#1d4ed8] border-t-transparent animate-spin" />
+          </div>
+          <div className="text-sm text-[#64748b]">Loading project...</div>
+        </div>
+      </div>
+    );
+  }
 
-   return (
-      <div className="min-h-screen bg-[#f8fafc] text-[#1e293b] font-sans p-6 max-w-[1400px] mx-auto">
-         <div className="flex justify-between items-center mb-6 border-b border-[#e2e8f0] pb-4">
-            <div className="flex items-center gap-6"><button onClick={goBack} className="text-[#475569] hover:text-[#0f172a] font-medium text-sm border border-[#cbd5e1] rounded-md bg-white px-3 py-1.5 transition-colors shadow-sm">← Back</button><Logo /></div>
-         </div>
-         <div className="bg-white border border-[#e2e8f0] rounded-lg p-4 mb-6 flex justify-between text-sm shadow-sm">
-            <div><span className="text-[#64748b] mr-2">Drawings</span> <span className="text-[#2563eb] font-bold text-lg">{uniqueDrawings}</span></div>
-            <div><span className="text-[#64748b] mr-2">Total Pieces</span> <span className="text-[#2563eb] font-bold text-lg">{pieces.reduce((s,p)=>s+p.qty, 0)}</span></div>
-            <div><span className="text-[#64748b] mr-2">Total Sq Ft</span> <span className="text-[#2563eb] font-bold text-lg">{totalSqFt.toFixed(1)}</span></div>
-            <div><span className="text-[#64748b] mr-2">Total Weight</span> <span className="text-[#2563eb] font-bold text-lg">{totalWeight.toFixed(0)} kg</span></div>
-         </div>
+  return (
+    <div className="min-h-screen bg-[linear-gradient(180deg,_#f6f8fc,_#f8fafc)] text-[#1e293b]">
+      <div className="mx-auto max-w-[1600px] px-5 py-6 lg:px-8">
+        <div className="rounded-[36px] border border-[#dbe4f0] bg-white shadow-sm">
 
-         <div className="flex gap-2 mb-4 border-b border-[#e2e8f0]">
-            {['Entry', 'Summary', 'Crate Plan'].map(tab => (<button key={tab.toLowerCase()} onClick={() => setActiveTab(tab.toLowerCase())} className={`px-6 py-2.5 text-sm font-medium transition-colors rounded-t-lg ${activeTab === tab.toLowerCase() ? 'bg-white border-t border-x border-[#e2e8f0] text-[#2563eb] shadow-sm relative top-[1px]' : 'text-[#64748b] hover:text-[#1e293b] hover:bg-[#f1f5f9]'}`}>{tab}</button>))}
-         </div>
-         {activeTab === 'entry' && <><EntryForm project={project} setProject={setProject} onDataChange={fetchData} /><PiecesTable pieces={pieces} project={project} onDelete={async (id) => { await axios.delete(`${API_BASE}/pieces/${id}`); fetchData(); alert('Piece deleted'); }} onDataChange={fetchData} /></>}
-         {activeTab === 'summary' && <SummaryTab pieces={pieces} project={project} />}
-         {activeTab === 'crate plan' && <CrateGrid pieces={pieces} crates={crates} assignments={assignments} project={project} onDataChange={fetchData} />}
-
-         <div className="bg-white border border-[#e2e8f0] shadow-sm rounded-lg p-5 flex justify-between items-center mt-6">
-            <span className="text-[#334155] font-medium">Export Project Data</span>
-            <div className="flex gap-4">
-              <button className="btn-danger" onClick={clearAll}>Clear All Data</button>
-              <button 
-                className={`btn-primary text-white border-none ${pieces.length > 0 ? 'bg-[#059669] hover:bg-[#047857]' : 'bg-gray-400 cursor-not-allowed'}`} 
-                onClick={exportExcel}
-                disabled={pieces.length === 0}
+          {/* ── Header Bar ── */}
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#edf2f7] px-6 py-5">
+            <div className="flex items-center gap-5">
+              <button
+                type="button"
+                onClick={goBack}
+                className="rounded-full border border-[#cbd5e1] bg-white px-4 py-2 text-sm font-medium text-[#334155] hover:bg-[#f8fafc]"
               >
-                Export Excel
+                ← Back
+              </button>
+              <Logo />
+            </div>
+            <div className="flex flex-wrap gap-3">
+              {hasPlan && (
+                <button
+                  type="button"
+                  className="btn-primary bg-[#059669] hover:bg-[#047857]"
+                  onClick={exportWorkbook}
+                >
+                  Export Final Plan
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* ── Project Info Header ── */}
+          <div className="border-b border-[#edf2f7] px-6 py-6">
+            <div className="flex flex-wrap items-start justify-between gap-6">
+              <div>
+                <div className="text-xs uppercase tracking-[0.24em] text-[#64748b]">Project</div>
+                <div className="mt-2 text-3xl font-semibold text-[#0f172a]">
+                  {project.name || `Project #${projectId}`}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-3 text-sm text-[#64748b]">
+                  <span>{project.customer || 'No customer set'}</span>
+                  <span>•</span>
+                  <span>{project.job_number || 'No job number'}</span>
+                  <span>•</span>
+                  <span>{project.material} / {project.thickness}</span>
+                </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-[24px] border border-[#e2e8f0] bg-[#f8fafc] px-4 py-4">
+                  <div className="text-xs uppercase tracking-[0.16em] text-[#64748b]">Total Parts</div>
+                  <div className="mt-2 text-2xl font-semibold text-[#0f172a]">{totalQty}</div>
+                </div>
+                <div className="rounded-[24px] border border-[#e2e8f0] bg-[#f8fafc] px-4 py-4">
+                  <div className="text-xs uppercase tracking-[0.16em] text-[#64748b]">Total Sq Ft</div>
+                  <div className="mt-2 text-2xl font-semibold text-[#0f172a]">{formatNumber(totalSqFt, 1)}</div>
+                </div>
+                <div className="rounded-[24px] border border-[#e2e8f0] bg-[#f8fafc] px-4 py-4">
+                  <div className="text-xs uppercase tracking-[0.16em] text-[#64748b]">Shipment Weight</div>
+                  <div className="mt-2 text-2xl font-semibold text-[#0f172a]">{formatNumber(totalWeight, 0)} kg</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ── Main Tabs: Source Data | Planning ── */}
+          <div className="border-b border-[#edf2f7] px-6 py-4">
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setMainTab('source-data')}
+                className={`rounded-full px-5 py-2.5 text-sm font-semibold transition-all ${
+                  mainTab === 'source-data'
+                    ? 'bg-[#1d4ed8] text-white shadow-sm'
+                    : 'bg-[#f1f5f9] text-[#334155] hover:bg-[#e2e8f0]'
+                }`}
+              >
+                Source Data
+              </button>
+              <button
+                type="button"
+                disabled={!hasPlan}
+                onClick={() => hasPlan && setMainTab('planning')}
+                className={`rounded-full px-5 py-2.5 text-sm font-semibold transition-all ${
+                  mainTab === 'planning'
+                    ? 'bg-[#1d4ed8] text-white shadow-sm'
+                    : !hasPlan
+                    ? 'bg-[#f1f5f9] text-[#94a3b8] cursor-not-allowed'
+                    : 'bg-[#f1f5f9] text-[#334155] hover:bg-[#e2e8f0]'
+                }`}
+              >
+                Planning Workspace
+                {!hasPlan && <span className="ml-2 text-[10px] text-[#94a3b8]">(Generate plan first)</span>}
               </button>
             </div>
-         </div>
+          </div>
+
+          {/* ── Tab Content ── */}
+
+          {/* ▸ Tab 1: Source Data */}
+          {mainTab === 'source-data' && (
+            <>
+              <div className="px-6 py-6">
+                <EntryForm
+                  project={project}
+                  setProject={setProjectDraft}
+                  onDataChange={refreshWorkspace}
+                />
+                <PiecesTable
+                  pieces={pieces}
+                  project={project}
+                  onDelete={deletePiece}
+                  onDataChange={refreshWorkspace}
+                />
+              </div>
+
+              {/* Source Data Footer */}
+              <div className="sticky bottom-0 border-t border-[#edf2f7] bg-white px-6 py-5 rounded-b-[36px]">
+                <div className="flex items-center justify-between flex-wrap gap-4">
+                  <div className="text-sm text-[#64748b]">
+                    {pieces.length === 0
+                      ? 'Add parts above to enable plan generation'
+                      : `${totalQty} parts ready • ${formatNumber(totalSqFt, 1)} sq ft • ${formatNumber(totalWeight, 0)} kg`}
+                  </div>
+                  <div className="flex gap-3">
+                    {pieces.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={exportSourceData}
+                        className="rounded-full border border-[#cbd5e1] bg-white px-5 py-3 text-sm font-semibold text-[#334155] hover:bg-[#f8fafc] transition-all"
+                      >
+                        ↓ Download Source Data
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={pieces.length === 0 || isGenerating}
+                      onClick={handleGeneratePlan}
+                      className={`inline-flex items-center gap-2 rounded-full px-8 py-3 text-sm font-semibold text-white shadow-sm transition-all ${
+                        pieces.length === 0 || isGenerating
+                          ? 'bg-[#94a3b8] cursor-not-allowed'
+                          : 'bg-[#1d4ed8] hover:bg-[#1e40af] hover:shadow-md'
+                      }`}
+                    >
+                      {isGenerating && (
+                        <span className="inline-flex h-4 w-4 items-center justify-center">
+                          <span className="h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                        </span>
+                      )}
+                      {isGenerating ? 'Generating Plan...' : hasPlan ? 'Regenerate Plan →' : 'Generate Plan →'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* ▸ Tab 2: Planning Workspace */}
+          {mainTab === 'planning' && hasPlan && (
+            <>
+              <div className="border-b border-[#edf2f7] px-6 py-4">
+                <div className="flex flex-wrap gap-3">
+                  {plannerSubTabs.map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setActiveTab(tab.id)}
+                      className={`rounded-[24px] border px-4 py-3 text-left transition-all ${
+                        activeTab === tab.id
+                          ? 'border-[#1d4ed8] bg-[#eff6ff] text-[#1d4ed8] shadow-sm'
+                          : 'border-[#dbe4f0] bg-[#f8fafc] text-[#334155] hover:bg-white'
+                      }`}
+                    >
+                      <div className="text-xs uppercase tracking-[0.16em]">{tab.step}</div>
+                      <div className="mt-1 text-sm font-semibold">{tab.label}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="px-6 py-6">
+                {activeTab === 'summary' && <PlannerSummaryTab />}
+                {activeTab === 'crate-plan' && <PlannerCrateTab />}
+                {activeTab === 'container-loading' && <PlannerContainerTab />}
+              </div>
+            </>
+          )}
+
+        </div>
       </div>
-   );
+    </div>
+  );
 };
+
 export default ProjectWorkspace;

@@ -2,6 +2,8 @@ import React from 'react';
 
 const SummaryTab = ({ pieces, project }) => {
   const getWeight = (p) => {
+     const override = Number(p.weight_override || 0);
+     if (override > 0) return override * (Number(p.qty) || 1);
      const factors = { Granite: { '2CM': 5.5, '3CM': 7.5, 'Mixed': 6.5 }, Quartz: { '2CM': 4.75, '3CM': 6.75, 'Mixed': 5.75 }, Marble: { '2CM': 6.0, '3CM': 8.0, 'Mixed': 7.0 } };
      const factor = (factors[project.material] || factors['Granite'])[project.thickness] || 7.5;
      return ((p.length * p.width) / 144) * factor * p.qty;
