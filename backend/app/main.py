@@ -4,7 +4,6 @@ from io import BytesIO
 import os
 from typing import Any, Dict, List, Optional
 
-import openpyxl
 import certifi
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -12,11 +11,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pymongo import MongoClient, ReturnDocument
 from pydantic import BaseModel
+from .services.container_planner import build_container_plan
+from .services.planning_engine import (
+    build_planning_snapshot,
+    estimate_auto_dimensions,
+    piece_destination_key,
+    piece_weight as planning_piece_weight,
+    weight_factor as planning_weight_factor,
+)
 
 load_dotenv()
 
-MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017/stonedesk")
-MONGODB_DB = os.getenv("MONGODB_DB", "stonedesk")
+MONGODB_URI = os.getenv("MONGODB_URI", "mongodb+srv://virgin_db_user:iddh38iXtoKpt1We@cluster0.t9reftj.mongodb.net/?appName=Cluster0")
+MONGODB_DB = os.getenv("MONGODB_DB", "virgin")
 ALLOW_MEMORY_FALLBACK = os.getenv("ALLOW_MEMORY_FALLBACK", "false").lower() in {"1", "true", "yes"}
 
 class InMemoryCollection:
@@ -98,12 +105,16 @@ class InMemoryCollection:
 
 def build_store():
     try:
+        if not MONGODB_URI:
+            raise ValueError("MONGODB_URI environment variable is missing.")
+
         mongo_client = MongoClient(
             MONGODB_URI,
             serverSelectionTimeoutMS=1500,
             tlsCAFile=certifi.where(),
         )
         mongo_client.admin.command("ping")
+        print(f"Connected to Production MongoDB: {MONGODB_URI.split('@')[-1] if '@' in MONGODB_URI else 'Remote Host'}")
         mongo_db = mongo_client[MONGODB_DB]
         store = {
             "projects": mongo_db["projects"],
@@ -113,7 +124,8 @@ def build_store():
             "counters": mongo_db["counters"],
         }
         return store, "mongo"
-    except Exception:
+    except Exception as e:
+        print(f"Production Database Connection Failed: {e}")
         if not ALLOW_MEMORY_FALLBACK:
             raise
         return {
@@ -182,6 +194,9 @@ def project_response(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         "job_number": doc.get("job_number", ""),
         "material": doc.get("material", "Granite"),
         "thickness": doc.get("thickness", "3CM"),
+        "crate_wood_type": doc.get("crate_wood_type", "Pine"),
+        "crate_wood_thickness": doc.get("crate_wood_thickness", 1.25),
+        "preferred_container_mode": doc.get("preferred_container_mode", "recommended"),
         "date": doc.get("date", date.today().isoformat()),
         "created_at": as_iso(doc.get("created_at")),
         "updated_at": as_iso(doc.get("updated_at")),
@@ -207,6 +222,11 @@ def piece_response(doc: Dict[str, Any]) -> Dict[str, Any]:
         "sink_cut": doc.get("sink_cut", "-"),
         "tap_holes": doc.get("tap_holes", "-"),
         "grooves": doc.get("grooves", "-"),
+        "fragility": doc.get("fragility", "Standard"),
+        "orientation": doc.get("orientation", "Auto"),
+        "delivery_priority": doc.get("delivery_priority", "Standard"),
+        "stack_preference": doc.get("stack_preference", "Auto"),
+        "weight_override": doc.get("weight_override", 0.0),
         "notes": doc.get("notes", ""),
         "building": doc.get("building", ""),
         "floor": doc.get("floor", ""),
@@ -256,6 +276,18 @@ def pieces_grouped_by_crate(pieces: List[Dict[str, Any]], assignments: List[Dict
     for crate_pieces in grouped.values():
         crate_pieces.sort(key=lambda item: item["id"])
     return grouped
+
+
+def project_planning_snapshot(project_id: int) -> Dict[str, Any]:
+    project = projects_col.find_one({"id": project_id}, {"_id": 0})
+    pieces = sorted(pieces_col.find({"project_id": project_id}, {"_id": 0}), key=lambda doc: doc["id"])
+    crates = sorted(crates_col.find({"project_id": project_id}, {"_id": 0}), key=lambda doc: doc["id"])
+    assignments = list(assignments_col.find({"project_id": project_id}, {"_id": 0}))
+    return build_planning_snapshot(project, pieces, crates, assignments)
+
+
+def clear_manual_container_plan(project_id: int) -> None:
+    projects_col.update_one({"id": project_id}, {"$set": {"manual_container_plan": None}})
 
 
 def weight_factor(material: str, thickness: str) -> float:
@@ -557,117 +589,63 @@ def container_plan(
 
 
 def crate_insights(project_id: int) -> Dict[str, Any]:
-    project = projects_col.find_one({"id": project_id}, {"_id": 0})
-    crates = sorted(crates_col.find({"project_id": project_id}, {"_id": 0}), key=lambda doc: doc["id"])
-    pieces = sorted(pieces_col.find({"project_id": project_id}, {"_id": 0}), key=lambda doc: doc["id"])
-    assignments = list(assignments_col.find({"project_id": project_id}, {"_id": 0}))
-    pieces_by_crate = pieces_grouped_by_crate(pieces, assignments)
-
-    material = project.get("material", "Granite") if project else "Granite"
-    thickness = project.get("thickness", "3CM") if project else "3CM"
-
-    crate_rows = []
-    total_weight = 0.0
-    for crate in crates:
-        crate_pieces = pieces_by_crate.get(crate["id"], [])
-        crate_weight = sum(piece_weight(piece, material, thickness) for piece in crate_pieces)
-        dims = estimate_crate_dimensions(crate_pieces, material, thickness, crate.get("max_weight", 1000))
-        utilization = (crate_weight / crate.get("max_weight", 1)) * 100 if crate.get("max_weight", 0) else 0
-        total_weight += crate_weight
-        crate_rows.append(
-            {
-                "id": crate["id"],
-                "crate_id": crate["crate_id"],
-                "name": crate["name"],
-                "group_name": crate_group_name(crate["name"]),
-                "max_weight": crate.get("max_weight", 1000),
-                "total_weight": round(crate_weight, 2),
-                "utilization": round(utilization, 1),
-                "items": len(crate_pieces),
-                "internal_length": dims["internal_length"],
-                "internal_width": dims["internal_width"],
-                "internal_height": dims["internal_height"],
-                "external_length": dims["external_length"],
-                "external_width": dims["external_width"],
-                "external_height": dims["external_height"],
-                "sqft": dims["sqft"],
-            }
-        )
-
-    distinct_families = len({piece.get("category") or "Uncategorized" for piece in pieces})
-    distinct_destinations = len({
-        "-".join(part for part in [
-            str(piece.get("building", "")).strip(),
-            str(piece.get("floor", "")).strip(),
-            str(piece.get("flat", "")).strip(),
-        ] if part)
-        or "Unassigned"
-        for piece in pieces
-    })
-
-    rows_by_group: Dict[str, List[Dict[str, Any]]] = {}
-    for row in crate_rows:
-        rows_by_group.setdefault(row["group_name"], []).append(row)
-
-    underfilled = []
-    for crate in crate_rows:
-        spare = round(crate["max_weight"] - crate["total_weight"], 2)
-        if crate["utilization"] >= 85:
-            continue
-
-        merge_candidates = []
-        for other in rows_by_group.get(crate["group_name"], []):
-            if other["id"] == crate["id"]:
-                continue
-            combined = crate["total_weight"] + other["total_weight"]
-            if combined <= crate["max_weight"]:
-                merge_candidates.append(other["name"])
-
-        underfilled.append(
-            {
-                "crate_id": crate["crate_id"],
-                "name": crate["name"],
-                "utilization": crate["utilization"],
-                "spare_capacity": spare,
-                "suggestion": (
-                    f"This crate is at {crate['utilization']:.0f}% fill. "
-                    f"You can still add about {spare:.0f} kg. "
-                    f"Try moving lighter items from the next crate or merge with same-destination crate(s) if handling allows."
-                ),
-                "merge_candidates": merge_candidates[:3],
-            }
-        )
-
-    average_utilization = round(
-        sum(crate["utilization"] for crate in crate_rows) / len(crate_rows), 1
-    ) if crate_rows else 0
-
-    recommended_target = 90 if any(crate["utilization"] < 85 for crate in crate_rows) else 95
-    adjusted_target = round(sum(crate["total_weight"] for crate in crate_rows) / len(crate_rows), 0) if crate_rows else 0
-    plan = container_plan(
-        total_weight,
-        len(crate_rows),
-        average_utilization,
-        distinct_families,
-        distinct_destinations,
-        len(underfilled),
+    snapshot = project_planning_snapshot(project_id)
+    crate_rows = snapshot["crate_rows"]
+    loading_plan = build_container_plan(
+        crate_rows,
+        manual_plan=snapshot["project"].get("manual_container_plan"),
+        preferred_mode=snapshot["project"].get("preferred_container_mode"),
     )
 
-    from .services.container_planner import build_container_plan
-    loading_plan = build_container_plan(crate_rows)
+    exception_rows = list(snapshot["exception_rows"])
+    for container in loading_plan["containers"]:
+        for warning in container.get("warnings", []):
+            exception_rows.append(
+                {
+                    "scope": "container",
+                    "id": container["id"],
+                    "name": container["type"],
+                    "severity": "yellow",
+                    "message": warning,
+                }
+            )
+
+    recommended_target = 92 if any(crate["efficiency_status"] == "red" for crate in crate_rows) else 97
 
     return {
-        "total_weight": round(total_weight, 2),
+        "summary": {
+            "crates_created": len(crate_rows),
+            "shipment_weight": snapshot["total_gross_weight"],
+            "net_stone_weight": snapshot["total_weight"],
+            "recommended_containers": loading_plan["recommendation"]["booking_action"],
+            "container_mode": loading_plan["recommendation"]["mode_label"],
+            "cost_index": loading_plan["recommendation"].get("cost_index", 0.0),
+        },
+        "total_weight": snapshot["total_weight"],
+        "shipment_weight": snapshot["total_gross_weight"],
         "crate_count": len(crate_rows),
-        "average_utilization": average_utilization,
+        "average_utilization": snapshot["average_fill_percent"],
+        "average_weight_utilization": snapshot["average_gross_utilization"],
         "recommended_utilization_target": recommended_target,
-        "adjusted_target_weight": adjusted_target,
-        "distinct_families": distinct_families,
-        "distinct_destinations": distinct_destinations,
-        "container_plan": plan,
+        "adjusted_target_weight": round(
+            snapshot["total_gross_weight"] / len(crate_rows), 0
+        ) if crate_rows else 0,
+        "distinct_families": snapshot["family_count"],
+        "distinct_destinations": snapshot["destination_count"],
+        "efficiency_kpis": {
+            "average_fill_percent": snapshot["average_fill_percent"],
+            "average_weight_utilization": snapshot["average_gross_utilization"],
+            "average_payload_utilization": snapshot["average_payload_utilization"],
+            "total_sqft": snapshot["total_sqft"],
+            "piece_count": snapshot["piece_count"],
+            "item_count": snapshot["item_count"],
+        },
+        "container_plan": loading_plan["recommendation"],
+        "container_options": loading_plan["options"],
         "container_loading_plan": loading_plan,
         "crates": crate_rows,
-        "underfilled_crates": underfilled,
+        "underfilled_crates": snapshot["underfilled_crates"],
+        "exceptions": exception_rows,
     }
 
 
@@ -686,6 +664,11 @@ class PieceCreate(BaseModel):
     sink_cut: str = "-"
     tap_holes: str = "-"
     grooves: str = "-"
+    fragility: str = "Standard"
+    orientation: str = "Auto"
+    delivery_priority: str = "Standard"
+    stack_preference: str = "Auto"
+    weight_override: float = 0.0
     edge: str = "None"
     edge_area: str = ""
     edge_polish_machine: float = 0.0
@@ -708,6 +691,11 @@ class PieceUpdate(BaseModel):
     sink_cut: str = "-"
     tap_holes: str = "-"
     grooves: str = "-"
+    fragility: str = "Standard"
+    orientation: str = "Auto"
+    delivery_priority: str = "Standard"
+    stack_preference: str = "Auto"
+    weight_override: float = 0.0
     edge: str = "None"
     edge_area: str = ""
     edge_polish_machine: float = 0.0
@@ -719,6 +707,9 @@ class ProjectUpdate(BaseModel):
     name: str
     material: str
     thickness: str
+    crate_wood_type: str = "Pine"
+    crate_wood_thickness: float = 1.25
+    preferred_container_mode: str = "recommended"
     customer: str
     job_number: str
     date: str
@@ -758,6 +749,9 @@ def create_project():
         "name": "",
         "material": "Granite",
         "thickness": "3CM",
+        "crate_wood_type": "Pine",
+        "crate_wood_thickness": 1.25,
+        "preferred_container_mode": "recommended",
         "customer": "",
         "job_number": "",
         "date": date.today().isoformat(),
@@ -780,12 +774,16 @@ def update_project(project_id: int, data: ProjectUpdate):
         "name": data.name,
         "material": data.material,
         "thickness": data.thickness,
+        "crate_wood_type": data.crate_wood_type,
+        "crate_wood_thickness": data.crate_wood_thickness,
+        "preferred_container_mode": data.preferred_container_mode,
         "customer": data.customer,
         "job_number": data.job_number,
         "date": data.date,
         "updated_at": utc_now(),
     }
     projects_col.update_one({"id": project_id}, {"$set": update})
+    clear_manual_container_plan(project_id)
     return {"message": "ok"}
 
 
@@ -834,6 +832,11 @@ def create_piece(project_id: int, piece: PieceCreate):
         "sink_cut": piece.sink_cut,
         "tap_holes": piece.tap_holes,
         "grooves": piece.grooves,
+        "fragility": piece.fragility,
+        "orientation": piece.orientation,
+        "delivery_priority": piece.delivery_priority,
+        "stack_preference": piece.stack_preference,
+        "weight_override": piece.weight_override,
         "edge": piece.edge,
         "edge_area": piece.edge_area,
         "edge_polish_machine": edge_polish_machine,
@@ -842,6 +845,7 @@ def create_piece(project_id: int, piece: PieceCreate):
         "created_at": utc_now(),
     }
     pieces_col.insert_one(doc)
+    clear_manual_container_plan(project_id)
     return piece_response(doc)
 
 
@@ -869,6 +873,11 @@ def create_pieces_batch(project_id: int, pieces_data: List[PieceCreate]):
                 "sink_cut": piece.sink_cut,
                 "tap_holes": piece.tap_holes,
                 "grooves": piece.grooves,
+                "fragility": piece.fragility,
+                "orientation": piece.orientation,
+                "delivery_priority": piece.delivery_priority,
+                "stack_preference": piece.stack_preference,
+                "weight_override": piece.weight_override,
                 "edge": piece.edge,
                 "edge_area": piece.edge_area,
                 "edge_polish_machine": edge_polish_machine,
@@ -879,6 +888,7 @@ def create_pieces_batch(project_id: int, pieces_data: List[PieceCreate]):
         )
     if docs:
         pieces_col.insert_many(docs)
+        clear_manual_container_plan(project_id)
     return {"message": f"Created {len(docs)} pieces"}
 
 
@@ -889,6 +899,7 @@ def delete_all_pieces(project_id: int):
     if piece_ids:
         assignments_col.delete_many({"project_id": project_id, "piece_id": {"$in": piece_ids}})
     pieces_col.delete_many({"project_id": project_id})
+    clear_manual_container_plan(project_id)
     return {"message": "ok"}
 
 
@@ -897,6 +908,7 @@ def delete_piece(piece_id: int):
     piece = pieces_col.find_one({"id": piece_id}, {"project_id": 1})
     if piece:
         assignments_col.delete_many({"project_id": piece["project_id"], "piece_id": piece_id})
+        clear_manual_container_plan(piece["project_id"])
     pieces_col.delete_one({"id": piece_id})
     return {"message": "ok"}
 
@@ -923,6 +935,11 @@ def update_piece(piece_id: int, piece: PieceUpdate):
         "sink_cut": piece.sink_cut,
         "tap_holes": piece.tap_holes,
         "grooves": piece.grooves,
+        "fragility": piece.fragility,
+        "orientation": piece.orientation,
+        "delivery_priority": piece.delivery_priority,
+        "stack_preference": piece.stack_preference,
+        "weight_override": piece.weight_override,
         "edge": piece.edge,
         "edge_area": piece.edge_area,
         "edge_polish_machine": edge_polish_machine,
@@ -930,6 +947,7 @@ def update_piece(piece_id: int, piece: PieceUpdate):
         "notes": piece.notes,
     }
     pieces_col.update_one({"id": piece_id}, {"$set": update})
+    clear_manual_container_plan(existing["project_id"])
     return {"message": "ok"}
 
 
@@ -953,25 +971,38 @@ def crate_serial_for_project(project_id: int) -> int:
 
 @app.get("/api/projects/{project_id}/crates/")
 def get_crates(project_id: int):
-    crates = sorted(crates_col.find({"project_id": project_id}, {"_id": 0}), key=lambda doc: doc["id"])
-    return [crate_response(crate) for crate in crates]
+    snapshot = project_planning_snapshot(project_id)
+    return snapshot["crate_rows"]
 
 
 @app.post("/api/projects/{project_id}/crates/")
 def create_crate(project_id: int, data: Dict[str, Any]):
     serial = crate_serial_for_project(project_id)
+    piece_ids = [int(piece_id) for piece_id in data.get("piece_ids", []) if str(piece_id).strip()]
     internal_length = float(data.get("internal_length", 0) or 0)
     internal_width = float(data.get("internal_width", 0) or 0)
     internal_height = float(data.get("internal_height", 0) or 0)
     external_length = float(data.get("external_length", 0) or 0)
     external_width = float(data.get("external_width", 0) or 0)
     external_height = float(data.get("external_height", 0) or 0)
+    dimension_mode = data.get("dimension_mode") or (
+        "manual" if any([internal_length, internal_width, internal_height, external_length, external_width, external_height]) else "auto"
+    )
     crate = {
         "id": next_sequence("crate"),
         "project_id": project_id,
         "crate_id": f"CR{serial:04d}",
         "name": data.get("name") or f"Crate {serial}",
         "max_weight": float(data.get("max_weight", 1000) or 1000),
+        "locked": bool(data.get("locked", False)),
+        "custom": bool(data.get("custom", bool(piece_ids))),
+        "reserved_space_pct": float(data.get("reserved_space_pct", 0) or 0),
+        "planner_notes": str(data.get("planner_notes", "") or ""),
+        "dimension_mode": dimension_mode,
+        "stackable": data.get("stackable") if "stackable" in data else None,
+        "forklift_entry": data.get("forklift_entry"),
+        "reinforcement": data.get("reinforcement") if "reinforcement" in data else None,
+        "wood_thickness": float(data.get("wood_thickness", 0) or 0),
         "internal_length": internal_length,
         "internal_width": internal_width,
         "internal_height": internal_height,
@@ -983,7 +1014,161 @@ def create_crate(project_id: int, data: Dict[str, Any]):
         "created_at": utc_now(),
     }
     crates_col.insert_one(crate)
+
+    if piece_ids:
+        assignments_col.delete_many({"project_id": project_id, "piece_id": {"$in": piece_ids}})
+        assignments_col.insert_many(
+            [
+                {
+                    "id": next_sequence("assignment"),
+                    "project_id": project_id,
+                    "piece_id": piece_id,
+                    "crate_id": crate["id"],
+                    "assigned_at": utc_now(),
+                }
+                for piece_id in piece_ids
+            ]
+        )
+    clear_manual_container_plan(project_id)
     return {"id": crate["id"], "crate_id": crate["crate_id"]}
+
+
+@app.put("/api/projects/{project_id}/crates/{crate_id}")
+def update_crate(project_id: int, crate_id: int, data: Dict[str, Any]):
+    existing = crates_col.find_one({"project_id": project_id, "id": crate_id}, {"_id": 0})
+    if not existing:
+        return {"message": "ok"}
+
+    update: Dict[str, Any] = {
+        "name": data.get("name", existing.get("name", existing.get("crate_id", "Crate"))),
+        "max_weight": float(data.get("max_weight", existing.get("max_weight", 1000)) or existing.get("max_weight", 1000)),
+        "locked": bool(data.get("locked", existing.get("locked", False))),
+        "custom": bool(data.get("custom", existing.get("custom", False))),
+        "reserved_space_pct": float(data.get("reserved_space_pct", existing.get("reserved_space_pct", 0)) or 0),
+        "planner_notes": str(data.get("planner_notes", existing.get("planner_notes", "")) or ""),
+        "updated_at": utc_now(),
+    }
+
+    if "stackable" in data:
+        update["stackable"] = data.get("stackable")
+    if "forklift_entry" in data:
+        update["forklift_entry"] = data.get("forklift_entry")
+    if "reinforcement" in data:
+        update["reinforcement"] = data.get("reinforcement")
+    if "wood_thickness" in data:
+        update["wood_thickness"] = float(data.get("wood_thickness", existing.get("wood_thickness", 0)) or 0)
+
+    if data.get("reset_dimensions"):
+        update.update(
+            {
+                "dimension_mode": "auto",
+                "internal_length": 0.0,
+                "internal_width": 0.0,
+                "internal_height": 0.0,
+                "external_length": 0.0,
+                "external_width": 0.0,
+                "external_height": 0.0,
+            }
+        )
+    else:
+        dimension_fields = [
+            "internal_length",
+            "internal_width",
+            "internal_height",
+            "external_length",
+            "external_width",
+            "external_height",
+        ]
+        manual_dimension_provided = False
+        for field in dimension_fields:
+            if field in data:
+                update[field] = float(data.get(field, existing.get(field, 0)) or 0)
+                manual_dimension_provided = True
+        if "dimension_mode" in data:
+            update["dimension_mode"] = data.get("dimension_mode") or existing.get("dimension_mode", "auto")
+        elif manual_dimension_provided:
+            update["dimension_mode"] = "manual"
+
+    crates_col.update_one({"project_id": project_id, "id": crate_id}, {"$set": update})
+    clear_manual_container_plan(project_id)
+    return {"message": "ok"}
+
+
+@app.post("/api/projects/{project_id}/crates/merge")
+def merge_crates(project_id: int, data: Dict[str, Any]):
+    crate_ids = [int(crate_id) for crate_id in data.get("crate_ids", []) if str(crate_id).strip()]
+    if len(crate_ids) < 2:
+        return {"message": "select at least two crates"}
+
+    target_id = int(data.get("target_crate_id") or crate_ids[0])
+    target = crates_col.find_one({"project_id": project_id, "id": target_id}, {"_id": 0})
+    if not target:
+        return {"message": "target not found"}
+
+    source_ids = [crate_id for crate_id in crate_ids if crate_id != target_id]
+    assignments = list(assignments_col.find({"project_id": project_id, "crate_id": {"$in": source_ids}}, {"_id": 0}))
+    for assignment in assignments:
+        assignments_col.update_one(
+            {"id": assignment["id"]},
+            {"$set": {"crate_id": target_id, "assigned_at": utc_now()}},
+        )
+
+    if data.get("name"):
+        crates_col.update_one(
+            {"project_id": project_id, "id": target_id},
+            {"$set": {"name": data["name"], "updated_at": utc_now()}},
+        )
+
+    crates_col.delete_many({"project_id": project_id, "id": {"$in": source_ids}})
+    clear_manual_container_plan(project_id)
+    return {"message": "ok"}
+
+
+@app.post("/api/projects/{project_id}/crates/split")
+def split_crate(project_id: int, data: Dict[str, Any]):
+    piece_ids = [int(piece_id) for piece_id in data.get("piece_ids", []) if str(piece_id).strip()]
+    if not piece_ids:
+        return {"message": "no pieces selected"}
+
+    serial = crate_serial_for_project(project_id)
+    crate_doc = {
+        "id": next_sequence("crate"),
+        "project_id": project_id,
+        "crate_id": f"CR{serial:04d}",
+        "name": data.get("name") or f"Crate {serial}",
+        "max_weight": float(data.get("max_weight", 1000) or 1000),
+        "locked": bool(data.get("locked", False)),
+        "custom": True,
+        "reserved_space_pct": float(data.get("reserved_space_pct", 0) or 0),
+        "planner_notes": str(data.get("planner_notes", "") or ""),
+        "dimension_mode": data.get("dimension_mode", "auto") or "auto",
+        "internal_length": float(data.get("internal_length", 0) or 0),
+        "internal_width": float(data.get("internal_width", 0) or 0),
+        "internal_height": float(data.get("internal_height", 0) or 0),
+        "external_length": float(data.get("external_length", 0) or 0),
+        "external_width": float(data.get("external_width", 0) or 0),
+        "external_height": float(data.get("external_height", 0) or 0),
+        "sqft": 0.0,
+        "weight": 0.0,
+        "created_at": utc_now(),
+    }
+    crates_col.insert_one(crate_doc)
+
+    assignments_col.delete_many({"project_id": project_id, "piece_id": {"$in": piece_ids}})
+    assignments_col.insert_many(
+        [
+            {
+                "id": next_sequence("assignment"),
+                "project_id": project_id,
+                "piece_id": piece_id,
+                "crate_id": crate_doc["id"],
+                "assigned_at": utc_now(),
+            }
+            for piece_id in piece_ids
+        ]
+    )
+    clear_manual_container_plan(project_id)
+    return {"id": crate_doc["id"], "crate_id": crate_doc["crate_id"]}
 
 
 @app.post("/api/projects/{project_id}/crates/auto-generate")
@@ -996,8 +1181,18 @@ def auto_generate(project_id: int, data: Dict[str, Any]):
     if not project:
         return {"message": "project not found"}
 
-    crates_col.delete_many({"project_id": project_id})
-    assignments_col.delete_many({"project_id": project_id})
+    existing_crates = list(crates_col.find({"project_id": project_id}, {"_id": 0}))
+    locked_crates = [crate for crate in existing_crates if crate.get("locked")]
+    locked_crate_ids = [crate["id"] for crate in locked_crates]
+    locked_assignments = list(
+        assignments_col.find({"project_id": project_id, "crate_id": {"$in": locked_crate_ids}}, {"_id": 0})
+    ) if locked_crate_ids else []
+    locked_piece_ids = {assignment["piece_id"] for assignment in locked_assignments}
+
+    unlocked_crate_ids = [crate["id"] for crate in existing_crates if crate["id"] not in locked_crate_ids]
+    if unlocked_crate_ids:
+        assignments_col.delete_many({"project_id": project_id, "crate_id": {"$in": unlocked_crate_ids}})
+        crates_col.delete_many({"project_id": project_id, "id": {"$in": unlocked_crate_ids}})
 
     strategy = data.get("group_by", "type")
     max_pieces = data.get("max_pieces")
@@ -1012,7 +1207,7 @@ def auto_generate(project_id: int, data: Dict[str, Any]):
         max_weight = 1000.0
 
     generated = auto_generate_crates(
-        pieces=pieces,
+        pieces=[piece for piece in pieces if piece["id"] not in locked_piece_ids],
         strategy=strategy,
         max_pieces=max_pieces,
         max_weight=max_weight,
@@ -1022,19 +1217,31 @@ def auto_generate(project_id: int, data: Dict[str, Any]):
 
     crate_docs = []
     assignment_docs = []
+    next_serial = crate_serial_for_project(project_id)
     for crate in generated:
-        dims = estimate_crate_dimensions(
+        dims = estimate_auto_dimensions(
             crate["pieces"],
             project.get("material", "Granite"),
             project.get("thickness", "3CM"),
             crate["max_weight"],
+            preferred_wood_thickness=float(project.get("crate_wood_thickness", 0) or 0),
         )
         crate_doc = {
             "id": next_sequence("crate"),
             "project_id": project_id,
-            "crate_id": crate["crate_id"],
+            "crate_id": f"CR{next_serial:04d}",
             "name": crate["name"],
             "max_weight": crate["max_weight"],
+            "locked": False,
+            "custom": False,
+            "reserved_space_pct": 0.0,
+            "planner_notes": "",
+            "dimension_mode": "auto",
+            "stackable": None,
+            "forklift_entry": None,
+            "reinforcement": None,
+            "wood_type": project.get("crate_wood_type", "Pine"),
+            "wood_thickness": dims.get("wood_thickness", 1.0),
             "internal_length": dims["internal_length"],
             "internal_width": dims["internal_width"],
             "internal_height": dims["internal_height"],
@@ -1045,6 +1252,7 @@ def auto_generate(project_id: int, data: Dict[str, Any]):
             "weight": dims["weight"],
             "created_at": utc_now(),
         }
+        next_serial += 1
         crate_docs.append(crate_doc)
         for piece in crate["pieces"]:
             assignment_docs.append(
@@ -1062,7 +1270,8 @@ def auto_generate(project_id: int, data: Dict[str, Any]):
     if assignment_docs:
         assignments_col.insert_many(assignment_docs)
 
-    return {"message": f"Created {len(crate_docs)} crates"}
+    clear_manual_container_plan(project_id)
+    return {"message": f"Created {len(crate_docs)} crates", "locked_preserved": len(locked_crates)}
 
 
 @app.delete("/api/projects/{project_id}/crates/")
@@ -1072,6 +1281,7 @@ def delete_all_crates(project_id: int):
     if crate_ids:
         assignments_col.delete_many({"project_id": project_id, "crate_id": {"$in": crate_ids}})
     crates_col.delete_many({"project_id": project_id})
+    clear_manual_container_plan(project_id)
     return {"message": "ok"}
 
 
@@ -1082,6 +1292,7 @@ def delete_crate(crate_id: int):
         return {"message": "ok"}
     assignments_col.delete_many({"project_id": crate["project_id"], "crate_id": crate_id})
     crates_col.delete_one({"id": crate_id})
+    clear_manual_container_plan(crate["project_id"])
     return {"message": "ok"}
 
 
@@ -1109,6 +1320,17 @@ def assign_piece(data: Dict[str, Any]):
                 "assigned_at": utc_now(),
             }
         )
+    clear_manual_container_plan(project_id)
+    return {"message": "ok"}
+
+
+@app.post("/api/crates/unassign")
+def unassign_piece(data: Dict[str, Any]):
+    piece = pieces_col.find_one({"id": int(data["piece_id"])}, {"project_id": 1})
+    if not piece:
+        return {"message": "ok"}
+    assignments_col.delete_many({"project_id": piece["project_id"], "piece_id": piece["id"]})
+    clear_manual_container_plan(piece["project_id"])
     return {"message": "ok"}
 
 
@@ -1119,6 +1341,45 @@ def get_assignments(project_id: int):
         key=lambda doc: doc["id"],
     )
     return [assignment_response(assignment) for assignment in assignments]
+
+
+@app.get("/api/projects/{project_id}/container-plan")
+def get_manual_container_plan(project_id: int):
+    project = projects_col.find_one({"id": project_id}, {"_id": 0})
+    return (project or {}).get("manual_container_plan") or {"containers": []}
+
+
+@app.put("/api/projects/{project_id}/container-plan")
+def save_manual_container_plan(project_id: int, data: Dict[str, Any]):
+    containers = data.get("containers", [])
+    sanitized_containers = []
+    for index, container in enumerate(containers):
+        sanitized_containers.append(
+            {
+                "id": container.get("id") or f"MANUAL-{index + 1:03d}",
+                "type": container.get("type", "40ft"),
+                "placements": [
+                    {
+                        "crate_id": placement.get("crate_id"),
+                        "x": float(placement.get("x", 0) or 0),
+                        "y": float(placement.get("y", 0) or 0),
+                        "rotated": bool(placement.get("rotated", False)),
+                        "loading_order": int(placement.get("loading_order", placement_index + 1) or (placement_index + 1)),
+                        "unload_order": int(placement.get("unload_order", placement_index + 1) or (placement_index + 1)),
+                    }
+                    for placement_index, placement in enumerate(container.get("placements", []))
+                    if placement.get("crate_id")
+                ],
+            }
+        )
+    projects_col.update_one({"id": project_id}, {"$set": {"manual_container_plan": {"containers": sanitized_containers}, "updated_at": utc_now()}})
+    return {"message": "ok"}
+
+
+@app.delete("/api/projects/{project_id}/container-plan")
+def delete_manual_container_plan(project_id: int):
+    clear_manual_container_plan(project_id)
+    return {"message": "ok"}
 
 
 @app.get("/api/projects/{project_id}/crates/insights")
@@ -1133,165 +1394,221 @@ def export_excel(project_id: int):
         return {"message": "project not found"}
 
     pieces = sorted(pieces_col.find({"project_id": project_id}, {"_id": 0}), key=lambda doc: doc["id"])
-    crates = sorted(crates_col.find({"project_id": project_id}, {"_id": 0}), key=lambda doc: doc["id"])
     assignments = list(assignments_col.find({"project_id": project_id}, {"_id": 0}))
     pieces_by_crate = pieces_grouped_by_crate(pieces, assignments)
-    factor = weight_factor(project.get("material", "Granite"), project.get("thickness", "3CM"))
+    snapshot = project_planning_snapshot(project_id)
+    loading_plan = build_container_plan(
+        snapshot["crate_rows"],
+        manual_plan=project.get("manual_container_plan"),
+        preferred_mode=project.get("preferred_container_mode"),
+    )
 
+    import openpyxl
     wb = openpyxl.Workbook()
 
     ws1 = wb.active
-    ws1.title = "Line Items"
-    ws1.append(
+    ws1.title = "Summary"
+    ws1.append(["StoneDesk Planning Summary"])
+    ws1.append([])
+    ws1.append(["Project", project.get("name", "")])
+    ws1.append(["Customer", project.get("customer", "")])
+    ws1.append(["Job Number", project.get("job_number", "")])
+    ws1.append(["Material", project.get("material", "Granite")])
+    ws1.append(["Thickness", project.get("thickness", "3CM")])
+    ws1.append(["Crate Wood Type", project.get("crate_wood_type", "Pine")])
+    ws1.append(["Crate Wood Thickness (in)", project.get("crate_wood_thickness", 1.25)])
+    ws1.append(["Export Date", date.today().isoformat()])
+    ws1.append([])
+    ws1.append(["KPI", "Value"])
+    ws1.append(["Crates Created", len(snapshot["crate_rows"])])
+    ws1.append(["Total Stone Weight (kg)", snapshot["total_weight"]])
+    ws1.append(["Shipment Weight incl. Tare (kg)", snapshot["total_gross_weight"]])
+    ws1.append(["Total Sq Ft", snapshot["total_sqft"]])
+    ws1.append(["Average Fill %", snapshot["average_fill_percent"]])
+    ws1.append(["Average Gross Weight Util %", snapshot["average_gross_utilization"]])
+    ws1.append(["Recommended Booking", loading_plan["recommendation"]["booking_action"]])
+    ws1.append(["Recommended Mode", loading_plan["recommendation"]["mode_label"]])
+    ws1.append(["Recommendation Reason", loading_plan["recommendation"]["reason"]])
+    ws1.append([])
+    ws1.append(["Alternative Options"])
+    for option in loading_plan["options"]:
+        option_line = (
+            f"{option['label']} | feasible={option['feasible']} | "
+            f"avg weight util {option['average_weight_utilization']:.0f}% | "
+            f"avg length util {option['average_length_utilization']:.0f}% | "
+            f"cost index {option['cost_index']:.2f}"
+        )
+        ws1.append([option_line])
+
+    ws2 = wb.create_sheet("Crates")
+    ws2.append(
         [
-            "#",
-            "Part Description",
+            "Crate ID",
+            "Crate Name",
+            "Destination Group",
+            "Family Group",
+            "Locked",
+            "Custom",
+            "Int L",
+            "Int W",
+            "Int H",
+            "Ext L",
+            "Ext W",
+            "Ext H",
+            "Wood Type",
+            "Wood Thickness",
+            "Tare Wt",
+            "Net Wt",
+            "Gross Wt",
+            "Fill %",
+            "Gross Util %",
+            "Center of Gravity",
+            "Forklift Entry",
+            "Stackable",
+            "Reinforcement",
+            "Reserved Space %",
+            "Status",
+            "Handling Notes",
+        ]
+    )
+    for crate in snapshot["crate_rows"]:
+        cog = crate["center_of_gravity"]
+        ws2.append(
+            [
+                crate["crate_id"],
+                crate["name"],
+                crate["destination_group"],
+                crate["family_group"],
+                crate["locked"],
+                crate["custom"],
+                crate["internal_length"],
+                crate["internal_width"],
+                crate["internal_height"],
+                crate["external_length"],
+                crate["external_width"],
+                crate["external_height"],
+                crate["wood_type"],
+                crate["wood_thickness"],
+                crate["tare_weight"],
+                crate["total_weight"],
+                crate["gross_weight"],
+                crate["fill_percent"],
+                crate["gross_utilization"],
+                f"{cog['x']}, {cog['y']}, {cog['z']}",
+                crate["forklift_entry"],
+                crate["stackable"],
+                crate["reinforcement"],
+                crate["reserved_space_pct"],
+                crate["efficiency_status"],
+                crate["handling_notes"],
+            ]
+        )
+
+    ws3 = wb.create_sheet("Crate Contents")
+    ws3.append(
+        [
+            "Crate ID",
+            "Crate Name",
+            "Piece ID",
+            "Part",
             "Category",
-            "Material",
-            "Thickness",
-            "Drawing #",
-            "Unit Name",
-            "Length (in)",
-            "Depth (in)",
+            "Drawing",
+            "Unit",
+            "Building",
+            "Floor",
+            "Flat",
+            "Length",
+            "Depth",
             "Qty",
+            "Stone Wt (kg)",
+            "Orientation",
             "Sink Type",
             "Cutouts",
             "Tap Holes",
             "Grooves",
-            "Edge Polish",
-            "Radius",
-            "Sq Ft (ea)",
-            "Sq Ft (tot)",
-            "Wt ea (kg)",
-            "Wt tot (kg)",
-            "Building",
-            "Floor",
-            "Flat",
+            "Edge",
             "Notes",
         ]
     )
-    for i, piece in enumerate(pieces, 1):
-        sqft = (piece["length"] * piece["width"]) / 144
-        ws1.append(
-            [
-                i,
-                piece["part"],
-                piece["category"],
-                project.get("material", "Granite"),
-                project.get("thickness", "3CM"),
-                piece.get("drawing", ""),
-                piece.get("unit", ""),
-                piece["length"],
-                piece["width"],
-                piece["qty"],
-                piece.get("sink_type", "No Sink"),
-                piece.get("sink_cut", "-"),
-                piece.get("tap_holes", "-"),
-                piece.get("grooves", "-"),
-                piece.get("edge", "-"),
-                piece.get("radius", "-"),
-                round(sqft, 2),
-                round(sqft * piece["qty"], 2),
-                round(sqft * factor, 2),
-                round(sqft * factor * piece["qty"], 2),
-                piece.get("building", ""),
-                piece.get("floor", ""),
-                piece.get("flat", ""),
-                piece.get("notes", ""),
-            ]
-        )
-
-    ws2 = wb.create_sheet("Aggregated Summary")
-    ws2.append(["Part Description", "Category", "Material", "Thickness", "Drawings", "Total Pieces", "Total Sq Ft", "Total Weight (kg)"])
-    groups: Dict[tuple, Dict[str, Any]] = {}
-    for piece in pieces:
-        key = (piece["part"], piece["category"])
-        if key not in groups:
-            groups[key] = {"drawings": set(), "qty": 0, "sqft": 0.0, "weight": 0.0}
-        if piece.get("drawing"):
-            groups[key]["drawings"].add(piece["drawing"])
-        groups[key]["qty"] += piece["qty"]
-        sq = (piece["length"] * piece["width"]) / 144
-        groups[key]["sqft"] += sq * piece["qty"]
-        groups[key]["weight"] += sq * factor * piece["qty"]
-    for (part, category), summary in groups.items():
-        ws2.append(
-            [
-                part,
-                category,
-                project.get("material", "Granite"),
-                project.get("thickness", "3CM"),
-                len(summary["drawings"]),
-                summary["qty"],
-                round(summary["sqft"], 2),
-                round(summary["weight"], 2),
-            ]
-        )
-
-    ws3 = wb.create_sheet("Crate_Plan")
-    ws3.append([
-        "Crate #",
-        "Crate Name",
-        "Project",
-        "Int L",
-        "Int W",
-        "Int H",
-        "Ext L",
-        "Ext W",
-        "Ext H",
-        "Max Kg",
-        "Total Kg",
-        "Sq Ft",
-        "Items",
-        "Assigned By",
-        "Date",
-    ])
-    for crate in crates:
-        c_pieces = pieces_by_crate.get(crate["id"], [])
-        total_kg = sum(piece_weight(piece, project.get("material", "Granite"), project.get("thickness", "3CM")) for piece in c_pieces)
-        ws3.append(
-            [
-                crate["crate_id"],
-                crate["name"],
-                project.get("name", ""),
-                crate.get("internal_length", 0),
-                crate.get("internal_width", 0),
-                crate.get("internal_height", 0),
-                crate.get("external_length", 0),
-                crate.get("external_width", 0),
-                crate.get("external_height", 0),
-                crate.get("max_weight", 1000),
-                round(total_kg, 2),
-                round(sum((piece["length"] * piece["width"]) / 144 * piece["qty"] for piece in c_pieces), 2),
-                len(c_pieces),
-                "System",
-                date.today().isoformat(),
-            ]
-        )
-
-    ws4 = wb.create_sheet("Crate Items")
-    ws4.append(["Crate #", "Crate Name", "Record ID", "Project", "Drawing", "Part #", "Description", "Building", "Floor", "Flat", "Qty", "Wt ea (kg)", "Line Wt (kg)"])
-    for crate in crates:
-        c_pieces = pieces_by_crate.get(crate["id"], [])
-        for piece in c_pieces:
-            wt_ea = piece_weight(piece, project.get("material", "Granite"), project.get("thickness", "3CM")) / max(int(piece.get("qty", 1)), 1)
-            ws4.append(
+    for crate in snapshot["crate_rows"]:
+        crate_pieces = pieces_by_crate.get(crate["id"], [])
+        for piece in crate_pieces:
+            ws3.append(
                 [
                     crate["crate_id"],
                     crate["name"],
                     piece["id"],
-                    project.get("name", ""),
-                    piece.get("drawing", ""),
                     piece.get("part", ""),
                     piece.get("category", ""),
+                    piece.get("drawing", ""),
+                    piece.get("unit", ""),
                     piece.get("building", ""),
                     piece.get("floor", ""),
                     piece.get("flat", ""),
+                    piece.get("length", 0),
+                    piece.get("width", 0),
                     piece.get("qty", 1),
-                    round(wt_ea, 2),
-                    round(wt_ea * piece.get("qty", 1), 2),
+                    round(planning_piece_weight(piece, project.get("material", "Granite"), project.get("thickness", "3CM")), 2),
+                    crate["orientation_constraints"],
+                    piece.get("sink_type", "No Sink"),
+                    piece.get("sink_cut", "-"),
+                    piece.get("tap_holes", "-"),
+                    piece.get("grooves", "-"),
+                    piece.get("edge", "-"),
+                    piece.get("notes", ""),
                 ]
             )
+
+    ws4 = wb.create_sheet("Container Plan")
+    ws4.append(
+        [
+            "Container ID",
+            "Type",
+            "Crate ID",
+            "Crate Name",
+            "Destination",
+            "X",
+            "Y",
+            "Length",
+            "Width",
+            "Gross Wt",
+            "Loading Order",
+            "Unload Order",
+            "Rotated",
+            "Container Warnings",
+        ]
+    )
+    for container in loading_plan["containers"]:
+        warnings = "; ".join(container.get("warnings", []))
+        for placement in container.get("placements", []):
+            ws4.append(
+                [
+                    container["id"],
+                    container["type"],
+                    placement["crate_id"],
+                    placement["name"],
+                    placement.get("destination_group", ""),
+                    placement["x"],
+                    placement["y"],
+                    placement["length"],
+                    placement["width"],
+                    placement["weight"],
+                    placement["loading_order"],
+                    placement["unload_order"],
+                    placement["rotated"],
+                    warnings,
+                ]
+            )
+
+    ws5 = wb.create_sheet("Exceptions / warnings")
+    ws5.append(["Scope", "ID", "Name", "Severity", "Message"])
+    for row in snapshot["exception_rows"]:
+        ws5.append([row["scope"], row["id"], row["name"], row["severity"], row["message"]])
+    for row in snapshot["underfilled_crates"]:
+        ws5.append(["crate", row["crate_id"], row["name"], row["status"], row["suggestion"]])
+    for container in loading_plan["containers"]:
+        for warning in container.get("warnings", []):
+            ws5.append(["container", container["id"], container["type"], "yellow", warning])
 
     output = BytesIO()
     wb.save(output)
