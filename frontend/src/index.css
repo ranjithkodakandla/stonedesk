@@ -21,4 +21,7 @@
   .label-text {
     @apply text-sm font-medium text-[#334155] block mb-1;
   }
+  .grid-cell {
+    @apply bg-white border border-[#e2e8f0] text-[#1e293b] text-xs rounded px-1.5 py-1 outline-none focus:border-[#3b82f6] focus:ring-1 focus:ring-[#3b82f6] transition-all w-full;
+  }
 }

@@ -8,13 +8,54 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
   const [editMode, setEditMode] = useState(null);
   const [editDraft, setEditDraft] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [editingPartNo, setEditingPartNo] = useState(null); // { id, value }
+
+  const COLOR_DENSITIES = {
+    Granite: {
+      'Kashmir White': 2600, 'Moon White': 2580, 'River White': 2600, 'Colonial White': 2590,
+      'Bianco Romano': 2610, 'White Galaxy': 2590, 'Crystal White': 2600,
+      'Giallo Ornamental': 2660, 'Venetian Gold': 2660, 'Santa Cecilia': 2650,
+      'Caledonia': 2660, 'Crema Pearl': 2650, 'Tiger Skin': 2660,
+      'Tan Brown': 2680, 'Silver Pearl': 2680, 'Verde Butterfly': 2690,
+      'Uba Tuba': 2700, 'Steel Grey': 2700, 'Sapphire Blue': 2700,
+      'Vizag Blue': 2700, 'New Kashmir White': 2680,
+      'Baltic Brown': 2750, 'Imperial Red': 2750, 'Labrador Antique': 2760,
+      'Volga Blue': 2760, 'Impala': 2750, 'Dakota Mahogany': 2750, 'Black Pearl': 2780,
+      'Absolute Black': 2900, 'Black Galaxy': 2950, 'Angola Black': 2900,
+      'Zimbabwe Black': 2880, 'Star Galaxy': 2930,
+    },
+    Marble: {
+      'Carrara White': 2720, 'Calacatta Gold': 2710, 'Statuario': 2720,
+      'Bianco Venatino': 2700, 'Volakas': 2690, 'White Onyx': 2680,
+      'Crema Marfil': 2720, 'Botticino': 2740, 'Emperador Light': 2740,
+      'Ottoman Grey': 2720, 'Grey Armani': 2740, 'Panda White': 2730,
+      'Nero Marquina': 2800, 'Emperador Dark': 2780, 'Forest Green': 2790,
+      'Bardiglio': 2760, 'Black & Gold': 2820, 'Portoro': 2830,
+    },
+  };
+  const THICKNESS_M = { '2CM': 0.02, '3CM': 0.03, 'Mixed': 0.025 };
+  const FALLBACK_FACTORS = {
+    Granite: { '2CM': 5.5, '3CM': 7.5, 'Mixed': 6.5 },
+    Quartz: { '2CM': 4.75, '3CM': 6.75, 'Mixed': 5.75 },
+    Marble: { '2CM': 6.0, '3CM': 8.0, 'Mixed': 7.0 },
+  };
+
+  const getWeightFactor = () => {
+    const color = project.stone_color || '';
+    const mat = project.material || 'Granite';
+    const thick = project.thickness || '3CM';
+    if (color && COLOR_DENSITIES[mat]?.[color]) {
+      const density = COLOR_DENSITIES[mat][color];
+      const tM = THICKNESS_M[thick] || 0.025;
+      return density * tM * 0.0929;
+    }
+    return (FALLBACK_FACTORS[mat] || FALLBACK_FACTORS.Granite)[thick] || 7.5;
+  };
 
   const getWeight = (p) => {
-     const override = Number(p.weight_override || 0);
-     if (override > 0) return override;
-     const factors = { Granite: { '2CM': 5.5, '3CM': 7.5, 'Mixed': 6.5 }, Quartz: { '2CM': 4.75, '3CM': 6.75, 'Mixed': 5.75 }, Marble: { '2CM': 6.0, '3CM': 8.0, 'Mixed': 7.0 } };
-     const factor = (factors[project.material] || factors['Granite'])[project.thickness] || 7.5;
-     return ((p.length * p.width) / 144) * factor;
+    const override = Number(p.weight_override || 0);
+    if (override > 0) return override;
+    return ((p.length * p.width) / 144) * getWeightFactor();
   };
 
   const calculateEdgePolishMachine = (length, width, edgeArea) => {
@@ -157,6 +198,13 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
             : calculateEdgePolishMachine(editDraft.length, editDraft.width, editDraft.edge_area),
           radius: editMode === 'bulk' ? piece.radius : (editDraft.radius || '-'),
           notes: editMode === 'bulk' ? piece.notes : (editDraft.notes || ''),
+          // Preserve fields managed by the entry-form drawer — never wiped by this editor
+          part_no: piece.part_no || '',
+          edge_map: piece.edge_map || {},
+          edge_polish_manual: piece.edge_polish_manual || '',
+          radius_value: piece.radius_value || '',
+          radius_corners: piece.radius_corners || {},
+          shape_type: piece.shape_type || '',
         };
 
         if (editMode === 'bulk') {
@@ -213,6 +261,19 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
     setEditDraft((prev) => (prev ? { ...prev, [field]: { ...(prev[field] || {}), enabled } } : prev));
   };
 
+  const handleBulkDelete = async () => {
+    if (selectedIds.length === 0) return;
+    if (!window.confirm(`Delete ${selectedIds.length} selected piece(s)? This cannot be undone.`)) return;
+    try {
+      await Promise.all(selectedIds.map(id => axios.delete(`${API_BASE}/pieces/${id}`)));
+      setSelectedIds([]);
+      onDataChange?.();
+    } catch (err) {
+      console.error('Bulk delete failed', err);
+      alert('Some pieces could not be deleted. Please try again.');
+    }
+  };
+
   const setBulkValue = (field, value) => {
     setEditDraft((prev) => (prev ? { ...prev, [field]: { ...(prev[field] || {}), value, enabled: true } } : prev));
   };
@@ -234,6 +295,49 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
     </div>
   );
 
+  const savePartNo = async (pieceId, value) => {
+    setEditingPartNo(null);
+    const piece = pieces.find(p => p.id === pieceId);
+    if (!piece || piece.part_no === value) return;
+    try {
+      await axios.put(`${API_BASE}/pieces/${pieceId}`, {
+        part: piece.part || '',
+        part_no: value,
+        category: piece.category || '',
+        drawing: piece.drawing || '',
+        length: piece.length || 0,
+        width: piece.width || 0,
+        qty: piece.qty || 1,
+        unit: piece.unit || '',
+        building: piece.building || '',
+        floor: piece.floor || '',
+        flat: piece.flat || '',
+        sink_type: piece.sink_type || 'No Sink',
+        sink_cut: piece.sink_cut || '-',
+        tap_holes: piece.tap_holes || '-',
+        grooves: piece.grooves || '-',
+        fragility: piece.fragility || 'Standard',
+        orientation: piece.orientation || 'Auto',
+        delivery_priority: piece.delivery_priority || 'Standard',
+        stack_preference: piece.stack_preference || 'Auto',
+        weight_override: Number(piece.weight_override) || 0,
+        edge: piece.edge || 'None',
+        edge_area: piece.edge_area || '',
+        edge_polish_machine: piece.edge_polish_machine || 0,
+        edge_map: piece.edge_map || {},
+        edge_polish_manual: piece.edge_polish_manual || '',
+        radius: piece.radius || '-',
+        radius_value: piece.radius_value || '',
+        radius_corners: piece.radius_corners || {},
+        shape_type: piece.shape_type || '',
+        notes: piece.notes || '',
+      });
+      onDataChange?.();
+    } catch (err) {
+      console.error('Failed to save Part #', err);
+    }
+  };
+
   return (
     <div className="mt-6">
       <div className="flex items-center justify-between mb-3">
@@ -250,13 +354,22 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
             Edit Selected
           </button>
           {selectedIds.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setSelectedIds([])}
-              className="btn-danger"
-            >
-              Clear Selection
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={handleBulkDelete}
+                className="btn-danger"
+              >
+                Delete Selected ({selectedIds.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedIds([])}
+                className="btn-primary bg-white text-[#334155] border border-[#cbd5e1] hover:bg-[#f8fafc]"
+              >
+                Clear Selection
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -265,7 +378,7 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
         <table className="w-full text-left text-sm text-[#475569]">
           <thead className="bg-[#f1f5f9] text-[#334155] text-xs font-semibold sticky top-0 z-10 shadow-sm border-b border-[#e2e8f0]">
             <tr>
-              <th className="p-3 w-10">
+              <th className="p-3 w-10 sticky left-0 z-20 bg-[#f1f5f9]">
                 <input
                   type="checkbox"
                   checked={pieces.length > 0 && selectedIds.length === pieces.length}
@@ -273,6 +386,7 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
                   className="h-4 w-4"
                 />
               </th>
+              <th className="p-3 sticky left-10 z-20 bg-[#f1f5f9] min-w-[120px] whitespace-nowrap border-r border-[#e2e8f0]">Part #</th>
               <th className="p-3">Part</th>
               <th className="p-3">Category</th>
               <th className="p-3">Drawing</th>
@@ -300,13 +414,36 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
               const wt = getWeight(p);
               return (
                 <tr key={p.id} className={`border-b border-[#f1f5f9] transition-colors ${selectedIds.includes(p.id) ? 'bg-[#eff6ff]' : 'hover:bg-[#f8fafc]'}`}>
-                  <td className="p-3">
+                  <td className={`p-3 sticky left-0 z-[2] border-r border-[#f1f5f9] ${selectedIds.includes(p.id) ? 'bg-[#eff6ff]' : 'bg-white'}`}>
                     <input
                       type="checkbox"
                       className="h-4 w-4"
                       checked={selectedIds.includes(p.id)}
                       onChange={() => toggleSelection(p.id)}
                     />
+                  </td>
+                  <td className={`p-2 sticky left-10 z-[2] min-w-[120px] border-r border-[#e2e8f0] ${selectedIds.includes(p.id) ? 'bg-[#eff6ff]' : 'bg-white'}`}>
+                    {editingPartNo?.id === p.id ? (
+                      <input
+                        autoFocus
+                        value={editingPartNo.value}
+                        onChange={e => setEditingPartNo({ id: p.id, value: e.target.value })}
+                        onBlur={() => savePartNo(p.id, editingPartNo.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') savePartNo(p.id, editingPartNo.value);
+                          if (e.key === 'Escape') setEditingPartNo(null);
+                        }}
+                        className="font-mono text-xs border border-[#2563eb] rounded px-1.5 py-0.5 w-full outline-none bg-white"
+                      />
+                    ) : (
+                      <span
+                        className="font-mono text-xs font-semibold text-[#1e293b] cursor-text hover:bg-[#f1f5f9] rounded px-1 py-0.5 block"
+                        onClick={() => setEditingPartNo({ id: p.id, value: p.part_no || '' })}
+                        title="Click to edit Part #"
+                      >
+                        {p.part_no || <span className="text-[#cbd5e1] font-normal not-italic">—</span>}
+                      </span>
+                    )}
                   </td>
                   <td className="p-3 font-semibold text-[#1e293b] text-left">{p.part}</td>
                   <td className="p-3 text-left">{p.category}</td>
@@ -345,7 +482,7 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
                 </tr>
               );
             })}
-            {pieces.length === 0 && <tr><td colSpan="20" className="p-8 text-center text-[#64748b] italic">No pieces added to this project yet.</td></tr>}
+            {pieces.length === 0 && <tr><td colSpan="21" className="p-8 text-center text-[#64748b] italic">No pieces added to this project yet.</td></tr>}
           </tbody>
         </table>
       </div>
