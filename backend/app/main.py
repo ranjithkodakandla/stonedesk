@@ -6,13 +6,15 @@ from typing import Any, Dict, List, Optional
 
 import certifi
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pymongo import MongoClient, ReturnDocument
 from pydantic import BaseModel
+from .pdf_parser import parse_pdf
 from .services.container_planner import build_container_plan
 from .services.planning_engine import (
+    COLOR_DENSITIES,
     build_planning_snapshot,
     estimate_auto_dimensions,
     piece_destination_key,
@@ -20,7 +22,7 @@ from .services.planning_engine import (
     weight_factor as planning_weight_factor,
 )
 
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
 
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb+srv://virgin_db_user:iddh38iXtoKpt1We@cluster0.t9reftj.mongodb.net/?appName=Cluster0")
 MONGODB_DB = os.getenv("MONGODB_DB", "virgin")
@@ -108,11 +110,10 @@ def build_store():
         if not MONGODB_URI:
             raise ValueError("MONGODB_URI environment variable is missing.")
 
-        mongo_client = MongoClient(
-            MONGODB_URI,
-            serverSelectionTimeoutMS=1500,
-            tlsCAFile=certifi.where(),
-        )
+        connect_kwargs = {"serverSelectionTimeoutMS": 1500}
+        if MONGODB_URI.startswith("mongodb+srv"):
+            connect_kwargs["tlsCAFile"] = certifi.where()
+        mongo_client = MongoClient(MONGODB_URI, **connect_kwargs)
         mongo_client.admin.command("ping")
         print(f"Connected to Production MongoDB: {MONGODB_URI.split('@')[-1] if '@' in MONGODB_URI else 'Remote Host'}")
         mongo_db = mongo_client[MONGODB_DB]
@@ -122,6 +123,7 @@ def build_store():
             "crates": mongo_db["crates"],
             "assignments": mongo_db["assignments"],
             "counters": mongo_db["counters"],
+            "upload_drafts": mongo_db["upload_drafts"],
         }
         return store, "mongo"
     except Exception as e:
@@ -134,6 +136,7 @@ def build_store():
             "crates": InMemoryCollection(),
             "assignments": InMemoryCollection(),
             "counters": InMemoryCollection(),
+            "upload_drafts": InMemoryCollection(),
         }, "memory"
 
 
@@ -143,6 +146,7 @@ pieces_col = store["pieces"]
 crates_col = store["crates"]
 assignments_col = store["assignments"]
 counters_col = store["counters"]
+upload_drafts_col = store["upload_drafts"]
 
 
 def ensure_indexes() -> None:
@@ -194,6 +198,7 @@ def project_response(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         "job_number": doc.get("job_number", ""),
         "material": doc.get("material", "Granite"),
         "thickness": doc.get("thickness", "3CM"),
+        "stone_color": doc.get("stone_color", ""),
         "crate_wood_type": doc.get("crate_wood_type", "Pine"),
         "crate_wood_thickness": doc.get("crate_wood_thickness", 1.25),
         "preferred_container_mode": doc.get("preferred_container_mode", "recommended"),
@@ -208,16 +213,23 @@ def piece_response(doc: Dict[str, Any]) -> Dict[str, Any]:
         "id": doc["id"],
         "project_id": doc["project_id"],
         "part": doc.get("part", ""),
+        "part_no": doc.get("part_no", ""),
         "category": doc.get("category", ""),
         "drawing": doc.get("drawing", ""),
         "length": doc.get("length", 0.0),
         "width": doc.get("width", 0.0),
+        "thickness": doc.get("thickness", "3CM"),
         "qty": doc.get("qty", 1),
         "unit": doc.get("unit", ""),
         "edge": doc.get("edge", ""),
         "edge_area": doc.get("edge_area", ""),
         "edge_polish_machine": doc.get("edge_polish_machine", 0.0),
+        "edge_map": doc.get("edge_map", {}),
+        "edge_polish_manual": doc.get("edge_polish_manual", ""),
         "radius": doc.get("radius", "-"),
+        "radius_value": doc.get("radius_value", ""),
+        "radius_corners": doc.get("radius_corners", {}),
+        "shape_type": doc.get("shape_type", ""),
         "sink_type": doc.get("sink_type", "No Sink"),
         "sink_cut": doc.get("sink_cut", "-"),
         "tap_holes": doc.get("tap_holes", "-"),
@@ -290,14 +302,22 @@ def clear_manual_container_plan(project_id: int) -> None:
     projects_col.update_one({"id": project_id}, {"$set": {"manual_container_plan": None}})
 
 
-def weight_factor(material: str, thickness: str) -> float:
-    factors = {
-        "Granite": {"2CM": 5.5, "3CM": 7.5, "Mixed": 6.5},
-        "Quartz": {"2CM": 4.75, "3CM": 6.75, "Mixed": 5.75},
-        "Marble": {"2CM": 6.0, "3CM": 8.0, "Mixed": 7.0},
-        "Other": {"2CM": 5.5, "3CM": 7.5, "Mixed": 6.5},
-    }
-    return factors.get(material, factors["Other"]).get(thickness, 6.5)
+_THICKNESS_M = {"2CM": 0.02, "3CM": 0.03, "Mixed": 0.025}
+_SQFT_TO_SQM = 0.0929
+_WEIGHT_FACTORS_FALLBACK = {
+    "Granite": {"2CM": 5.5, "3CM": 7.5, "Mixed": 6.5},
+    "Quartz": {"2CM": 4.75, "3CM": 6.75, "Mixed": 5.75},
+    "Marble": {"2CM": 6.0, "3CM": 8.0, "Mixed": 7.0},
+    "Other": {"2CM": 5.5, "3CM": 7.5, "Mixed": 6.5},
+}
+
+
+def weight_factor(material: str, thickness: str, color: str = "") -> float:
+    if color and material in COLOR_DENSITIES and color in COLOR_DENSITIES[material]:
+        density = COLOR_DENSITIES[material][color]
+        t_m = _THICKNESS_M.get(thickness, 0.025)
+        return round(density * t_m * _SQFT_TO_SQM, 3)
+    return _WEIGHT_FACTORS_FALLBACK.get(material, _WEIGHT_FACTORS_FALLBACK["Other"]).get(thickness, 6.5)
 
 
 def calculate_edge_polish_machine(length: float, width: float, edge_area: str) -> float:
@@ -322,9 +342,10 @@ def calculate_edge_polish_machine(length: float, width: float, edge_area: str) -
     return 0.0
 
 
-def piece_weight(piece: Dict[str, Any], material: str, thickness: str) -> float:
+def piece_weight(piece: Dict[str, Any], material: str, thickness: str, color: str = "") -> float:
     sqft = (float(piece.get("length", 0)) * float(piece.get("width", 0))) / 144.0
-    return sqft * weight_factor(material, thickness) * int(piece.get("qty", 1))
+    effective_thickness = piece.get("thickness") or thickness
+    return sqft * weight_factor(material, effective_thickness, color) * int(piece.get("qty", 1))
 
 
 def estimate_crate_dimensions(
@@ -446,6 +467,7 @@ def _distribute_pieces(
     max_pieces: int,
     material: str,
     thickness: str,
+    color: str = "",
 ) -> List[List[Dict[str, Any]]]:
     """Greedy bin-pack sorted by length desc then weight desc."""
     if not pieces:
@@ -454,7 +476,7 @@ def _distribute_pieces(
         pieces,
         key=lambda p: (
             float(p.get("length", 0)),
-            piece_weight(p, material, thickness),
+            piece_weight(p, material, thickness, color),
         ),
         reverse=True,
     )
@@ -462,7 +484,7 @@ def _distribute_pieces(
     current: List[Dict[str, Any]] = []
     current_wt = 0.0
     for p in sorted_pieces:
-        pw = piece_weight(p, material, thickness)
+        pw = piece_weight(p, material, thickness, color)
         if current and (len(current) >= max_pieces or current_wt + pw > max_weight):
             crates.append(current)
             current = [p]
@@ -475,8 +497,8 @@ def _distribute_pieces(
     return crates
 
 
-def _crate_weight(pieces: List[Dict[str, Any]], material: str, thickness: str) -> float:
-    return sum(piece_weight(p, material, thickness) for p in pieces)
+def _crate_weight(pieces: List[Dict[str, Any]], material: str, thickness: str, color: str = "") -> float:
+    return sum(piece_weight(p, material, thickness, color) for p in pieces)
 
 
 def _dominant_category(pieces: List[Dict[str, Any]]) -> str:
@@ -494,6 +516,7 @@ def strategy_category_based(
     user_max_weight: float,
     material: str,
     thickness: str,
+    color: str = "",
 ) -> List[Dict[str, Any]]:
     """Group by category, then sub-group by destination within each category."""
     # Primary grouping: by category
@@ -518,10 +541,10 @@ def strategy_category_based(
 
         for dest_name, dest_pieces in sorted(by_dest.items()):
             batches = _distribute_pieces(
-                dest_pieces, effective_max_weight, effective_max_pieces, material, thickness
+                dest_pieces, effective_max_weight, effective_max_pieces, material, thickness, color
             )
             for batch in batches:
-                total_wt = _crate_weight(batch, material, thickness)
+                total_wt = _crate_weight(batch, material, thickness, color)
                 crate_name = f"{category} — {dest_name}" if dest_name != category else category
                 generated.append({
                     "serial": serial,
@@ -549,6 +572,7 @@ def strategy_flat_based(
     user_max_weight: float,
     material: str,
     thickness: str,
+    color: str = "",
 ) -> List[Dict[str, Any]]:
     """Group by flat/apartment. Try single-crate-per-flat, split if needed, merge underfilled."""
     # Step 1: Group by flat
@@ -560,7 +584,7 @@ def strategy_flat_based(
     # Step 2+3: Try single crate per flat, split if exceeds
     raw_crates: List[Dict[str, Any]] = []
     for flat_key, flat_pieces in sorted(by_flat.items()):
-        total_wt = _crate_weight(flat_pieces, material, thickness)
+        total_wt = _crate_weight(flat_pieces, material, thickness, color)
         if total_wt <= user_max_weight and len(flat_pieces) <= 30:
             # Fits in one crate
             dom_cat = _dominant_category(flat_pieces)
@@ -587,9 +611,9 @@ def strategy_flat_based(
             for cat, cat_pieces in sorted(by_cat.items()):
                 template = _get_template(cat)
                 eff_max = min(user_max_weight, template["max_weight"])
-                batches = _distribute_pieces(cat_pieces, eff_max, template["max_pieces"], material, thickness)
+                batches = _distribute_pieces(cat_pieces, eff_max, template["max_pieces"], material, thickness, color)
                 for batch in batches:
-                    wt = _crate_weight(batch, material, thickness)
+                    wt = _crate_weight(batch, material, thickness, color)
                     raw_crates.append({
                         "pieces": batch,
                         "primary_flat": flat_key,
@@ -684,6 +708,7 @@ def auto_generate_crates(
     max_weight: Optional[float],
     material: str,
     thickness: str,
+    color: str = "",
 ) -> List[Dict[str, Any]]:
     if not pieces:
         return []
@@ -691,10 +716,10 @@ def auto_generate_crates(
     effective_max_weight = max_weight if max_weight and max_weight > 0 else 1000.0
 
     if strategy == "flat":
-        return strategy_flat_based(pieces, effective_max_weight, material, thickness)
+        return strategy_flat_based(pieces, effective_max_weight, material, thickness, color)
     else:
         # "category", "smart", "type", or any other value → category-based
-        return strategy_category_based(pieces, effective_max_weight, material, thickness)
+        return strategy_category_based(pieces, effective_max_weight, material, thickness, color)
 
 
 def crate_group_name(crate_name: str) -> str:
@@ -816,8 +841,8 @@ def crate_insights(project_id: int) -> Dict[str, Any]:
             "crates_created": len(crate_rows),
             "shipment_weight": snapshot["total_gross_weight"],
             "net_stone_weight": snapshot["total_weight"],
-            "recommended_containers": loading_plan["recommendation"]["booking_action"],
-            "container_mode": loading_plan["recommendation"]["mode_label"],
+            "recommended_containers": loading_plan["recommendation"].get("booking_action", ""),
+            "container_mode": loading_plan["recommendation"].get("mode_label", ""),
             "cost_index": loading_plan["recommendation"].get("cost_index", 0.0),
         },
         "total_weight": snapshot["total_weight"],
@@ -850,10 +875,12 @@ def crate_insights(project_id: int) -> Dict[str, Any]:
 
 class PieceCreate(BaseModel):
     part: str
+    part_no: str = ""
     category: str
     drawing: str = ""
     length: float
     width: float
+    thickness: str = "3CM"
     qty: int = 1
     unit: str = ""
     building: str = ""
@@ -871,16 +898,23 @@ class PieceCreate(BaseModel):
     edge: str = "None"
     edge_area: str = ""
     edge_polish_machine: float = 0.0
+    edge_map: Dict[str, str] = {}
+    edge_polish_manual: str = ""
     radius: str = "-"
+    radius_value: str = ""
+    radius_corners: Dict[str, bool] = {}
+    shape_type: str = ""
     notes: str = ""
 
 
 class PieceUpdate(BaseModel):
     part: str = ""
+    part_no: str = ""
     category: str = ""
     drawing: str = ""
     length: float = 0.0
     width: float = 0.0
+    thickness: str = "3CM"
     qty: int = 1
     unit: str = ""
     building: str = ""
@@ -898,7 +932,12 @@ class PieceUpdate(BaseModel):
     edge: str = "None"
     edge_area: str = ""
     edge_polish_machine: float = 0.0
+    edge_map: Dict[str, str] = {}
+    edge_polish_manual: str = ""
     radius: str = "-"
+    radius_value: str = ""
+    radius_corners: Dict[str, bool] = {}
+    shape_type: str = ""
     notes: str = ""
 
 
@@ -906,6 +945,7 @@ class ProjectUpdate(BaseModel):
     name: str
     material: str
     thickness: str
+    stone_color: str = ""
     crate_wood_type: str = "Pine"
     crate_wood_thickness: float = 1.25
     preferred_container_mode: str = "recommended"
@@ -948,6 +988,7 @@ def create_project():
         "name": "",
         "material": "Granite",
         "thickness": "3CM",
+        "stone_color": "",
         "crate_wood_type": "Pine",
         "crate_wood_thickness": 1.25,
         "preferred_container_mode": "recommended",
@@ -973,6 +1014,7 @@ def update_project(project_id: int, data: ProjectUpdate):
         "name": data.name,
         "material": data.material,
         "thickness": data.thickness,
+        "stone_color": data.stone_color,
         "crate_wood_type": data.crate_wood_type,
         "crate_wood_thickness": data.crate_wood_thickness,
         "preferred_container_mode": data.preferred_container_mode,
@@ -1022,6 +1064,7 @@ def create_piece(project_id: int, piece: PieceCreate):
         "drawing": piece.drawing,
         "length": piece.length,
         "width": piece.width,
+        "thickness": piece.thickness,
         "qty": piece.qty,
         "unit": piece.unit,
         "building": piece.building,
@@ -1059,10 +1102,12 @@ def create_pieces_batch(project_id: int, pieces_data: List[PieceCreate]):
                 "id": piece_id,
                 "project_id": project_id,
                 "part": piece.part,
+                "part_no": piece.part_no,
                 "category": piece.category,
                 "drawing": piece.drawing,
                 "length": piece.length,
                 "width": piece.width,
+                "thickness": piece.thickness,
                 "qty": piece.qty,
                 "unit": piece.unit,
                 "building": piece.building,
@@ -1080,7 +1125,12 @@ def create_pieces_batch(project_id: int, pieces_data: List[PieceCreate]):
                 "edge": piece.edge,
                 "edge_area": piece.edge_area,
                 "edge_polish_machine": edge_polish_machine,
+                "edge_map": piece.edge_map,
+                "edge_polish_manual": piece.edge_polish_manual,
                 "radius": piece.radius,
+                "radius_value": piece.radius_value,
+                "radius_corners": piece.radius_corners,
+                "shape_type": piece.shape_type,
                 "notes": piece.notes,
                 "created_at": utc_now(),
             }
@@ -1089,6 +1139,99 @@ def create_pieces_batch(project_id: int, pieces_data: List[PieceCreate]):
         pieces_col.insert_many(docs)
         clear_manual_container_plan(project_id)
     return {"message": f"Created {len(docs)} pieces"}
+
+
+@app.get("/api/projects/{project_id}/drawings/")
+def get_project_drawings(project_id: int):
+    pieces = list(pieces_col.find({"project_id": project_id}, {"_id": 0}))
+    drawings_map: dict = {}
+    for piece in pieces:
+        dn = piece.get("drawing") or "Unnamed"
+        if dn not in drawings_map:
+            drawings_map[dn] = {
+                "drawing": dn,
+                "category": piece.get("category") or "",
+                "unit": piece.get("unit") or "",
+                "fragility": piece.get("fragility") or "Standard",
+                "orientation": piece.get("orientation") or "Auto",
+                "delivery_priority": piece.get("delivery_priority") or "Standard",
+                "stack_preference": piece.get("stack_preference") or "Auto",
+                "weight_override": piece.get("weight_override") or 0,
+                "pieces": [],
+            }
+        drawings_map[dn]["pieces"].append(piece)
+
+    result = []
+    for dn, data in drawings_map.items():
+        pcs = data["pieces"]
+
+        # Unique part rows (grouped by part_no + part + dims)
+        seen: dict = {}
+        for p in pcs:
+            k = (p.get("part_no") or "", p.get("part") or "",
+                 p.get("length") or 0, p.get("width") or 0)
+            if k not in seen:
+                seen[k] = {
+                    "part_no": p.get("part_no") or "",
+                    "part": p.get("part") or "",
+                    "length": p.get("length") or 0,
+                    "width": p.get("width") or 0,
+                    "thickness": p.get("thickness") or "3CM",
+                    "qty": 1,
+                    "sink_type": p.get("sink_type") or "No Sink",
+                    "sink_cut": p.get("sink_cut") or "-",
+                    "tap_holes": p.get("tap_holes") or "-",
+                    "grooves": p.get("grooves") or "-",
+                    "edge": p.get("edge") or "None",
+                    "edge_area": p.get("edge_area") or "",
+                    "edge_map": p.get("edge_map") or {},
+                    "edge_polish_manual": p.get("edge_polish_manual") or "",
+                    "radius": p.get("radius") or "-",
+                    "radius_value": p.get("radius_value") or "",
+                    "radius_corners": p.get("radius_corners") or {},
+                    "shape_type": p.get("shape_type") or "",
+                    "notes": p.get("notes") or "",
+                }
+            else:
+                seen[k]["qty"] += 1
+
+        # Destination matrix
+        buildings = sorted({str(p.get("building") or "") for p in pcs if p.get("building")})
+        floors = sorted({str(p.get("floor") or "") for p in pcs if p.get("floor")})
+        cells: dict = {}
+        for p in pcs:
+            b = str(p.get("building") or "")
+            fl = str(p.get("floor") or "")
+            ft = str(p.get("flat") or "")
+            if b and fl and ft:
+                key = f"{b}__{fl}"
+                if key not in cells:
+                    cells[key] = []
+                if not any(e["flat"] == ft for e in cells[key]):
+                    cells[key].append({"flat": ft, "qty": 1})
+
+        result.append({
+            "drawing": dn,
+            "category": data["category"],
+            "unit": data["unit"],
+            "fragility": data["fragility"],
+            "orientation": data["orientation"],
+            "delivery_priority": data["delivery_priority"],
+            "stack_preference": data["stack_preference"],
+            "weight_override": data["weight_override"],
+            "piece_count": len(pcs),
+            "unique_parts": list(seen.values()),
+            "buildings": buildings,
+            "floors": floors,
+            "cells": cells,
+            "destination_summary": sorted({
+                "/".join(filter(None, [str(p.get("building") or ""), str(p.get("floor") or ""), str(p.get("flat") or "")]))
+                for p in pcs
+            }),
+        })
+
+    result.sort(key=lambda d: d["drawing"])
+    return result
 
 
 @app.delete("/api/projects/{project_id}/pieces/")
@@ -1121,10 +1264,12 @@ def update_piece(piece_id: int, piece: PieceUpdate):
     edge_polish_machine = piece.edge_polish_machine or calculate_edge_polish_machine(piece.length, piece.width, piece.edge_area)
     update = {
         "part": piece.part,
+        "part_no": piece.part_no,
         "category": piece.category,
         "drawing": piece.drawing,
         "length": piece.length,
         "width": piece.width,
+        "thickness": piece.thickness,
         "qty": piece.qty,
         "unit": piece.unit,
         "building": piece.building,
@@ -1142,12 +1287,64 @@ def update_piece(piece_id: int, piece: PieceUpdate):
         "edge": piece.edge,
         "edge_area": piece.edge_area,
         "edge_polish_machine": edge_polish_machine,
+        "edge_map": piece.edge_map,
+        "edge_polish_manual": piece.edge_polish_manual,
         "radius": piece.radius,
+        "radius_value": piece.radius_value,
+        "radius_corners": piece.radius_corners,
+        "shape_type": piece.shape_type,
         "notes": piece.notes,
     }
     pieces_col.update_one({"id": piece_id}, {"$set": update})
     clear_manual_container_plan(existing["project_id"])
     return {"message": "ok"}
+
+
+def _fmt_edge_map(edge_map) -> str:
+    """Compact per-side edge summary: 'T:Polish, B:Cut, L:None, R:Polish'"""
+    if not edge_map:
+        return ""
+    sides = [("top", "T"), ("bottom", "B"), ("left", "L"), ("right", "R")]
+    return ", ".join(f"{lbl}:{(edge_map.get(s) or 'none').capitalize()}" for s, lbl in sides)
+
+
+def _fmt_radius_corners(radius_corners) -> str:
+    """Active corner abbreviations: 'TL, BR'"""
+    if not radius_corners:
+        return ""
+    labels = {"top_left": "TL", "top_right": "TR", "bottom_left": "BL", "bottom_right": "BR"}
+    active = [labels[k] for k in ("top_left", "top_right", "bottom_left", "bottom_right") if radius_corners.get(k)]
+    return ", ".join(active) if active else "—"
+
+
+def _bold_row(ws, row_num: int) -> None:
+    try:
+        from openpyxl.styles import Font, PatternFill
+        fill = PatternFill("solid", fgColor="1E293B")
+        for cell in ws[row_num]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = fill
+    except Exception:
+        pass
+
+
+def _hide_empty_columns(ws, header_row: int = 1) -> None:
+    """Hide columns that have no non-empty/non-zero data rows after the header."""
+    try:
+        from openpyxl.utils import get_column_letter
+        max_row = ws.max_row
+        max_col = ws.max_column
+        for col_idx in range(1, max_col + 1):
+            has_value = False
+            for row_idx in range(header_row + 1, max_row + 1):
+                val = ws.cell(row=row_idx, column=col_idx).value
+                if val is not None and val != '' and val != 0 and val != 0.0:
+                    has_value = True
+                    break
+            if not has_value:
+                ws.column_dimensions[get_column_letter(col_idx)].hidden = True
+    except Exception:
+        pass
 
 
 def crate_serial_for_project(project_id: int) -> int:
@@ -1405,14 +1602,56 @@ def auto_generate(project_id: int, data: Dict[str, Any]):
     except (TypeError, ValueError):
         max_weight = 1000.0
 
+    # Optimization weights (1–10 scale from the frontend sliders)
+    opt_weights = data.get("weights") or {}
+    weight_balance = max(1, min(10, int(opt_weights.get("weight_balance", 6))))
+    apartment_grouping = max(1, min(10, int(opt_weights.get("apartment_grouping", 8))))
+    fragility_separation = max(1, min(10, int(opt_weights.get("fragility_separation", 4))))
+
+    # High weight_balance → tighten max_weight so crates stay more evenly loaded
+    balance_scale = 1.0 - (weight_balance - 1) * 0.025  # 1.0 at 1 → 0.775 at 10
+    effective_max_weight = max(300.0, max_weight * balance_scale)
+
+    # High apartment_grouping score auto-switches to flat strategy when no explicit choice
+    if strategy not in ("flat", "category") and apartment_grouping >= 7:
+        strategy = "flat"
+
+    # High fragility_separation → separate known fragile categories (polished, thin pieces)
+    unlocked_pieces = [piece for piece in pieces if piece["id"] not in locked_piece_ids]
+    if fragility_separation >= 7:
+        fragile_cats = {"Window Sill", "Hearth", "Threshold"}
+        fragile_pieces = [p for p in unlocked_pieces if (p.get("category") or "") in fragile_cats]
+        non_fragile_pieces = [p for p in unlocked_pieces if (p.get("category") or "") not in fragile_cats]
+    else:
+        fragile_pieces = []
+        non_fragile_pieces = unlocked_pieces
+
+    _stone_color = project.get("stone_color", "") or ""
+    _mat = project.get("material", "Granite")
+    _thick = project.get("thickness", "3CM")
+
     generated = auto_generate_crates(
-        pieces=[piece for piece in pieces if piece["id"] not in locked_piece_ids],
+        pieces=non_fragile_pieces,
         strategy=strategy,
         max_pieces=max_pieces,
-        max_weight=max_weight,
-        material=project.get("material", "Granite"),
-        thickness=project.get("thickness", "3CM"),
+        max_weight=effective_max_weight,
+        material=_mat,
+        thickness=_thick,
+        color=_stone_color,
     )
+    if fragile_pieces:
+        fragile_generated = auto_generate_crates(
+            pieces=fragile_pieces,
+            strategy=strategy,
+            max_pieces=max_pieces,
+            max_weight=effective_max_weight,
+            material=_mat,
+            thickness=_thick,
+            color=_stone_color,
+        )
+        for crate in fragile_generated:
+            crate["name"] = f"FRAGILE-{crate['name']}"
+        generated = generated + fragile_generated
 
     crate_docs = []
     assignment_docs = []
@@ -1424,6 +1663,7 @@ def auto_generate(project_id: int, data: Dict[str, Any]):
             project.get("thickness", "3CM"),
             crate["max_weight"],
             preferred_wood_thickness=float(project.get("crate_wood_thickness", 0) or 0),
+            color=_stone_color,
         )
         crate_doc = {
             "id": next_sequence("crate"),
@@ -1598,6 +1838,105 @@ def get_crate_insights(project_id: int):
         raise HTTPException(status_code=500, detail=f"Failed to compute insights: {str(e)}")
 
 
+# ── Upload PDF → Parse ────────────────────────────────────────────────────────
+
+@app.post("/api/projects/{project_id}/upload-pdf/")
+async def upload_pdf(project_id: int, file: UploadFile = File(...)):
+    project = projects_col.find_one({"id": project_id}, {"_id": 0}) or {}
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    pdf_bytes = await file.read()
+    if len(pdf_bytes) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (max 20 MB)")
+
+    result = parse_pdf(pdf_bytes, project)
+
+    # Check for similar existing drawings in the project
+    existing_drawings = list({p.get("drawing") or "" for p in pieces_col.find({"project_id": project_id}, {"drawing": 1})})
+    extracted_drawing = (result.get("metadata", {}).get("drawing", "")
+                         or (result["rows"][0].get("drawing", "") if result.get("rows") else ""))
+    similar_drawing = None
+    if extracted_drawing and existing_drawings:
+        for d in existing_drawings:
+            if d and (d.lower() == extracted_drawing.lower() or
+                      extracted_drawing.lower().startswith(d.lower()[:4]) or
+                      d.lower().startswith(extracted_drawing.lower()[:4])):
+                similar_drawing = d
+                break
+
+    return {
+        **result,
+        "file_name": file.filename,
+        "similar_drawing": similar_drawing,
+    }
+
+
+# ── Upload Drafts CRUD ────────────────────────────────────────────────────────
+
+class DraftCreate(BaseModel):
+    name: str = "Untitled Draft"
+    rows: List[Dict] = []
+    file_names: List[str] = []
+
+
+class DraftUpdate(BaseModel):
+    name: str = ""
+    rows: List[Dict] = []
+
+
+@app.get("/api/projects/{project_id}/drafts/")
+def list_drafts(project_id: int):
+    drafts = list(upload_drafts_col.find({"project_id": project_id}, {"_id": 0}))
+    return sorted(drafts, key=lambda d: d.get("updated_at") or d.get("created_at") or "", reverse=True)
+
+
+@app.post("/api/projects/{project_id}/drafts/")
+def create_draft(project_id: int, body: DraftCreate):
+    draft_id = next_sequence("upload_draft")
+    now = utc_now()
+    doc = {
+        "id": draft_id,
+        "project_id": project_id,
+        "name": body.name or "Untitled Draft",
+        "rows": body.rows,
+        "file_names": body.file_names,
+        "row_count": len(body.rows),
+        "created_at": now,
+        "updated_at": now,
+    }
+    upload_drafts_col.insert_one(doc)
+    return {"id": draft_id, "name": doc["name"], "row_count": doc["row_count"], "created_at": now}
+
+
+@app.get("/api/drafts/{draft_id}")
+def get_draft(draft_id: int):
+    draft = upload_drafts_col.find_one({"id": draft_id}, {"_id": 0})
+    if not draft:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    return draft
+
+
+@app.put("/api/drafts/{draft_id}")
+def update_draft(draft_id: int, body: DraftUpdate):
+    now = utc_now()
+    update_fields: Dict = {"updated_at": now}
+    if body.name:
+        update_fields["name"] = body.name
+    if body.rows is not None:
+        update_fields["rows"] = body.rows
+        update_fields["row_count"] = len(body.rows)
+    upload_drafts_col.find_one_and_update(
+        {"id": draft_id}, {"$set": update_fields}, return_document=ReturnDocument.AFTER
+    )
+    return {"ok": True, "updated_at": now}
+
+
+@app.delete("/api/drafts/{draft_id}")
+def delete_draft(draft_id: int):
+    upload_drafts_col.delete_one({"id": draft_id})
+    return {"ok": True}
+
+
 @app.get("/api/projects/{project_id}/export-source-data")
 def export_source_data(project_id: int):
     """Export source data (project info + pieces) as Excel for proforma invoices."""
@@ -1627,7 +1966,7 @@ def export_source_data(project_id: int):
         total_qty = sum(int(p.get("qty", 1) or 1) for p in pieces)
         total_sqft = sum((float(p.get("length", 0)) * float(p.get("width", 0)) / 144.0) * int(p.get("qty", 1) or 1) for p in pieces)
         total_weight = sum(
-            planning_piece_weight(p, project.get("material", "Granite"), project.get("thickness", "3CM")) * int(p.get("qty", 1) or 1)
+            planning_piece_weight(p, project.get("material", "Granite"), project.get("thickness", "3CM"), project.get("stone_color", "") or "") * int(p.get("qty", 1) or 1)
             for p in pieces
         )
         ws1.append(["Total Parts", total_qty])
@@ -1636,29 +1975,48 @@ def export_source_data(project_id: int):
 
         ws2 = wb.create_sheet("Parts List")
         ws2.append([
-            "Part", "Category", "Drawing", "Length", "Width", "Qty",
-            "Sq Ft", "Weight (kg)", "Unit", "Building", "Floor", "Flat",
-            "Sink Type", "Sink Cut", "Tap Holes", "Grooves",
-            "Edge", "Edge Area", "Edge Polish Machine",
-            "Fragility", "Delivery Priority", "Notes",
+            # Identity
+            "Part #", "Description", "Category", "Drawing", "Unit",
+            # Location
+            "Building", "Floor", "Flat",
+            # Dimensions
+            "Length (in)", "Width (in)", "Qty", "Sq Ft", "Weight (kg)",
+            # Sink
+            "Sink Type", "Sink Cutouts", "Tap Holes", "Grooves",
+            # Edge
+            "Edge Type", "Edge Sides", "Edge Polish (in)", "Edge Per-Side", "Edge Manual Note",
+            # Radius
+            "Radius (in)", "Radius Corners", "No. Corners",
+            # Shape & logistics
+            "Shape Type", "Fragility", "Orientation", "Delivery Priority", "Stack Preference",
+            "Weight Override (kg)", "Notes",
         ])
+        _bold_row(ws2, 1)
         mat = project.get("material", "Granite")
         thick = project.get("thickness", "3CM")
+        _color = project.get("stone_color", "") or ""
         for p in pieces:
             qty = int(p.get("qty", 1) or 1)
             sqft = round((float(p.get("length", 0)) * float(p.get("width", 0)) / 144.0) * qty, 2)
-            wt = round(planning_piece_weight(p, mat, thick) * qty, 2)
+            wt = round(planning_piece_weight(p, mat, thick, _color) * qty, 2)
+            rc = p.get("radius_corners") or {}
+            active_corners = sum(1 for v in rc.values() if v)
             ws2.append([
-                p.get("part", ""), p.get("category", ""), p.get("drawing", ""),
-                p.get("length", 0), p.get("width", 0), qty,
-                sqft, wt,
-                p.get("unit", ""), p.get("building", ""), p.get("floor", ""), p.get("flat", ""),
-                p.get("sink_type", "No Sink"), p.get("sink_cut", "-"),
-                p.get("tap_holes", "-"), p.get("grooves", "-"),
-                p.get("edge", "None"), p.get("edge_area", ""), p.get("edge_polish_machine", 0),
-                p.get("fragility", "Standard"), p.get("delivery_priority", "Standard"),
+                p.get("part_no", ""), p.get("part", ""), p.get("category", ""), p.get("drawing", ""), p.get("unit", ""),
+                p.get("building", ""), p.get("floor", ""), p.get("flat", ""),
+                p.get("length", 0), p.get("width", 0), qty, sqft, wt,
+                p.get("sink_type", "No Sink"), p.get("sink_cut", "-"), p.get("tap_holes", "-"), p.get("grooves", "-"),
+                p.get("edge", "None"), p.get("edge_area", ""), round(float(p.get("edge_polish_machine", 0) or 0), 2),
+                _fmt_edge_map(p.get("edge_map")), p.get("edge_polish_manual", ""),
+                p.get("radius_value", ""), _fmt_radius_corners(rc), active_corners or "",
+                p.get("shape_type", ""),
+                p.get("fragility", "Standard"), p.get("orientation", "Auto"),
+                p.get("delivery_priority", "Standard"), p.get("stack_preference", "Auto"),
+                p.get("weight_override", 0) or "",
                 p.get("notes", ""),
             ])
+
+        _hide_empty_columns(ws2)
 
         output = BytesIO()
         wb.save(output)
@@ -1805,59 +2163,55 @@ def export_excel(project_id: int):
             )
 
         ws3 = wb.create_sheet("Crate Contents")
-        ws3.append(
-            [
-                "Crate ID",
-                "Crate Name",
-                "Piece ID",
-                "Part",
-                "Category",
-                "Drawing",
-                "Unit",
-                "Building",
-                "Floor",
-                "Flat",
-                "Length",
-                "Depth",
-                "Qty",
-                "Stone Wt (kg)",
-                "Orientation",
-                "Sink Type",
-                "Cutouts",
-                "Tap Holes",
-                "Grooves",
-                "Edge",
-                "Notes",
-            ]
-        )
+        ws3.append([
+            # Crate
+            "Crate ID", "Crate Name",
+            # Identity
+            "Piece ID", "Part #", "Description", "Category", "Drawing", "Unit",
+            # Location
+            "Building", "Floor", "Flat",
+            # Dimensions
+            "Length (in)", "Width (in)", "Qty", "Stone Wt (kg)",
+            # Sink
+            "Sink Type", "Cutouts", "Tap Holes", "Grooves",
+            # Edge
+            "Edge Type", "Edge Sides", "Edge Polish (in)", "Edge Per-Side", "Edge Manual Note",
+            # Radius
+            "Radius (in)", "Radius Corners", "No. Corners",
+            # Shape & logistics
+            "Shape Type", "Fragility", "Orientation", "Delivery Priority", "Stack Preference",
+            "Weight Override (kg)", "Notes",
+        ])
+        _bold_row(ws3, 1)
+        _mat = project.get("material", "Granite")
+        _thick = project.get("thickness", "3CM")
+        _color2 = project.get("stone_color", "") or ""
         for crate in snapshot["crate_rows"]:
             crate_pieces = pieces_by_crate.get(crate["id"], [])
             for piece in crate_pieces:
-                ws3.append(
-                    [
-                        crate.get("crate_id", ""),
-                        crate.get("name", ""),
-                        piece.get("id", ""),
-                        piece.get("part", ""),
-                        piece.get("category", ""),
-                        piece.get("drawing", ""),
-                        piece.get("unit", ""),
-                        piece.get("building", ""),
-                        piece.get("floor", ""),
-                        piece.get("flat", ""),
-                        piece.get("length", 0),
-                        piece.get("width", 0),
-                        piece.get("qty", 1),
-                        round(planning_piece_weight(piece, project.get("material", "Granite"), project.get("thickness", "3CM")), 2),
-                        crate.get("orientation_constraints", ""),
-                        piece.get("sink_type", "No Sink"),
-                        piece.get("sink_cut", "-"),
-                        piece.get("tap_holes", "-"),
-                        piece.get("grooves", "-"),
-                        piece.get("edge", "-"),
-                        piece.get("notes", ""),
-                    ]
-                )
+                rc = piece.get("radius_corners") or {}
+                active_corners = sum(1 for v in rc.values() if v)
+                ws3.append([
+                    crate.get("crate_id", ""), crate.get("name", ""),
+                    piece.get("id", ""), piece.get("part_no", ""), piece.get("part", ""),
+                    piece.get("category", ""), piece.get("drawing", ""), piece.get("unit", ""),
+                    piece.get("building", ""), piece.get("floor", ""), piece.get("flat", ""),
+                    piece.get("length", 0), piece.get("width", 0), piece.get("qty", 1),
+                    round(planning_piece_weight(piece, _mat, _thick, _color2), 2),
+                    piece.get("sink_type", "No Sink"), piece.get("sink_cut", "-"),
+                    piece.get("tap_holes", "-"), piece.get("grooves", "-"),
+                    piece.get("edge", "None"), piece.get("edge_area", ""),
+                    round(float(piece.get("edge_polish_machine", 0) or 0), 2),
+                    _fmt_edge_map(piece.get("edge_map")), piece.get("edge_polish_manual", ""),
+                    piece.get("radius_value", ""), _fmt_radius_corners(rc), active_corners or "",
+                    piece.get("shape_type", ""),
+                    piece.get("fragility", "Standard"), piece.get("orientation", "Auto"),
+                    piece.get("delivery_priority", "Standard"), piece.get("stack_preference", "Auto"),
+                    piece.get("weight_override", 0) or "",
+                    piece.get("notes", ""),
+                ])
+
+        _hide_empty_columns(ws3)
 
         ws4 = wb.create_sheet("Container Plan")
         ws4.append(
