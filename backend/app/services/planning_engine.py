@@ -556,6 +556,12 @@ def build_crate_metrics(
         "poor_weight_utilization": poor_weight_utilization,
         "inefficient_grouping": inefficient_grouping,
         "handling_notes": " ".join(handling_notes).strip(),
+        "crate_type": crate_doc.get("crate_type", ""),
+        "packing_mode": crate_doc.get("packing_mode", ""),
+        "primary_flat": crate_doc.get("primary_flat", ""),
+        "secondary_flats": crate_doc.get("secondary_flats", []),
+        "weight_band_status": crate_doc.get("weight_band_status", ""),
+        "grouping_reason": crate_doc.get("grouping_reason", ""),
     }
 
 

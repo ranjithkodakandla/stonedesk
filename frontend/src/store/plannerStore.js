@@ -259,7 +259,6 @@ export const usePlannerStore = create((set, get) => ({
   persistManualContainers: async () => {
     const projectId = get().projectId;
     const manualContainers = get().manualContainers
-      .filter((container) => (container.placements || []).length > 0)
       .map((container) => ({
         id: container.id,
         type: container.type,
