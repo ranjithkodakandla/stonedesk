@@ -127,17 +127,27 @@ export const usePlannerStore = create((set, get) => ({
     }
   },
 
-  regenerateWithStrategy: async (strategy) => {
+  regenerateWithStrategy: async (strategy, weights = {}) => {
     set({ isRefreshing: true });
     try {
       await axios.post(`${API_BASE}/projects/${get().projectId}/crates/auto-generate`, {
         group_by: strategy,
         max_weight: 1000,
+        weights,
       });
       await get().refreshWorkspace();
     } finally {
       set({ isRefreshing: false });
     }
+  },
+
+  splitCrate: async (crateId, pieceIds, name) => {
+    await axios.post(`${API_BASE}/projects/${get().projectId}/crates/split`, {
+      crate_id: crateId,
+      piece_ids: pieceIds,
+      name: name || 'Split Crate',
+    });
+    await get().refreshWorkspace();
   },
 
   updateCrate: async (crateId, payload) => {

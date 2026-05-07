@@ -31,16 +31,50 @@ export const CONTAINER_SPECS = {
 
 export const formatNumber = (value, digits = 1) => Number(value || 0).toFixed(digits);
 
+const _COLOR_DENSITIES = {
+  Granite: {
+    'Kashmir White': 2600, 'Moon White': 2580, 'Colonial White': 2620,
+    'Viscount White': 2650, 'River White': 2630, 'Tiger Skin': 2680,
+    'New Imperial Red': 2700, 'Imperial Red': 2710, 'Ruby Red': 2720,
+    'Tan Brown': 2750, 'Steel Grey': 2730, 'Thunder Blue': 2740,
+    'Emerald Pearl': 2760, 'Verde Butterfly': 2700, 'Bianco Antico': 2690,
+    'Santa Cecilia': 2710, 'Giallo Ornamental': 2700, 'Yellow Gold': 2680,
+    'Crystal Yellow': 2670, 'Ivory Fantasy': 2660, 'Alaska White': 2640,
+    'Delicatus White': 2630, 'Salinas White': 2620, 'White Ice': 2610,
+    'Absolute Black': 2900, 'Black Galaxy': 2950, 'Black Pearl': 2870,
+    'Nero Assoluto': 2890, 'Zimbabwe Black': 2880, 'Bangalore Black': 2860,
+    'Blue Pearl': 2780, 'Labradorite Blue': 2770,
+  },
+  Marble: {
+    'Carrara White': 2720, 'Bianco Carrara': 2710, 'Calacatta Gold': 2730,
+    'Statuario White': 2720, 'Arabescato White': 2710, 'Thassos White': 2700,
+    'Botticino Beige': 2690, 'Crema Marfil': 2680, 'Emperador Dark': 2760,
+    'Nero Marquina': 2800, 'Black Marquina': 2790, 'Portoro Gold': 2770,
+    'Rosso Verona': 2740, 'Rojo Alicante': 2750, 'Grigio Carnico': 2720,
+    'Silver Wave': 2700, 'Pearl White': 2690, 'Vietnam White': 2700,
+  },
+};
+const _THICKNESS_M = { '2CM': 0.02, '3CM': 0.03, Mixed: 0.025 };
+
 export const getPieceWeight = (piece, project) => {
   const qty = Number(piece.qty) || 1;
   const override = Number(piece.weight_override || 0);
   if (override > 0) return override * qty;
+  const color = project.stone_color || '';
+  const mat = project.material || 'Granite';
+  const thick = piece.thickness || project.thickness || '3CM';
+  if (color && _COLOR_DENSITIES[mat]?.[color]) {
+    const density = _COLOR_DENSITIES[mat][color];
+    const tM = _THICKNESS_M[thick] || 0.025;
+    const factor = density * tM * 0.0929;
+    return ((Number(piece.length || 0) * Number(piece.width || 0)) / 144) * factor * qty;
+  }
   const factors = {
     Granite: { '2CM': 5.5, '3CM': 7.5, Mixed: 6.5 },
     Quartz: { '2CM': 4.75, '3CM': 6.75, Mixed: 5.75 },
     Marble: { '2CM': 6.0, '3CM': 8.0, Mixed: 7.0 },
   };
-  const factor = (factors[project.material] || factors.Granite)[project.thickness] || 6.5;
+  const factor = (factors[mat] || factors.Granite)[thick] || 6.5;
   return ((Number(piece.length || 0) * Number(piece.width || 0)) / 144) * factor * qty;
 };
 

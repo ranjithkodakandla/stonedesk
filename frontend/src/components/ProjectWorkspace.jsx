@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import Logo from './Logo';
 import EntryForm from './EntryForm';
+import UploadWorkspace from './UploadWorkspace';
 import PiecesTable from './PiecesTable';
 import PlannerSummaryTab from './PlannerSummaryTab';
 import PlannerCrateTab from './PlannerCrateTab';
@@ -32,6 +33,7 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [mainTab, setMainTab] = useState('source-data'); // 'source-data' | 'planning'
+  const [entryMode, setEntryMode] = useState('manual');  // 'manual' | 'upload'
 
   useEffect(() => {
     initialize(projectId);
@@ -180,12 +182,45 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
           {/* ▸ Tab 1: Source Data */}
           {mainTab === 'source-data' && (
             <>
+              {/* Manual Entry | Automated Upload sub-navigation */}
+              <div className="border-b border-[#edf2f7] px-6 pt-4 pb-0 flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setEntryMode('manual')}
+                  className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-all -mb-px ${
+                    entryMode === 'manual'
+                      ? 'border-[#1d4ed8] text-[#1d4ed8]'
+                      : 'border-transparent text-[#64748b] hover:text-[#334155]'
+                  }`}>
+                  Manual Entry
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEntryMode('upload')}
+                  className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-all -mb-px ${
+                    entryMode === 'upload'
+                      ? 'border-[#1d4ed8] text-[#1d4ed8]'
+                      : 'border-transparent text-[#64748b] hover:text-[#334155]'
+                  }`}>
+                  Automated Upload
+                </button>
+              </div>
+
               <div className="px-6 py-6">
-                <EntryForm
-                  project={project}
-                  setProject={setProjectDraft}
-                  onDataChange={refreshWorkspace}
-                />
+                {entryMode === 'manual' && (
+                  <EntryForm
+                    project={project}
+                    setProject={setProjectDraft}
+                    onDataChange={refreshWorkspace}
+                  />
+                )}
+                {entryMode === 'upload' && (
+                  <UploadWorkspace
+                    project={project}
+                    onDataChange={refreshWorkspace}
+                  />
+                )}
+                {/* Always visible — shows ALL pieces regardless of entry mode */}
                 <PiecesTable
                   pieces={pieces}
                   project={project}

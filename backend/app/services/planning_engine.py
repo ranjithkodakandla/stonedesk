@@ -9,6 +9,42 @@ WEIGHT_FACTORS = {
     "Other": {"2CM": 5.5, "3CM": 7.5, "Mixed": 6.5},
 }
 
+# Density in kg/m³ per color. Factor = density × thickness_m × 0.0929 (sqft→sqm).
+COLOR_DENSITIES: Dict[str, Dict[str, int]] = {
+    "Granite": {
+        # Light
+        "Kashmir White": 2600, "Moon White": 2580, "River White": 2600,
+        "Colonial White": 2590, "Bianco Romano": 2610, "White Galaxy": 2590,
+        "Crystal White": 2600,
+        # Medium-light
+        "Giallo Ornamental": 2660, "Venetian Gold": 2660, "Santa Cecilia": 2650,
+        "Caledonia": 2660, "Crema Pearl": 2650, "Tiger Skin": 2660,
+        # Medium
+        "Tan Brown": 2680, "Silver Pearl": 2680, "Verde Butterfly": 2690,
+        "Uba Tuba": 2700, "Steel Grey": 2700, "Sapphire Blue": 2700,
+        "Vizag Blue": 2700, "New Kashmir White": 2680,
+        # Medium-dark
+        "Baltic Brown": 2750, "Imperial Red": 2750, "Labrador Antique": 2760,
+        "Volga Blue": 2760, "Impala": 2750, "Dakota Mahogany": 2750,
+        "Black Pearl": 2780,
+        # Dark / Black
+        "Absolute Black": 2900, "Black Galaxy": 2950, "Angola Black": 2900,
+        "Zimbabwe Black": 2880, "Star Galaxy": 2930,
+    },
+    "Marble": {
+        # Light
+        "Carrara White": 2720, "Calacatta Gold": 2710, "Statuario": 2720,
+        "Bianco Venatino": 2700, "Volakas": 2690, "White Onyx": 2680,
+        # Medium
+        "Crema Marfil": 2720, "Botticino": 2740, "Emperador Light": 2740,
+        "Ottoman Grey": 2720, "Grey Armani": 2740, "Panda White": 2730,
+        # Dark
+        "Nero Marquina": 2800, "Emperador Dark": 2780, "Forest Green": 2790,
+        "Bardiglio": 2760, "Black & Gold": 2820, "Portoro": 2830,
+    },
+    # Quartz is engineered — density is uniform regardless of color
+}
+
 THICKNESS_INCHES = {
     "2CM": 0.79,
     "3CM": 1.18,
@@ -66,7 +102,15 @@ def thickness_inches(thickness: str) -> float:
     return THICKNESS_INCHES.get(thickness, THICKNESS_INCHES["Mixed"])
 
 
-def weight_factor(material: str, thickness: str) -> float:
+_THICKNESS_M = {"2CM": 0.02, "3CM": 0.03, "Mixed": 0.025}
+_SQFT_TO_SQM = 0.0929
+
+
+def weight_factor(material: str, thickness: str, color: str = "") -> float:
+    if color and material in COLOR_DENSITIES and color in COLOR_DENSITIES[material]:
+        density = COLOR_DENSITIES[material][color]
+        t_m = _THICKNESS_M.get(thickness, 0.025)
+        return round(density * t_m * _SQFT_TO_SQM, 3)
     return WEIGHT_FACTORS.get(material, WEIGHT_FACTORS["Other"]).get(thickness, 6.5)
 
 
@@ -74,12 +118,12 @@ def piece_area_sqft(piece: Dict[str, Any]) -> float:
     return (parse_float(piece.get("length")) * parse_float(piece.get("width"))) / 144.0
 
 
-def piece_weight(piece: Dict[str, Any], material: str, thickness: str) -> float:
+def piece_weight(piece: Dict[str, Any], material: str, thickness: str, color: str = "") -> float:
     qty = max(1, parse_count(piece.get("qty")) or 1)
     override = parse_float(piece.get("weight_override"), 0.0)
     if override > 0:
         return override * qty
-    return piece_area_sqft(piece) * weight_factor(material, thickness) * qty
+    return piece_area_sqft(piece) * weight_factor(material, thickness, color) * qty
 
 
 def piece_volume(piece: Dict[str, Any], thickness: str) -> float:
@@ -265,6 +309,7 @@ def estimate_auto_dimensions(
     max_weight: float,
     reserved_space_pct: float = 0.0,
     preferred_wood_thickness: float = 0.0,
+    color: str = "",
 ) -> Dict[str, float]:
     if not pieces:
         return {
@@ -283,7 +328,7 @@ def estimate_auto_dimensions(
     lengths = [parse_float(piece.get("length")) for piece in pieces]
     widths = [parse_float(piece.get("width")) for piece in pieces]
     total_sqft = sum(piece_area_sqft(piece) * max(1, parse_count(piece.get("qty")) or 1) for piece in pieces)
-    total_weight = sum(piece_weight(piece, material, thickness) for piece in pieces)
+    total_weight = sum(piece_weight(piece, material, thickness, color) for piece in pieces)
     complexity_scores = [piece_complexity_score(piece) for piece in pieces]
     avg_complexity = sum(complexity_scores) / len(complexity_scores)
     avg_fragility = sum(piece_fragility_score(piece) for piece in pieces) / len(pieces)
@@ -351,8 +396,9 @@ def build_crate_metrics(
     preferred_wood_thickness = parse_float(project_settings.get("crate_wood_thickness"), 0.0)
     wood_type = str(project_settings.get("crate_wood_type", "Pine") or "Pine")
     wood_density_factor = WOOD_DENSITY_FACTORS.get(wood_type.strip().lower(), 1.0)
+    color = str(project_settings.get("stone_color", "") or "")
 
-    total_weight = sum(piece_weight(piece, material, thickness) for piece in pieces)
+    total_weight = sum(piece_weight(piece, material, thickness, color) for piece in pieces)
     total_sqft = sum(piece_area_sqft(piece) * max(1, parse_count(piece.get("qty")) or 1) for piece in pieces)
     total_volume = sum(piece_volume(piece, thickness) for piece in pieces)
     item_count = len(pieces)
@@ -365,6 +411,7 @@ def build_crate_metrics(
         max_weight=max_weight,
         reserved_space_pct=reserved_space_pct,
         preferred_wood_thickness=preferred_wood_thickness,
+        color=color,
     )
     if dimension_mode == "manual":
         dims = {
@@ -480,7 +527,7 @@ def build_crate_metrics(
     average_piece_weight = total_weight / max(piece_count, 1)
 
     weighted_height = (
-        sum(parse_float(piece.get("width")) * piece_weight(piece, material, thickness) for piece in pieces) / total_weight
+        sum(parse_float(piece.get("width")) * piece_weight(piece, material, thickness, color) for piece in pieces) / total_weight
         if total_weight else 0.0
     )
     center_of_gravity = {
@@ -624,6 +671,7 @@ def build_planning_snapshot(
 ) -> Dict[str, Any]:
     material = (project or {}).get("material", "Granite")
     thickness = (project or {}).get("thickness", "3CM")
+    color = str((project or {}).get("stone_color", "") or "")
 
     pieces_by_id = {piece["id"]: piece for piece in pieces}
     pieces_by_crate: Dict[int, List[Dict[str, Any]]] = {}
@@ -654,7 +702,7 @@ def build_planning_snapshot(
     crate_rows.sort(key=lambda row: row["crate_id"])
 
     project_average_piece_weight = (
-        sum(piece_weight(piece, material, thickness) for piece in pieces) /
+        sum(piece_weight(piece, material, thickness, color) for piece in pieces) /
         max(sum(max(1, parse_count(piece.get("qty")) or 1) for piece in pieces), 1)
     ) if pieces else 0.0
 

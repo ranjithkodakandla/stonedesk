@@ -388,6 +388,8 @@ def build_auto_container_plan(crates: List[Dict[str, Any]], preferred_mode: str 
                 "booking_action": "No containers required",
                 "reason": "Generate crates first to evaluate a container plan.",
                 "alternatives": [],
+                "cost_index": 0.0,
+                "mode_label": "",
             },
             "options": [],
             "containers": [],
