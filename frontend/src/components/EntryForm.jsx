@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
-import PiecesGrid, { newRow, calcEdge } from './PiecesGrid';
+import PiecesGrid, { newRow, calcEdge, calcEdgeFromMap, edgeAreaFromMap, reindexAutoPartNos } from './PiecesGrid';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
@@ -10,6 +10,162 @@ const parseCommaList = (str) => {
 };
 
 const normalizeCellKey = (building, floor) => `${String(building).trim()}__${String(floor).trim()}`;
+
+// ── Matrix Cell with bulk comma entry ──────────────────────────────────────
+const MatrixCell = ({ cellKey, entries, onSetEntries, onUpdateEntry, onRemoveEntry, buildingIdx, floorIdx, onMatrixPaste }) => {
+  const [bulkText, setBulkText] = useState('');
+  const [bulkQty, setBulkQty] = useState(1);
+
+  const commit = () => {
+    const raw = bulkText.trim();
+    if (!raw) return;
+    const parsed = raw.split(',').map(s => s.trim()).filter(s => s.length > 0);
+    if (!parsed.length) return;
+    const existing = new Set(entries.map(e => String(e.flat).trim()));
+    const toAdd = parsed.filter(f => !existing.has(f));
+    if (toAdd.length) {
+      onSetEntries(cellKey, [...entries, ...toAdd.map(f => ({ flat: f, qty: bulkQty }))]);
+    }
+    setBulkText('');
+    setBulkQty(1);
+  };
+
+  return (
+    <div className="p-1 min-w-[160px]">
+      {/* Chips */}
+      {entries.length > 0 && (
+        <div className="flex flex-wrap gap-1 mb-1">
+          {entries.map((entry, idx) => (
+            <span key={idx} className="inline-flex items-center gap-0.5 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5">
+              <span className="font-mono text-xs text-blue-800">{entry.flat}</span>
+              <span className="text-[10px] text-blue-300">×</span>
+              <input
+                type="number" min="1" value={entry.qty}
+                onChange={e => onUpdateEntry(cellKey, idx, 'qty', Number(e.target.value) || 1)}
+                className="w-7 text-xs text-center bg-transparent border-0 outline-none text-blue-700 font-semibold"
+                title="Qty for this flat"
+              />
+              <button type="button" onClick={() => onRemoveEntry(cellKey, idx)}
+                className="text-[10px] text-blue-300 hover:text-rose-500 leading-none ml-0.5">×</button>
+            </span>
+          ))}
+        </div>
+      )}
+      {/* Bulk input */}
+      <div className="flex items-center gap-1">
+        <input
+          value={bulkText}
+          onChange={e => setBulkText(e.target.value)}
+          onBlur={commit}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } }}
+          onPaste={e => {
+            const t = e.clipboardData.getData('text');
+            if (t.includes('\n') || t.includes('\t')) {
+              e.preventDefault();
+              onMatrixPaste(buildingIdx, floorIdx, t);
+            }
+          }}
+          className="input-field py-0.5 text-xs flex-1 min-w-0 font-mono"
+          placeholder={entries.length ? 'Add more…' : '101,102,103'}
+        />
+        <input
+          type="number" min="1" value={bulkQty}
+          onChange={e => setBulkQty(Number(e.target.value) || 1)}
+          className="input-field py-0.5 text-xs w-10 text-center"
+          title="Default qty for new entries"
+        />
+      </div>
+    </div>
+  );
+};
+
+// ── Mirror Existing Modal ───────────────────────────────────────────────────
+const MirrorModal = ({ drawings, loading, onClose, onApply }) => {
+  const [filter, setFilter] = useState('');
+  const [selected, setSelected] = useState(null);
+  const [opts, setOpts] = useState({ parts: true, specs: true, matrix: false, quantities: true });
+
+  const filtered = drawings.filter(d =>
+    !filter || d.drawing.toLowerCase().includes(filter.toLowerCase()) ||
+    (d.category || '').toLowerCase().includes(filter.toLowerCase())
+  );
+
+  const toggleOpt = (k) => setOpts(p => ({ ...p, [k]: !p[k] }));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-[520px] max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-[#edf2f7]">
+          <div>
+            <h3 className="text-sm font-bold text-[#0f172a]">Mirror Existing Drawing</h3>
+            <p className="text-xs text-[#64748b] mt-0.5">Select a saved drawing to copy into this workspace</p>
+          </div>
+          <button type="button" onClick={onClose} className="text-[#94a3b8] hover:text-[#334155] text-lg leading-none">×</button>
+        </div>
+
+        {/* Search */}
+        <div className="px-5 py-3 border-b border-[#edf2f7]">
+          <input
+            value={filter} onChange={e => setFilter(e.target.value)}
+            className="input-field w-full text-sm" placeholder="Search drawing # or category…"
+            autoFocus
+          />
+        </div>
+
+        {/* Drawing list */}
+        <div className="flex-1 overflow-y-auto px-5 py-3 space-y-1.5">
+          {loading && <p className="text-sm text-[#94a3b8] text-center py-6">Loading drawings…</p>}
+          {!loading && filtered.length === 0 && <p className="text-sm text-[#94a3b8] text-center py-6">No drawings found</p>}
+          {!loading && filtered.map(d => (
+            <button
+              key={d.drawing} type="button"
+              onClick={() => setSelected(d)}
+              className={`w-full text-left rounded-lg border px-3 py-2.5 transition-all
+                ${selected?.drawing === d.drawing
+                  ? 'border-[#2563eb] bg-blue-50 ring-1 ring-[#2563eb]'
+                  : 'border-[#e2e8f0] hover:border-[#cbd5e1] hover:bg-[#f8fafc]'}`}>
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold text-[#1e293b] font-mono">{d.drawing}</span>
+                <span className="text-xs text-[#94a3b8]">{d.piece_count} pcs</span>
+              </div>
+              <div className="flex items-center gap-2 mt-0.5">
+                <span className="text-[10px] font-medium text-[#475569] bg-[#f1f5f9] px-1.5 py-0.5 rounded">{d.category || 'No Category'}</span>
+                {d.unit && <span className="text-[10px] text-[#64748b]">{d.unit}</span>}
+                {d.destination_summary?.length > 0 && (
+                  <span className="text-[10px] text-[#94a3b8] truncate max-w-[200px]">{d.destination_summary.slice(0, 3).join(', ')}{d.destination_summary.length > 3 ? '…' : ''}</span>
+                )}
+              </div>
+            </button>
+          ))}
+        </div>
+
+        {/* Options */}
+        <div className="px-5 py-3 border-t border-[#edf2f7] bg-[#f8fafc]">
+          <p className="text-xs font-semibold text-[#475569] mb-2">Copy from selected drawing:</p>
+          <div className="flex flex-wrap gap-3">
+            {[['parts', 'Part rows'], ['specs', 'Tech specs (edge/sink/radius)'], ['matrix', 'Copy matrix destinations'], ['quantities', 'Quantities']].map(([k, label]) => (
+              <label key={k} className="flex items-center gap-1.5 cursor-pointer select-none">
+                <input type="checkbox" checked={opts[k]} onChange={() => toggleOpt(k)}
+                  className="rounded text-[#2563eb]" />
+                <span className="text-xs text-[#334155]">{label}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="flex justify-end gap-2 px-5 py-3 border-t border-[#edf2f7]">
+          <button type="button" onClick={onClose} className="rounded-full border border-[#cbd5e1] bg-white px-4 py-1.5 text-sm text-[#334155] hover:bg-[#f1f5f9]">Cancel</button>
+          <button type="button" disabled={!selected} onClick={() => onApply(selected, opts)}
+            className={`rounded-full px-4 py-1.5 text-sm font-medium transition-all ${selected ? 'bg-[#2563eb] text-white hover:bg-[#1d4ed8]' : 'bg-[#e2e8f0] text-[#94a3b8] cursor-not-allowed'}`}>
+            Apply Mirror
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const EntryForm = ({ project, setProject, onDataChange }) => {
   // ── Drawing Context (shared metadata) ──
@@ -26,6 +182,16 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
   const [destMode, setDestMode] = useState('single'); // 'single' | 'matrix'
   const [matrixData, setMatrixData] = useState({ buildings: '', floors: '', cells: {} });
 
+  // ── Clipboard state ──
+  const [copiedParts, setCopiedParts] = useState(null);
+  const [clipboardMatrix, setClipboardMatrix] = useState(null);
+
+  // ── Mirror modal ──
+  const [showMirrorModal, setShowMirrorModal] = useState(false);
+  const [mirrorDrawings, setMirrorDrawings] = useState([]);
+  const [mirrorLoading, setMirrorLoading] = useState(false);
+  const [mirrorMessage, setMirrorMessage] = useState('');
+
   // ── UI state ──
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSpinner, setShowSpinner] = useState(false);
@@ -35,7 +201,12 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
 
   // ── Handlers ──
   const handleCtx = (e) => {
-    setDrawingCtx(prev => ({ ...prev, [e.target.name]: e.target.value }));
+    const { name, value } = e.target;
+    setDrawingCtx(prev => ({ ...prev, [name]: value }));
+    // When Drawing # changes, regenerate auto part_nos (respects splash → letter / other → number)
+    if (name === 'drawing') {
+      setPieceRows(prev => reindexAutoPartNos(prev, value));
+    }
   };
 
   const handleProjectChange = (e) => setProject({ ...project, [e.target.name]: e.target.value });
@@ -54,11 +225,19 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
     floors: parseCommaList(matrixData.floors).filter(Boolean),
   }), [matrixData.buildings, matrixData.floors]);
 
-  const handleMatrixCellChange = (building, floor, value) => {
-    const key = normalizeCellKey(building, floor);
-    setMatrixData(prev => ({ ...prev, cells: { ...prev.cells, [key]: value } }));
+  const getCellEntries = (key) => matrixData.cells[key] || [];
+  const setCellEntries = (key, entries) =>
+    setMatrixData(prev => ({ ...prev, cells: { ...prev.cells, [key]: entries } }));
+  const addCellEntry = (key) =>
+    setCellEntries(key, [...getCellEntries(key), { flat: '', qty: 1 }]);
+  const updateCellEntry = (key, idx, field, value) => {
+    const arr = getCellEntries(key).map((e, i) => i === idx ? { ...e, [field]: value } : e);
+    setCellEntries(key, arr);
   };
+  const removeCellEntry = (key, idx) =>
+    setCellEntries(key, getCellEntries(key).filter((_, i) => i !== idx));
 
+  // Paste from Excel: rows → floors, columns → buildings.
   const handleMatrixPaste = (startBldgIdx, startFloorIdx, text) => {
     const lines = String(text || '').replace(/\r/g, '').split('\n').map(r => r.split('\t'));
     if (!lines.length) return;
@@ -70,11 +249,120 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
         row.forEach((val, ci) => {
           const building = matrixConfig.buildings[startBldgIdx + ci];
           if (!building) return;
-          nextCells[normalizeCellKey(building, floor)] = val.trim();
+          const key = normalizeCellKey(building, floor);
+          const entries = val.split(',').map(s => s.trim()).filter(Boolean).map(s => ({ flat: s, qty: 1 }));
+          if (entries.length) nextCells[key] = entries;
         });
       });
       return { ...prev, cells: nextCells };
     });
+  };
+
+  // ── Quick Actions ──────────────────────────────────────────────────────────
+  const handleDuplicateDrawing = () => {
+    setDrawingCtx(prev => ({ ...prev, drawing: '', unit: '' }));
+  };
+
+  const handleCopyParts = () => {
+    setCopiedParts(pieceRows.map(r => ({ ...r })));
+  };
+
+  const handlePasteParts = () => {
+    if (!copiedParts) return;
+    const freshRows = copiedParts.map(r => {
+      const fresh = newRow();
+      return { ...fresh, ...r, _id: fresh._id, _partNoAuto: true };
+    });
+    setPieceRows(reindexAutoPartNos(freshRows, drawingCtx.drawing));
+  };
+
+  const handleCopyMatrix = () => {
+    setClipboardMatrix(JSON.parse(JSON.stringify(matrixData)));
+  };
+
+  const handlePasteMatrix = () => {
+    if (!clipboardMatrix) return;
+    setMatrixData(clipboardMatrix);
+    setDestMode('matrix');
+  };
+
+  const handleClearMatrix = () => {
+    setMatrixData(prev => ({ ...prev, cells: {} }));
+  };
+
+  const handleOpenMirror = async () => {
+    if (!project.id) return;
+    setShowMirrorModal(true);
+    setMirrorLoading(true);
+    try {
+      const res = await axios.get(`${API_BASE}/projects/${project.id}/drawings/`);
+      setMirrorDrawings(res.data || []);
+    } catch (err) {
+      console.error('Failed to load drawings', err);
+    } finally {
+      setMirrorLoading(false);
+    }
+  };
+
+  const handleApplyMirror = (d, opts) => {
+    if (opts.specs) {
+      setDrawingCtx(prev => ({
+        ...prev,
+        drawing: '',
+        unit: '',
+        category: d.category || prev.category,
+        fragility: d.fragility || prev.fragility,
+        orientation: d.orientation || prev.orientation,
+        delivery_priority: d.delivery_priority || prev.delivery_priority,
+        stack_preference: d.stack_preference || prev.stack_preference,
+        weight_override: d.weight_override || '',
+      }));
+    }
+    if (opts.parts && (d.unique_parts || []).length > 0) {
+      // Drawing # is cleared after mirror — mark rows as auto so they pick up the new Drawing # when entered
+      const rows = d.unique_parts.map((p, idx) => {
+        const r = newRow();
+        r._partNoAuto = true;
+        r.part_no = ''; // will auto-fill once user enters a Drawing #
+        r.part = p.part || '';
+        r.length = p.length || '';
+        r.width = p.width || '';
+        r.qty = opts.quantities ? (p.qty || 1) : 1;
+        if (opts.specs) {
+          r.sink_type = p.sink_type || 'No Sink';
+          r.sink_cut = p.sink_cut || '-';
+          r.tap_holes = p.tap_holes || '-';
+          r.grooves = p.grooves || '-';
+          r.edge = p.edge || 'None';
+          r.edge_area = p.edge_area || '';
+          r.edge_map = p.edge_map ? { ...r.edge_map, ...p.edge_map } : { ...r.edge_map };
+          r.edge_polish_manual = p.edge_polish_manual || '';
+          r.radius = p.radius || '-';
+          r.radius_value = p.radius_value || '';
+          r.radius_corners = p.radius_corners ? { ...r.radius_corners, ...p.radius_corners } : { ...r.radius_corners };
+          r.shape_type = p.shape_type || '';
+          r.notes = p.notes || '';
+        }
+        return r;
+      });
+      setPieceRows(rows);
+    }
+    if (opts.matrix) {
+      const cells = opts.quantities
+        ? (d.cells || {})
+        : Object.fromEntries(Object.entries(d.cells || {}).map(([k, v]) => [k, v.map(e => ({ ...e, qty: 1 }))]));
+      setMatrixData({
+        buildings: (d.buildings || []).join(','),
+        floors: (d.floors || []).join(','),
+        cells,
+      });
+      setDestMode('matrix');
+    } else {
+      // Default: clear destinations so user enters fresh flat mapping
+      setMatrixData({ buildings: '', floors: '', cells: {} });
+    }
+    setMirrorMessage('Parts/specs copied. Destination matrix cleared for fresh assignment.');
+    setShowMirrorModal(false);
   };
 
   // ── Build destinations ──
@@ -83,56 +371,81 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
       const buildings = parseCommaList(drawingCtx.building).filter(Boolean);
       const floors = parseCommaList(drawingCtx.floor).filter(Boolean);
       const flats = parseCommaList(drawingCtx.flat).filter(Boolean);
-      if (!buildings.length && !floors.length && !flats.length) return [{ building: '', floor: '', flat: '' }];
+      if (!buildings.length && !floors.length && !flats.length) return [{ building: '', floor: '', flat: '', matrixQty: null }];
       const dests = [];
       for (const b of (buildings.length ? buildings : [''])) {
         for (const fl of (floors.length ? floors : [''])) {
           for (const ft of (flats.length ? flats : [''])) {
-            dests.push({ building: b, floor: fl, flat: ft });
+            dests.push({ building: b, floor: fl, flat: ft, matrixQty: null });
           }
         }
       }
       return dests;
     }
-    // Matrix mode
     const dests = [];
     matrixConfig.buildings.forEach(building => {
       matrixConfig.floors.forEach(floor => {
         const key = normalizeCellKey(building, floor);
-        const flats = parseCommaList(matrixData.cells[key] || '').filter(Boolean);
-        flats.forEach(flat => dests.push({ building, floor, flat }));
+        getCellEntries(key).filter(e => e.flat.trim()).forEach(e => {
+          dests.push({ building, floor, flat: e.flat.trim(), matrixQty: Number(e.qty) || 1 });
+        });
       });
     });
-    return dests.length ? dests : [{ building: '', floor: '', flat: '' }];
+    return dests.length ? dests : [{ building: '', floor: '', flat: '', matrixQty: null }];
   };
 
-  // ── Destination count for preview ──
-  const destCount = useMemo(() => {
-    const d = buildDestinations();
-    return d.filter(dd => dd.building || dd.floor || dd.flat).length || 1;
-  }, [destMode, drawingCtx.building, drawingCtx.floor, drawingCtx.flat, matrixData, matrixConfig]);
+  const destinations = useMemo(() => buildDestinations(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [destMode, drawingCtx.building, drawingCtx.floor, drawingCtx.flat, matrixData, matrixConfig]);
 
-  const validRows = pieceRows.filter(r => r.part && r.length && r.width);
-  const totalPieces = validRows.reduce((s, r) => s + (Number(r.qty) || 1), 0) * destCount;
+  const activeDests = destinations.filter(d => d.building || d.floor || d.flat);
+  const destCount = activeDests.length || 1;
+
+  const validRows = pieceRows.filter(r => (r.part_no || r.part) && r.length && r.width);
+  const totalPieces = validRows.reduce((total, row) => {
+    if (!activeDests.length) return total + (Number(row.qty) || 1);
+    return total + activeDests.reduce((s, dest) => {
+      const destKey = [dest.building, dest.floor, dest.flat].filter(Boolean).join('/');
+      const qty = dest.matrixQty != null ? dest.matrixQty
+        : (row.dest_qty_overrides?.[destKey] != null ? Number(row.dest_qty_overrides[destKey]) : Number(row.qty) || 1);
+      return s + qty;
+    }, 0);
+  }, 0) || 0;
 
   // ── Submit ──
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (isSubmitting) return;
-    if (!validRows.length) { alert('Add at least one piece with Part, Length, and Depth filled.'); return; }
+    if (!validRows.length) { alert('Add at least one piece with Part # or Description, Length, and Width filled.'); return; }
 
-    const destinations = buildDestinations();
     const piecesToCreate = [];
-
     for (const dest of destinations) {
       for (const row of validRows) {
-        for (let i = 0; i < (Number(row.qty) || 1); i++) {
+        const destKey = [dest.building, dest.floor, dest.flat].filter(Boolean).join('/');
+        const effectiveQty = dest.matrixQty != null
+          ? dest.matrixQty
+          : (row.dest_qty_overrides?.[destKey] != null)
+            ? Number(row.dest_qty_overrides[destKey])
+            : Number(row.qty) || 1;
+
+        const hasEdgeMap = Object.values(row.edge_map || {}).some(v => v !== 'none');
+        const computedEdgeArea = hasEdgeMap ? edgeAreaFromMap(row.edge_map) : (row.edge_area || '');
+        const computedEdgeMachine = hasEdgeMap
+          ? calcEdgeFromMap(row.length, row.width, row.edge_map)
+          : calcEdge(row.length, row.width, row.edge_area);
+
+        const activeCorners = Object.values(row.radius_corners || {}).filter(Boolean).length;
+        const radiusValue = activeCorners > 0 ? String(activeCorners) : (row.radius || '-');
+
+        for (let i = 0; i < effectiveQty; i++) {
           piecesToCreate.push({
-            part: row.part,
+            part: row.part || '',
+            part_no: row.part_no || '',
             category: drawingCtx.category,
             drawing: drawingCtx.drawing || '',
             length: row.length,
             width: row.width,
+            thickness: row.thickness || project.thickness || '3CM',
             unit: drawingCtx.unit || '',
             sink_type: row.sink_type || 'No Sink',
             sink_cut: row.sink_cut || '-',
@@ -144,9 +457,14 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
             stack_preference: drawingCtx.stack_preference || 'Auto',
             weight_override: Number(drawingCtx.weight_override) || 0,
             edge: row.edge || 'None',
-            edge_area: row.edge_area || '',
-            edge_polish_machine: calcEdge(row.length, row.width, row.edge_area),
-            radius: row.radius || '-',
+            edge_area: computedEdgeArea,
+            edge_polish_machine: computedEdgeMachine,
+            edge_map: row.edge_map || {},
+            edge_polish_manual: row.edge_polish_manual || '',
+            radius: radiusValue,
+            radius_value: row.radius_value || '',
+            radius_corners: row.radius_corners || {},
+            shape_type: row.shape_type || '',
             notes: row.notes || '',
             qty: 1,
             building: dest.building,
@@ -162,8 +480,8 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
       setShowSpinner(false);
       spinnerTimerRef.current = setTimeout(() => setShowSpinner(true), 2000);
       await axios.post(`${API_BASE}/projects/${project.id}/pieces/batch`, piecesToCreate);
-      // Clear pieces, keep drawing context for next drawing
-      setPieceRows([newRow()]);
+      const [freshRow] = reindexAutoPartNos([newRow(project.thickness)], drawingCtx.drawing);
+      setPieceRows([freshRow]);
       alert(`${piecesToCreate.length} pieces saved successfully!`);
       onDataChange();
     } catch (error) {
@@ -179,13 +497,42 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
   const clearDrawing = () => {
     setDrawingCtx({ drawing: '', unit: '', category: 'Vanity', building: '', floor: '', flat: '', notes: '',
       fragility: 'Standard', orientation: 'Auto', delivery_priority: 'Standard', stack_preference: 'Auto', weight_override: '' });
-    setPieceRows([newRow()]);
+    setPieceRows([newRow(project.thickness)]);
     setMatrixData({ buildings: '', floors: '', cells: {} });
+    setMirrorMessage('');
   };
+
+  // ── Stone color options by material ──
+  const STONE_COLORS = {
+    Granite: [
+      'Kashmir White', 'Moon White', 'River White', 'Colonial White', 'Bianco Romano', 'White Galaxy', 'Crystal White',
+      'Giallo Ornamental', 'Venetian Gold', 'Santa Cecilia', 'Caledonia', 'Crema Pearl', 'Tiger Skin',
+      'Tan Brown', 'Silver Pearl', 'Verde Butterfly', 'Uba Tuba', 'Steel Grey', 'Sapphire Blue', 'Vizag Blue', 'New Kashmir White',
+      'Baltic Brown', 'Imperial Red', 'Labrador Antique', 'Volga Blue', 'Impala', 'Dakota Mahogany', 'Black Pearl',
+      'Absolute Black', 'Black Galaxy', 'Angola Black', 'Zimbabwe Black', 'Star Galaxy',
+    ],
+    Marble: [
+      'Carrara White', 'Calacatta Gold', 'Statuario', 'Bianco Venatino', 'Volakas', 'White Onyx',
+      'Crema Marfil', 'Botticino', 'Emperador Light', 'Ottoman Grey', 'Grey Armani', 'Panda White',
+      'Nero Marquina', 'Emperador Dark', 'Forest Green', 'Bardiglio', 'Black & Gold', 'Portoro',
+    ],
+    Quartz: [],
+  };
+  const colorOptions = STONE_COLORS[project.material] || [];
 
   // ── Render ──
   return (
     <div className="mb-6">
+      {/* Mirror modal */}
+      {showMirrorModal && (
+        <MirrorModal
+          drawings={mirrorDrawings}
+          loading={mirrorLoading}
+          onClose={() => setShowMirrorModal(false)}
+          onApply={handleApplyMirror}
+        />
+      )}
+
       {/* ── Project Details ── */}
       <div className="bg-white shadow-sm rounded-lg border border-[#e2e8f0] p-5 mb-6">
         <h2 className="text-lg font-bold text-[#1e293b] mb-4">Project Details</h2>
@@ -193,6 +540,14 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
           <div><label className="label-text">Project Name</label><input name="name" value={project.name || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
           <div><label className="label-text">Material</label><select name="material" value={project.material} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field"><option>Granite</option><option>Quartz</option><option>Marble</option></select></div>
           <div><label className="label-text">Thickness</label><select name="thickness" value={project.thickness} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field"><option>2CM</option><option>3CM</option><option>Mixed</option></select></div>
+          <div>
+            <label className="label-text">Stone Color</label>
+            <select name="stone_color" value={project.stone_color || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field">
+              <option value="">— Select Color —</option>
+              {colorOptions.map(c => <option key={c} value={c}>{c}</option>)}
+              {colorOptions.length === 0 && <option value="" disabled>No colors for {project.material}</option>}
+            </select>
+          </div>
           <div><label className="label-text">Crate Wood</label><select name="crate_wood_type" value={project.crate_wood_type || 'Pine'} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field"><option>Pine</option><option>Rubberwood</option><option>Plywood</option><option>Hardwood</option></select></div>
           <div><label className="label-text">Wood Thick. (in)</label><input type="number" step="0.125" min="0.5" name="crate_wood_thickness" value={project.crate_wood_thickness ?? 1.25} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
           <div><label className="label-text">Customer</label><input name="customer" value={project.customer || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
@@ -207,19 +562,67 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
 
           {/* Drawing Header */}
           <div className="px-5 pt-5 pb-3 border-b border-[#edf2f7]">
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex items-start justify-between mb-3 gap-4">
               <div>
                 <h3 className="text-base font-bold text-[#0f172a]">Drawing Workspace</h3>
-                <p className="text-xs text-[#64748b]">Enter drawing-level info once, then add all pieces below. All pieces inherit these shared fields.</p>
+                <p className="text-xs text-[#64748b]">Enter drawing-level info once, then add all pieces below.</p>
               </div>
-              <button type="button" onClick={clearDrawing} className="text-xs text-[#64748b] hover:text-[#1e293b] underline">Clear Drawing</button>
+              {/* ── Quick Actions Bar ── */}
+              <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                <button type="button" onClick={handleDuplicateDrawing}
+                  className="inline-flex items-center gap-1 rounded border border-[#cbd5e1] bg-white px-2.5 py-1.5 text-xs font-medium text-[#334155] hover:bg-[#f1f5f9] hover:border-[#94a3b8] transition-colors"
+                  title="Clone this drawing (clears Drawing # and Unit)">
+                  ⧉ Duplicate
+                </button>
+                <div className="flex items-center gap-1">
+                  <button type="button" onClick={handleCopyParts}
+                    className="inline-flex items-center gap-1 rounded border border-[#cbd5e1] bg-white px-2.5 py-1.5 text-xs font-medium text-[#334155] hover:bg-[#f1f5f9] transition-colors"
+                    title="Copy all piece rows to clipboard">
+                    ⊕ Copy Parts
+                  </button>
+                  <button type="button" onClick={handlePasteParts} disabled={!copiedParts}
+                    className={`inline-flex items-center gap-1 rounded border px-2.5 py-1.5 text-xs font-medium transition-colors
+                      ${copiedParts ? 'border-[#cbd5e1] bg-white text-[#334155] hover:bg-[#f1f5f9]' : 'border-[#e2e8f0] bg-[#f8fafc] text-[#cbd5e1] cursor-not-allowed'}`}
+                    title="Paste copied piece rows">
+                    ⊞ Paste Parts
+                  </button>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button type="button" onClick={handleCopyMatrix}
+                    className="inline-flex items-center gap-1 rounded border border-[#cbd5e1] bg-white px-2.5 py-1.5 text-xs font-medium text-[#334155] hover:bg-[#f1f5f9] transition-colors"
+                    title="Copy matrix to clipboard">
+                    ⊕ Copy Matrix
+                  </button>
+                  <button type="button" onClick={handlePasteMatrix} disabled={!clipboardMatrix}
+                    className={`inline-flex items-center gap-1 rounded border px-2.5 py-1.5 text-xs font-medium transition-colors
+                      ${clipboardMatrix ? 'border-[#cbd5e1] bg-white text-[#334155] hover:bg-[#f1f5f9]' : 'border-[#e2e8f0] bg-[#f8fafc] text-[#cbd5e1] cursor-not-allowed'}`}
+                    title="Paste matrix from clipboard">
+                    ⊞ Paste Matrix
+                  </button>
+                  <button type="button" onClick={handleClearMatrix}
+                    className="inline-flex items-center gap-1 rounded border border-[#cbd5e1] bg-white px-2.5 py-1.5 text-xs font-medium text-rose-500 hover:bg-rose-50 hover:border-rose-200 transition-colors"
+                    title="Clear all matrix entries">
+                    ✕ Clear Matrix
+                  </button>
+                </div>
+                <button type="button" onClick={handleOpenMirror} disabled={!project.id}
+                  className={`inline-flex items-center gap-1 rounded border px-2.5 py-1.5 text-xs font-medium transition-colors
+                    ${project.id ? 'border-[#a78bfa] bg-violet-50 text-violet-700 hover:bg-violet-100' : 'border-[#e2e8f0] bg-[#f8fafc] text-[#cbd5e1] cursor-not-allowed'}`}
+                  title="Mirror an existing saved drawing">
+                  ↗ Mirror Existing
+                </button>
+                <button type="button" onClick={clearDrawing}
+                  className="text-xs text-[#94a3b8] hover:text-[#64748b] underline px-1">
+                  Clear All
+                </button>
+              </div>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-6 lg:grid-cols-8 gap-3">
               <div><label className="label-text">Drawing #</label><input name="drawing" value={drawingCtx.drawing} onChange={handleCtx} className="input-field" placeholder="1041-01" /></div>
               <div><label className="label-text">Unit Name</label><input name="unit" value={drawingCtx.unit} onChange={handleCtx} className="input-field" placeholder="1A Unit" /></div>
               <div><label className="label-text">Category</label>
                 <select name="category" value={drawingCtx.category} onChange={handleCtx} className="input-field">
-                  <option>Vanity</option><option>Kitchen</option><option>Laundry</option><option>Island</option><option>Splashes</option><option>Utility</option><option>Other</option>
+                  <option>Vanity</option><option>Kitchen</option><option>Laundry</option><option>Island</option><option>Splashes</option><option>Hearth</option><option>Bar</option><option>Utility</option><option>Other</option>
                 </select>
               </div>
               <div><label className="label-text">Fragility</label><select name="fragility" value={drawingCtx.fragility} onChange={handleCtx} className="input-field"><option>Standard</option><option>Fragile</option><option>High</option></select></div>
@@ -229,6 +632,14 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
               <div><label className="label-text">Wt Override (kg)</label><input name="weight_override" type="number" step="0.1" value={drawingCtx.weight_override} onChange={handleCtx} className="input-field" placeholder="Optional" /></div>
             </div>
           </div>
+
+          {/* Mirror message banner */}
+          {mirrorMessage && (
+            <div className="px-5 py-2 bg-violet-50 border-b border-violet-100 flex items-center justify-between">
+              <span className="text-xs text-violet-700 font-medium">{mirrorMessage}</span>
+              <button type="button" onClick={() => setMirrorMessage('')} className="text-violet-400 hover:text-violet-600 ml-3 text-base leading-none">×</button>
+            </div>
+          )}
 
           {/* Destination Section */}
           <div className="px-5 py-3 border-b border-[#edf2f7] bg-[#f8fafc]">
@@ -265,27 +676,33 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
                     <table className="w-full text-xs">
                       <thead className="bg-[#f1f5f9]">
                         <tr>
-                          <th className="p-2 text-left sticky left-0 bg-[#f1f5f9] z-10">Floor / Bldg</th>
-                          {matrixConfig.buildings.map(b => <th key={b} className="p-2 text-left min-w-[120px]">Bldg {b}</th>)}
+                          <th className="p-2 text-left sticky left-0 bg-[#f1f5f9] z-10 text-[#475569]">Floor \ Bldg</th>
+                          {matrixConfig.buildings.map(b => (
+                            <th key={b} className="p-2 text-left min-w-[190px] text-[#475569]">Bldg {b}</th>
+                          ))}
                         </tr>
                       </thead>
                       <tbody>
                         {matrixConfig.floors.map(floor => (
                           <tr key={floor} className="border-t border-[#e2e8f0]">
-                            <td className="p-2 font-semibold text-[#1e293b] sticky left-0 bg-white">Floor {floor}</td>
+                            <td className="p-2 font-semibold text-[#1e293b] sticky left-0 bg-white whitespace-nowrap">
+                              Floor {floor}
+                            </td>
                             {matrixConfig.buildings.map(building => {
                               const key = normalizeCellKey(building, floor);
+                              const entries = getCellEntries(key);
                               return (
-                                <td key={key} className="p-1 align-top">
-                                  <textarea rows={2} value={matrixData.cells[key] || ''}
-                                    onChange={e => handleMatrixCellChange(building, floor, e.target.value)}
-                                    onPaste={e => {
-                                      const t = e.clipboardData.getData('text');
-                                      if (!t.includes('\n') && !t.includes('\t')) return;
-                                      e.preventDefault();
-                                      handleMatrixPaste(matrixConfig.buildings.indexOf(building), matrixConfig.floors.indexOf(floor), t);
-                                    }}
-                                    className="input-field min-h-[48px] resize-y text-xs" placeholder="101, 102" />
+                                <td key={key} className="align-top border-l border-[#f1f5f9]">
+                                  <MatrixCell
+                                    cellKey={key}
+                                    entries={entries}
+                                    onSetEntries={setCellEntries}
+                                    onUpdateEntry={updateCellEntry}
+                                    onRemoveEntry={removeCellEntry}
+                                    buildingIdx={matrixConfig.buildings.indexOf(building)}
+                                    floorIdx={matrixConfig.floors.indexOf(floor)}
+                                    onMatrixPaste={handleMatrixPaste}
+                                  />
                                 </td>
                               );
                             })}
@@ -295,7 +712,9 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
                     </table>
                   </div>
                 )}
-                <div className="text-[10px] text-[#94a3b8]">Paste flat numbers from Excel — rows map to floors, columns to buildings.</div>
+                <div className="text-[10px] text-[#94a3b8]">
+                  Type comma-separated flats (101,102,103) + qty, then press Enter or Tab. Paste from Excel to fill flat numbers (rows → floors, columns → buildings).
+                </div>
               </div>
             )}
           </div>
@@ -307,7 +726,11 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
               setRows={setPieceRows}
               material={project.material}
               thickness={project.thickness}
+              defaultThickness={project.thickness}
+              category={drawingCtx.category}
               onCategoryDetected={(cat) => setDrawingCtx(prev => ({ ...prev, category: cat }))}
+              destinations={destinations}
+              drawingNo={drawingCtx.drawing}
             />
           </div>
 
@@ -326,9 +749,6 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
               )}
             </div>
             <div className="flex gap-3">
-              <button type="button" onClick={clearDrawing} className="rounded-full border border-[#cbd5e1] bg-white px-4 py-2 text-sm font-medium text-[#334155] hover:bg-[#f1f5f9]">
-                Clear All
-              </button>
               <button type="submit" disabled={isSubmitting || !validRows.length}
                 className={`btn-primary inline-flex items-center gap-2 ${isSubmitting || !validRows.length ? 'opacity-60 cursor-not-allowed' : ''}`}>
                 {showSpinner && <span className="h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" />}
