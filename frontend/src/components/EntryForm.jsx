@@ -1,467 +1,194 @@
-
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
+import PiecesGrid, { newRow, calcEdge } from './PiecesGrid';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
+const parseCommaList = (str) => {
+  const parts = (str || '').toString().split(',').map(s => s.trim()).filter(Boolean);
+  return parts.length > 0 ? parts : [''];
+};
+
+const normalizeCellKey = (building, floor) => `${String(building).trim()}__${String(floor).trim()}`;
+
 const EntryForm = ({ project, setProject, onDataChange }) => {
-  const [entryMode, setEntryMode] = useState('simple');
-  const [formData, setFormData] = useState({
-    part: '', category: 'Vanity', drawing: '', length: '', width: '', qty: 1,
-    unit: '', building: '', floor: '', flat: '',
-    sink_type: 'No Sink', sink_cut: '-', tap_holes: '-', grooves: '-',
-    fragility: 'Standard', orientation: 'Auto', delivery_priority: 'Standard', stack_preference: 'Auto', weight_override: '',
-    edge: 'None', edge_area: '', radius: '-', notes: ''
+  // ── Drawing Context (shared metadata) ──
+  const [drawingCtx, setDrawingCtx] = useState({
+    drawing: '', unit: '', category: 'Vanity', building: '', floor: '', flat: '', notes: '',
+    fragility: 'Standard', orientation: 'Auto', delivery_priority: 'Standard',
+    stack_preference: 'Auto', weight_override: '',
   });
-  const [matrixData, setMatrixData] = useState({
-    buildings: '',
-    floors: '',
-    cells: {},
-  });
-  const [liveCalc, setLiveCalc] = useState({ sqft: 0, kg: 0 });
+
+  // ── Pieces Grid rows ──
+  const [pieceRows, setPieceRows] = useState([newRow()]);
+
+  // ── Destination Mode ──
+  const [destMode, setDestMode] = useState('single'); // 'single' | 'matrix'
+  const [matrixData, setMatrixData] = useState({ buildings: '', floors: '', cells: {} });
+
+  // ── UI state ──
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSpinner, setShowSpinner] = useState(false);
   const spinnerTimerRef = useRef(null);
 
-  useEffect(() => {
-    return () => {
-      if (spinnerTimerRef.current) {
-        clearTimeout(spinnerTimerRef.current);
-      }
-    };
-  }, []);
+  useEffect(() => () => { if (spinnerTimerRef.current) clearTimeout(spinnerTimerRef.current); }, []);
 
-  const partOptions = { 
-    Vanity: ['Vanity Top', 'Back Splash', 'Side Splash', 'Main Top'], 
-    Kitchen: ['Kitchen Perimeter', 'Kitchen Others', 'Island', 'Range Tops', 'Window Sills'], 
-    Other: ['Laundry Top', 'Bar Top', 'Other'] 
+  // ── Handlers ──
+  const handleCtx = (e) => {
+    setDrawingCtx(prev => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
-  const partCategoryMap = Object.entries(partOptions).reduce((acc, [category, parts]) => {
-    parts.forEach((part) => {
-      acc[part] = category;
-    });
-    return acc;
-  }, {});
+  const handleProjectChange = (e) => setProject({ ...project, [e.target.name]: e.target.value });
 
-  const handleChange = (e) => {
-    let value = e.target.value;
-    if (e.target.type === 'number') {
-      value = value === '' ? '' : parseFloat(value);
-    }
-
-    if (e.target.name === 'part') {
-      const derivedCategory = partCategoryMap[value] || formData.category;
-      setFormData({ ...formData, part: value, category: derivedCategory });
-      return;
-    }
-
-    setFormData({ ...formData, [e.target.name]: value });
-    
-    if (e.target.name === 'length' || e.target.name === 'width' || e.target.name === 'weight_override') {
-      const length = e.target.name === 'length' ? value : formData.length;
-      const width = e.target.name === 'width' ? value : formData.width;
-      const weightOverride = e.target.name === 'weight_override' ? value : formData.weight_override;
-      if (length !== '' && width !== '' && !isNaN(length) && !isNaN(width)) {
-        const sqft = (length * width) / 144;
-        if (Number(weightOverride) > 0) {
-          setLiveCalc({ sqft: sqft, kg: Number(weightOverride) });
-        } else {
-          const factors = { Granite: { '2CM': 5.5, '3CM': 7.5, 'Mixed': 6.5 }, Quartz: { '2CM': 4.75, '3CM': 6.75, 'Mixed': 5.75 }, Marble: { '2CM': 6.0, '3CM': 8.0, 'Mixed': 7.0 } };
-          const factor = (factors[project.material] || factors['Granite'])[project.thickness] || 7.5;
-          setLiveCalc({ sqft: sqft, kg: sqft * factor });
-        }
-      } else {
-        setLiveCalc({ sqft: 0, kg: 0 });
-      }
-    }
-  };
-
-  const handleProjectChange = (e) => {
-    setProject({ ...project, [e.target.name]: e.target.value });
-  };
-  
   const handleProjectBlur = async (e) => {
     if (!project.id) return;
     try {
-      await axios.put(`${API_BASE}/projects/${project.id}`, {
-        ...project,
-        [e.target.name]: e.target.value
-      });
-      console.log("Project details auto-saved.");
+      await axios.put(`${API_BASE}/projects/${project.id}`, { ...project, [e.target.name]: e.target.value });
       onDataChange?.();
-    } catch (err) {
-      console.error("Failed to save project details", err);
-    }
+    } catch (err) { console.error('Failed to save project details', err); }
   };
 
-  const parseCommaList = (str) => {
-    const parts = (str || "").toString().split(',').map(s => s.trim()).filter(Boolean);
-    return parts.length > 0 ? parts : [''];
-  };
-
-  const normalizeCellKey = (building, floor) => `${String(building).trim()}__${String(floor).trim()}`;
-
-  const parseFlatFloor = (flat) => {
-    const digits = String(flat || '').replace(/\D/g, '');
-    if (digits.length < 3) return '';
-    return digits.slice(0, -2).replace(/^0+/, '');
-  };
-
-  const calculateEdgePolishMachine = (length, width, edgeArea) => {
-    const l = Number(length);
-    const w = Number(width);
-    if (!l || !w || !edgeArea) return 0;
-
-    const perimeter = 2 * (l + w);
-    const longerSide = 2 * Math.max(l, w) + Math.min(l, w);
-
-    switch (edgeArea) {
-      case '4 Sides':
-      case 'Perimeter':
-        return perimeter;
-      case '3 Sides':
-        return longerSide;
-      case '2 Sides':
-        return 2 * Math.max(l, w);
-      case '1 Side':
-        return Math.max(l, w);
-      default:
-        return 0;
-    }
-  };
-
-  const buildDestinationPairs = (floors, flats) => {
-    if (!floors.length || !flats.length) {
-      return floors.flatMap((floor) => flats.map((flat) => ({ floor, flat })));
-    }
-
-    const groupedFlats = new Map();
-    flats.forEach((flat) => {
-      const inferredFloor = parseFlatFloor(flat);
-      if (!inferredFloor) return;
-      if (!groupedFlats.has(inferredFloor)) {
-        groupedFlats.set(inferredFloor, []);
-      }
-      groupedFlats.get(inferredFloor).push(flat);
-    });
-
-    const hasFloorMatches = floors.some((floor) => groupedFlats.has(String(floor).trim()));
-    if (!hasFloorMatches) {
-      return floors.flatMap((floor) => flats.map((flat) => ({ floor, flat })));
-    }
-
-    return floors.flatMap((floor) => {
-      const floorKey = String(floor).trim();
-      return (groupedFlats.get(floorKey) || []).map((flat) => ({ floor: floorKey, flat }));
-    });
-  };
-
-  const destinationPreview = useMemo(() => {
-    if (entryMode !== 'simple') return [];
-    const floors = parseCommaList(formData.floor);
-    const flats = parseCommaList(formData.flat);
-    const pairs = buildDestinationPairs(floors, flats);
-    if (!pairs.length || (pairs.length === 1 && !pairs[0].floor && !pairs[0].flat)) {
-      return [];
-    }
-
-    const byFloor = new Map();
-    pairs.forEach(({ floor, flat }) => {
-      const floorKey = floor || 'Unassigned';
-      if (!byFloor.has(floorKey)) {
-        byFloor.set(floorKey, []);
-      }
-      if (flat && !byFloor.get(floorKey).includes(flat)) {
-        byFloor.get(floorKey).push(flat);
-      }
-    });
-
-    return Array.from(byFloor.entries()).map(([floor, flatList]) => ({ floor, flats: flatList }));
-  }, [entryMode, formData.floor, formData.flat]);
-
-  const edgePolishMachine = useMemo(() => {
-    return calculateEdgePolishMachine(formData.length, formData.width, formData.edge_area);
-  }, [formData.length, formData.width, formData.edge_area]);
-
-  const matrixConfig = useMemo(() => {
-    const buildings = parseCommaList(matrixData.buildings).filter(Boolean);
-    const floors = parseCommaList(matrixData.floors).filter(Boolean);
-    return { buildings, floors };
-  }, [matrixData.buildings, matrixData.floors]);
-
-  const matrixPreview = useMemo(() => {
-    if (entryMode !== 'matrix') return [];
-    const rows = [];
-    matrixConfig.floors.forEach((floor) => {
-      const cells = [];
-      matrixConfig.buildings.forEach((building) => {
-        const key = normalizeCellKey(building, floor);
-        const flats = parseCommaList(matrixData.cells[key] || '').filter(Boolean);
-        if (flats.length > 0) {
-          cells.push({ building, flats });
-        }
-      });
-      if (cells.length > 0) {
-        rows.push({ floor, cells });
-      }
-    });
-    return rows;
-  }, [entryMode, matrixConfig, matrixData.cells]);
+  // ── Matrix helpers ──
+  const matrixConfig = useMemo(() => ({
+    buildings: parseCommaList(matrixData.buildings).filter(Boolean),
+    floors: parseCommaList(matrixData.floors).filter(Boolean),
+  }), [matrixData.buildings, matrixData.floors]);
 
   const handleMatrixCellChange = (building, floor, value) => {
     const key = normalizeCellKey(building, floor);
-    setMatrixData((prev) => ({
-      ...prev,
-      cells: {
-        ...prev.cells,
-        [key]: value,
-      },
-    }));
+    setMatrixData(prev => ({ ...prev, cells: { ...prev.cells, [key]: value } }));
   };
 
-  const handleMatrixPaste = (startBuildingIdx, startFloorIdx, text) => {
-    const rows = String(text || '')
-      .replace(/\r/g, '')
-      .split('\n')
-      .map((row) => row.split('\t'));
-
-    if (!rows.length) return;
-
-    setMatrixData((prev) => {
+  const handleMatrixPaste = (startBldgIdx, startFloorIdx, text) => {
+    const lines = String(text || '').replace(/\r/g, '').split('\n').map(r => r.split('\t'));
+    if (!lines.length) return;
+    setMatrixData(prev => {
       const nextCells = { ...prev.cells };
-      rows.forEach((row, rowOffset) => {
-        const floor = matrixConfig.floors[startFloorIdx + rowOffset];
+      lines.forEach((row, ri) => {
+        const floor = matrixConfig.floors[startFloorIdx + ri];
         if (!floor) return;
-        row.forEach((value, colOffset) => {
-          const building = matrixConfig.buildings[startBuildingIdx + colOffset];
+        row.forEach((val, ci) => {
+          const building = matrixConfig.buildings[startBldgIdx + ci];
           if (!building) return;
-          nextCells[normalizeCellKey(building, floor)] = value.trim();
+          nextCells[normalizeCellKey(building, floor)] = val.trim();
         });
       });
       return { ...prev, cells: nextCells };
     });
   };
 
-  const addMatrixItem = (field, value = '') => {
-    setMatrixData((prev) => {
-      const current = parseCommaList(prev[field]).filter(Boolean);
-      const nextValue = value || `${field === 'buildings' ? 1 : 1}`;
-      if (current.includes(nextValue)) {
-        return prev;
-      }
-      return { ...prev, [field]: [...current, nextValue].join(', ') };
-    });
-  };
-
-  const removeMatrixItem = (field, value) => {
-    setMatrixData((prev) => {
-      const current = parseCommaList(prev[field]).filter(Boolean);
-      const next = current.filter((item) => item !== value);
-      const nextCells = { ...prev.cells };
-      Object.keys(nextCells).forEach((key) => {
-        if ((field === 'buildings' && key.startsWith(`${value}__`)) || (field === 'floors' && key.endsWith(`__${value}`))) {
-          delete nextCells[key];
-        }
-      });
-      return { ...prev, [field]: next.join(', '), cells: nextCells };
-    });
-  };
-
-  const buildMatrixPieces = () => {
-    const pieces = [];
-    const buildings = matrixConfig.buildings;
-    const floors = matrixConfig.floors;
-
-    if (buildings.length === 0 && floors.length === 0) {
-      for (let i = 0; i < formData.qty; i++) {
-        pieces.push({
-          part: formData.part,
-          category: formData.category,
-          drawing: formData.drawing || "",
-          length: formData.length,
-          width: formData.width,
-          unit: formData.unit || "",
-          sink_type: formData.sink_type || "No Sink",
-          sink_cut: formData.sink_cut || "-",
-          tap_holes: formData.tap_holes || "-",
-          grooves: formData.grooves || "-",
-          edge: formData.edge || "None",
-          edge_area: formData.edge_area || "",
-          edge_polish_machine: edgePolishMachine,
-          radius: formData.radius || "-",
-          notes: formData.notes || "",
-          qty: 1,
-          building: "",
-          floor: "",
-          flat: "",
-        });
-      }
-      return pieces;
-    }
-
-    buildings.forEach((building) => {
-      floors.forEach((floor) => {
-        const key = normalizeCellKey(building, floor);
-        const flats = parseCommaList(matrixData.cells[key] || '');
-        flats.forEach((flat) => {
-          for (let i = 0; i < formData.qty; i++) {
-            pieces.push({
-              part: formData.part,
-              category: formData.category,
-              drawing: formData.drawing || "",
-              length: formData.length,
-              width: formData.width,
-              unit: formData.unit || "",
-              sink_type: formData.sink_type || "No Sink",
-              sink_cut: formData.sink_cut || "-",
-              tap_holes: formData.tap_holes || "-",
-              grooves: formData.grooves || "-",
-              fragility: formData.fragility || "Standard",
-              orientation: formData.orientation || "Auto",
-              delivery_priority: formData.delivery_priority || "Standard",
-              stack_preference: formData.stack_preference || "Auto",
-              weight_override: Number(formData.weight_override) || 0,
-              edge: formData.edge || "None",
-              edge_area: formData.edge_area || "",
-              edge_polish_machine: edgePolishMachine,
-              radius: formData.radius || "-",
-              notes: formData.notes || "",
-              qty: 1,
-              building,
-              floor,
-              flat,
-            });
+  // ── Build destinations ──
+  const buildDestinations = () => {
+    if (destMode === 'single') {
+      const buildings = parseCommaList(drawingCtx.building).filter(Boolean);
+      const floors = parseCommaList(drawingCtx.floor).filter(Boolean);
+      const flats = parseCommaList(drawingCtx.flat).filter(Boolean);
+      if (!buildings.length && !floors.length && !flats.length) return [{ building: '', floor: '', flat: '' }];
+      const dests = [];
+      for (const b of (buildings.length ? buildings : [''])) {
+        for (const fl of (floors.length ? floors : [''])) {
+          for (const ft of (flats.length ? flats : [''])) {
+            dests.push({ building: b, floor: fl, flat: ft });
           }
-        });
+        }
+      }
+      return dests;
+    }
+    // Matrix mode
+    const dests = [];
+    matrixConfig.buildings.forEach(building => {
+      matrixConfig.floors.forEach(floor => {
+        const key = normalizeCellKey(building, floor);
+        const flats = parseCommaList(matrixData.cells[key] || '').filter(Boolean);
+        flats.forEach(flat => dests.push({ building, floor, flat }));
       });
     });
-    return pieces;
+    return dests.length ? dests : [{ building: '', floor: '', flat: '' }];
   };
 
+  // ── Destination count for preview ──
+  const destCount = useMemo(() => {
+    const d = buildDestinations();
+    return d.filter(dd => dd.building || dd.floor || dd.flat).length || 1;
+  }, [destMode, drawingCtx.building, drawingCtx.floor, drawingCtx.flat, matrixData, matrixConfig]);
+
+  const validRows = pieceRows.filter(r => r.part && r.length && r.width);
+  const totalPieces = validRows.reduce((s, r) => s + (Number(r.qty) || 1), 0) * destCount;
+
+  // ── Submit ──
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (isSubmitting) return;
-    if (!formData.part || formData.length === '' || formData.width === '') { 
-      alert('Please fill Part, Length, and Depth'); 
-      return; 
-    }
-    
-    const piecesToCreate = entryMode === 'matrix'
-      ? buildMatrixPieces()
-      : (() => {
-          const buildings = parseCommaList(formData.building);
-          const floors = parseCommaList(formData.floor);
-          const flats = parseCommaList(formData.flat);
-          const destinationPairs = buildDestinationPairs(floors, flats);
+    if (!validRows.length) { alert('Add at least one piece with Part, Length, and Depth filled.'); return; }
 
-          const pieces = [];
-          const basePiece = {
-              part: formData.part,
-              category: formData.category,
-              drawing: formData.drawing || "",
-              length: formData.length,
-              width: formData.width,
-              unit: formData.unit || "",
-                  sink_type: formData.sink_type || "No Sink",
-                  sink_cut: formData.sink_cut || "-",
-                  tap_holes: formData.tap_holes || "-",
-                  grooves: formData.grooves || "-",
-                  fragility: formData.fragility || "Standard",
-                  orientation: formData.orientation || "Auto",
-                  delivery_priority: formData.delivery_priority || "Standard",
-                  stack_preference: formData.stack_preference || "Auto",
-                  weight_override: Number(formData.weight_override) || 0,
-                  edge: formData.edge || "None",
-                  edge_area: formData.edge_area || "",
-                  edge_polish_machine: edgePolishMachine,
-              radius: formData.radius || "-",
-              notes: formData.notes || ""
-          };
+    const destinations = buildDestinations();
+    const piecesToCreate = [];
 
-          for (const building of buildings) {
-            for (const destination of destinationPairs) {
-              for (let i = 0; i < formData.qty; i++) {
-                pieces.push({
-                  ...basePiece,
-                  qty: 1,
-                  building,
-                  floor: destination.floor,
-                  flat: destination.flat
-                });
-              }
-            }
-          }
-          return pieces;
-        })();
-
-    if (entryMode === 'matrix' && piecesToCreate.length === 0) {
-      for (let i = 0; i < formData.qty; i++) {
-        piecesToCreate.push({
-          part: formData.part,
-          category: formData.category,
-          drawing: formData.drawing || "",
-          length: formData.length,
-          width: formData.width,
-          unit: formData.unit || "",
-              sink_type: formData.sink_type || "No Sink",
-              sink_cut: formData.sink_cut || "-",
-              tap_holes: formData.tap_holes || "-",
-              grooves: formData.grooves || "-",
-              fragility: formData.fragility || "Standard",
-              orientation: formData.orientation || "Auto",
-              delivery_priority: formData.delivery_priority || "Standard",
-              stack_preference: formData.stack_preference || "Auto",
-              weight_override: Number(formData.weight_override) || 0,
-              edge: formData.edge || "None",
-              edge_area: formData.edge_area || "",
-              edge_polish_machine: edgePolishMachine,
-          radius: formData.radius || "-",
-          notes: formData.notes || "",
-          qty: 1,
-          building: formData.building || "",
-          floor: formData.floor || "",
-          flat: formData.flat || "",
-        });
+    for (const dest of destinations) {
+      for (const row of validRows) {
+        for (let i = 0; i < (Number(row.qty) || 1); i++) {
+          piecesToCreate.push({
+            part: row.part,
+            category: drawingCtx.category,
+            drawing: drawingCtx.drawing || '',
+            length: row.length,
+            width: row.width,
+            unit: drawingCtx.unit || '',
+            sink_type: row.sink_type || 'No Sink',
+            sink_cut: row.sink_cut || '-',
+            tap_holes: row.tap_holes || '-',
+            grooves: row.grooves || '-',
+            fragility: drawingCtx.fragility || 'Standard',
+            orientation: drawingCtx.orientation || 'Auto',
+            delivery_priority: drawingCtx.delivery_priority || 'Standard',
+            stack_preference: drawingCtx.stack_preference || 'Auto',
+            weight_override: Number(drawingCtx.weight_override) || 0,
+            edge: row.edge || 'None',
+            edge_area: row.edge_area || '',
+            edge_polish_machine: calcEdge(row.length, row.width, row.edge_area),
+            radius: row.radius || '-',
+            notes: row.notes || '',
+            qty: 1,
+            building: dest.building,
+            floor: dest.floor,
+            flat: dest.flat,
+          });
+        }
       }
     }
-    
+
     try {
       setIsSubmitting(true);
       setShowSpinner(false);
-      spinnerTimerRef.current = setTimeout(() => {
-        setShowSpinner(true);
-      }, 3000);
+      spinnerTimerRef.current = setTimeout(() => setShowSpinner(true), 2000);
       await axios.post(`${API_BASE}/projects/${project.id}/pieces/batch`, piecesToCreate);
-      setFormData({ 
-        part: '', category: 'Vanity', drawing: '', length: '', width: '', qty: 1, unit: '', 
-        building: '', floor: '', flat: '', sink_type: 'No Sink', sink_cut: '-', 
-        tap_holes: '-', grooves: '-', fragility: 'Standard', orientation: 'Auto', delivery_priority: 'Standard',
-        stack_preference: 'Auto', weight_override: '', edge: 'None', edge_area: '', edge_polish_machine: 0, radius: '-', notes: '' 
-      });
-      setMatrixData({ buildings: '', floors: '', cells: {} });
-      setLiveCalc({ sqft: 0, kg: 0 });
-      alert('Pieces added successfully!');
+      // Clear pieces, keep drawing context for next drawing
+      setPieceRows([newRow()]);
+      alert(`${piecesToCreate.length} pieces saved successfully!`);
       onDataChange();
-    } catch (error) { 
-      console.error(error); 
-      alert('Error adding pieces'); 
+    } catch (error) {
+      console.error(error);
+      alert('Error adding pieces');
     } finally {
-      if (spinnerTimerRef.current) {
-        clearTimeout(spinnerTimerRef.current);
-        spinnerTimerRef.current = null;
-      }
+      if (spinnerTimerRef.current) { clearTimeout(spinnerTimerRef.current); spinnerTimerRef.current = null; }
       setShowSpinner(false);
       setIsSubmitting(false);
     }
   };
 
+  const clearDrawing = () => {
+    setDrawingCtx({ drawing: '', unit: '', category: 'Vanity', building: '', floor: '', flat: '', notes: '',
+      fragility: 'Standard', orientation: 'Auto', delivery_priority: 'Standard', stack_preference: 'Auto', weight_override: '' });
+    setPieceRows([newRow()]);
+    setMatrixData({ buildings: '', floors: '', cells: {} });
+  };
+
+  // ── Render ──
   return (
     <div className="mb-6">
+      {/* ── Project Details ── */}
       <div className="bg-white shadow-sm rounded-lg border border-[#e2e8f0] p-5 mb-6">
-        <div className="mb-4">
-          <h2 className="text-lg font-bold text-[#1e293b]">Project Details</h2>
-        </div>
+        <h2 className="text-lg font-bold text-[#1e293b] mb-4">Project Details</h2>
         <div className="grid grid-cols-2 md:grid-cols-8 gap-4">
           <div><label className="label-text">Project Name</label><input name="name" value={project.name || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
           <div><label className="label-text">Material</label><select name="material" value={project.material} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field"><option>Granite</option><option>Quartz</option><option>Marble</option></select></div>
@@ -472,249 +199,142 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
           <div><label className="label-text">Job #</label><input name="job_number" value={project.job_number || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
           <div><label className="label-text">Date</label><input type="date" name="date" value={project.date || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
         </div>
-        <div className="mt-3 text-xs text-[#64748b]">
-          These two crate assumptions are used by the planner for tare weight, external size allowances, and fabrication-ready crate recommendations.
-        </div>
       </div>
 
+      {/* ── Drawing Workspace ── */}
       <div className="bg-white shadow-sm rounded-lg border border-[#e2e8f0]">
         <form onSubmit={handleSubmit}>
-          <div className="flex gap-2 px-5 pt-5">
-            <button type="button" onClick={() => setEntryMode('simple')} className={`px-4 py-2 rounded-t-md border ${entryMode === 'simple' ? 'bg-[#1e293b] text-white border-[#1e293b]' : 'bg-white text-[#475569] border-[#cbd5e1]'}`}>
-              Simple Entry
-            </button>
-            <button type="button" onClick={() => setEntryMode('matrix')} className={`px-4 py-2 rounded-t-md border ${entryMode === 'matrix' ? 'bg-[#1e293b] text-white border-[#1e293b]' : 'bg-white text-[#475569] border-[#cbd5e1]'}`}>
-              Matrix Entry
-            </button>
-          </div>
-          <div className="px-5 pb-2 text-xs text-[#64748b]">
-            {entryMode === 'simple'
-              ? 'Use the quick form when the job does not follow a strict building/floor matrix.'
-              : 'Use the matrix when the drawing lists buildings across the top and floors down the side. Leave it blank if no destination structure exists.'}
-          </div>
-          <div className="p-5 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-            <div className="col-span-2"><label className="label-text">Part Description</label><select name="part" value={formData.part} onChange={handleChange} className="input-field" required><option value="">Select...</option>{Object.entries(partOptions).map(([cat, parts]) => <optgroup label={cat} key={cat}>{parts.map(p => <option key={p}>{p}</option>)}</optgroup>)}</select></div>
-            <div><label className="label-text">Category</label><select name="category" value={formData.category} onChange={handleChange} className="input-field"><option>Vanity</option><option>Kitchen</option><option>Laundry</option><option>Island</option><option>Splashes</option><option>Utility</option><option>Other</option></select></div>
-            <div><label className="label-text">Drawing #</label><input name="drawing" value={formData.drawing} onChange={handleChange} className="input-field" /></div>
-            <div><label className="label-text">Length (in)</label><input name="length" type="number" step="0.125" value={formData.length} onChange={handleChange} className="input-field" required /></div>
-            <div><label className="label-text">Depth (in)</label><input name="width" type="number" step="0.125" value={formData.width} onChange={handleChange} className="input-field" required /></div>
-            
-            <div><label className="label-text">Qty</label><input name="qty" type="number" min="1" value={formData.qty} onChange={handleChange} className="input-field" /></div>
-            <div><label className="label-text">Edge Polish</label><select name="edge" value={formData.edge} onChange={handleChange} className="input-field"><option>None</option><option>Machine</option><option>Manual</option><option>Both</option></select></div>
-            <div><label className="label-text">Edge Polish area</label><select name="edge_area" value={formData.edge_area} onChange={handleChange} className="input-field"><option value="">None</option><option>4 Sides</option><option>3 Sides</option><option>2 Sides</option><option>1 Side</option></select></div>
-            <div><label className="label-text">Radius</label><select name="radius" value={formData.radius} onChange={handleChange} className="input-field"><option>-</option><option>1</option><option>2</option><option>3</option><option>4</option></select></div>
-            <div><label className="label-text">Sink Type</label><select name="sink_type" value={formData.sink_type} onChange={handleChange} className="input-field"><option>No Sink</option><option>Single Bowl</option><option>Double Bowl</option><option>ADA</option><option>PL-VS3018</option><option>PL-3639</option></select></div>
-            <div><label className="label-text">Cutouts</label><select name="sink_cut" value={formData.sink_cut} onChange={handleChange} className="input-field font-sans"><option value="-">-</option><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></div>
-            <div><label className="label-text">Tap Holes</label><select name="tap_holes" value={formData.tap_holes} onChange={handleChange} className="input-field font-sans"><option value="-">-</option><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option></select></div>
-            
-            <div><label className="label-text">Grooves</label><select name="grooves" value={formData.grooves} onChange={handleChange} className="input-field font-sans"><option value="-">-</option><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select></div>
-            <div className="col-span-2"><label className="label-text">Unit Name</label><input name="unit" value={formData.unit} onChange={handleChange} className="input-field" /></div>
-            <div className="col-span-3"><label className="label-text">Notes</label><input name="notes" value={formData.notes} onChange={handleChange} className="input-field" /></div>
-            <div><label className="label-text">Fragility</label><select name="fragility" value={formData.fragility} onChange={handleChange} className="input-field"><option>Standard</option><option>Fragile</option><option>High</option></select></div>
-            <div><label className="label-text">Orientation</label><select name="orientation" value={formData.orientation} onChange={handleChange} className="input-field"><option>Auto</option><option>No Rotate</option><option>Long Edge Vertical</option><option>Finished Face Protected</option></select></div>
-            <div><label className="label-text">Delivery Priority</label><select name="delivery_priority" value={formData.delivery_priority} onChange={handleChange} className="input-field"><option>Standard</option><option>First Off</option><option>Last Off</option><option>Rush</option></select></div>
-            <div><label className="label-text">Stacking</label><select name="stack_preference" value={formData.stack_preference} onChange={handleChange} className="input-field"><option>Auto</option><option>No Stack</option><option>Stack Allowed</option></select></div>
-            <div><label className="label-text">Weight Override (kg ea)</label><input name="weight_override" type="number" step="0.1" value={formData.weight_override} onChange={handleChange} className="input-field" placeholder="Optional" /></div>
-            {entryMode === 'simple' && (
-              <>
-                <div className="col-span-2"><label className="label-text">Building</label><input name="building" value={formData.building} onChange={handleChange} className="input-field" placeholder="e.g., 5,6" /></div>
-                <div className="col-span-2"><label className="label-text">Floor</label><input name="floor" value={formData.floor} onChange={handleChange} className="input-field" placeholder="e.g., 1,2,3" /></div>
-                <div className="col-span-2"><label className="label-text">Flat</label><input name="flat" value={formData.flat} onChange={handleChange} className="input-field" placeholder="e.g., 101,102,201,202" /></div>
-              </>
-            )}
-            {entryMode === 'matrix' && (
-              <>
-                <div className="col-span-6 rounded-md border border-[#dbe4f0] bg-[#f8fafc] p-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="label-text">Buildings</label>
-                      <input
-                        value={matrixData.buildings}
-                        onChange={(e) => setMatrixData((prev) => ({ ...prev, buildings: e.target.value }))}
-                        className="input-field"
-                        placeholder="10,13,14,15,16,17"
-                      />
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {matrixConfig.buildings.map((building) => (
-                          <button
-                            key={building}
-                            type="button"
-                            onClick={() => removeMatrixItem('buildings', building)}
-                            className="rounded-full border border-[#cbd5e1] bg-white px-2.5 py-1 text-[11px] text-[#475569] hover:bg-[#f1f5f9]"
-                          >
-                            {building} ×
-                          </button>
-                        ))}
-                        <button
-                          type="button"
-                          onClick={() => addMatrixItem('buildings', String(matrixConfig.buildings.length + 1))}
-                          className="rounded-full border border-dashed border-[#94a3b8] bg-transparent px-2.5 py-1 text-[11px] text-[#334155] hover:bg-[#e2e8f0]"
-                        >
-                          + Add building
-                        </button>
-                      </div>
-                    </div>
-                    <div>
-                      <label className="label-text">Floors</label>
-                      <input
-                        value={matrixData.floors}
-                        onChange={(e) => setMatrixData((prev) => ({ ...prev, floors: e.target.value }))}
-                        className="input-field"
-                        placeholder="1,2,3"
-                      />
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {matrixConfig.floors.map((floor) => (
-                          <button
-                            key={floor}
-                            type="button"
-                            onClick={() => removeMatrixItem('floors', floor)}
-                            className="rounded-full border border-[#cbd5e1] bg-white px-2.5 py-1 text-[11px] text-[#475569] hover:bg-[#f1f5f9]"
-                          >
-                            Floor {floor} ×
-                          </button>
-                        ))}
-                        <button
-                          type="button"
-                          onClick={() => addMatrixItem('floors', String(matrixConfig.floors.length + 1))}
-                          className="rounded-full border border-dashed border-[#94a3b8] bg-transparent px-2.5 py-1 text-[11px] text-[#334155] hover:bg-[#e2e8f0]"
-                        >
-                          + Add floor
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="mt-4 overflow-x-auto rounded-md border border-[#cbd5e1] bg-white">
-                    {matrixConfig.buildings.length > 0 && matrixConfig.floors.length > 0 ? (
-                      <table className="w-full text-xs">
-                        <thead className="bg-[#f8fafc]">
-                          <tr>
-                            <th className="p-2 text-left sticky left-0 bg-[#f8fafc] z-10">Floor / Building</th>
-                            {matrixConfig.buildings.map((building) => (
-                              <th key={building} className="p-2 text-left">{building}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {matrixConfig.floors.map((floor) => (
-                            <tr key={floor} className="border-t border-[#e2e8f0]">
-                              <td className="p-2 font-semibold text-[#1e293b] sticky left-0 bg-white">Floor {floor}</td>
-                              {matrixConfig.buildings.map((building) => {
-                                const key = normalizeCellKey(building, floor);
-                                return (
-                                  <td key={key} className="p-2 align-top min-w-[140px]">
-                                    <textarea
-                                      rows={3}
-                                      value={matrixData.cells[key] || ''}
-                                      onChange={(e) => handleMatrixCellChange(building, floor, e.target.value)}
-                                      onPaste={(e) => {
-                                        const pasteText = e.clipboardData.getData('text');
-                                        if (!pasteText.includes('\n') && !pasteText.includes('\t')) return;
-                                        e.preventDefault();
-                                        handleMatrixPaste(
-                                          matrixConfig.buildings.indexOf(building),
-                                          matrixConfig.floors.indexOf(floor),
-                                          pasteText
-                                        );
-                                      }}
-                                      className="input-field min-h-[72px] resize-y"
-                                      placeholder="101, 103, 105"
-                                    />
-                                  </td>
-                                );
-                              })}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    ) : (
-                      <div className="p-6 text-sm text-[#64748b]">
-                        No matrix structure yet. Add buildings and floors to start, or leave everything blank and save a non-location piece quantity.
-                      </div>
-                    )}
-                  </div>
-                  {matrixPreview.length > 0 && (
-                    <div className="mt-4 rounded-md border border-[#cbd5e1] bg-white p-4">
-                      <div className="text-sm font-semibold text-[#1e293b] mb-2">Print preview</div>
-                      <div className="overflow-x-auto">
-                        <table className="w-full border-collapse text-xs">
-                          <thead>
-                            <tr>
-                              <th className="border border-[#cbd5e1] bg-[#f8fafc] px-3 py-2 text-left sticky left-0">Floor</th>
-                              {matrixConfig.buildings.map((building) => (
-                                <th key={building} className="border border-[#cbd5e1] bg-[#f8fafc] px-3 py-2 text-left">{building}</th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {matrixConfig.floors.map((floor) => (
-                              <tr key={floor}>
-                                <td className="border border-[#cbd5e1] px-3 py-2 font-semibold sticky left-0 bg-white">Floor {floor}</td>
-                                {matrixConfig.buildings.map((building) => {
-                                  const key = normalizeCellKey(building, floor);
-                                  const flats = parseCommaList(matrixData.cells[key] || '').filter(Boolean);
-                                  return (
-                                    <td key={key} className="border border-[#cbd5e1] px-3 py-2 align-top min-w-[120px]">
-                                      {flats.length > 0 ? flats.join(', ') : <span className="text-[#cbd5e1]">—</span>}
-                                    </td>
-                                  );
-                                })}
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
-            {entryMode === 'simple' && destinationPreview.length > 0 && (
-              <div className="col-span-6 rounded-md border border-[#dbe4f0] bg-[#f8fafc] p-3 text-xs text-[#475569]">
-                <div className="font-semibold text-[#334155] mb-1">Destination preview</div>
-                <div className="flex flex-wrap gap-2">
-                  {destinationPreview.map((item) => (
-                    <span key={item.floor} className="rounded-full border border-[#cbd5e1] bg-white px-3 py-1">
-                      Floor {item.floor}: {item.flats.join(', ')}
-                    </span>
-                  ))}
-                </div>
-                <div className="mt-2">Flats are matched to the floor prefix first, so 101/102 stay under Floor 1 and 201/202 stay under Floor 2.</div>
+
+          {/* Drawing Header */}
+          <div className="px-5 pt-5 pb-3 border-b border-[#edf2f7]">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h3 className="text-base font-bold text-[#0f172a]">Drawing Workspace</h3>
+                <p className="text-xs text-[#64748b]">Enter drawing-level info once, then add all pieces below. All pieces inherit these shared fields.</p>
               </div>
-            )}
-            {entryMode === 'matrix' && matrixPreview.length > 0 && (
-              <div className="col-span-6 rounded-md border border-[#dbe4f0] bg-[#f8fafc] p-3 text-xs text-[#475569]">
-                <div className="font-semibold text-[#334155] mb-1">Matrix preview</div>
-                <div className="space-y-1">
-                  {matrixPreview.map((row) => (
-                    <div key={row.floor}>
-                      <span className="font-semibold">Floor {row.floor}:</span>{' '}
-                      {row.cells.map((cell) => `${cell.building} -> ${cell.flats.join(', ')}`).join(' | ')}
-                    </div>
-                  ))}
-                </div>
+              <button type="button" onClick={clearDrawing} className="text-xs text-[#64748b] hover:text-[#1e293b] underline">Clear Drawing</button>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-6 lg:grid-cols-8 gap-3">
+              <div><label className="label-text">Drawing #</label><input name="drawing" value={drawingCtx.drawing} onChange={handleCtx} className="input-field" placeholder="1041-01" /></div>
+              <div><label className="label-text">Unit Name</label><input name="unit" value={drawingCtx.unit} onChange={handleCtx} className="input-field" placeholder="1A Unit" /></div>
+              <div><label className="label-text">Category</label>
+                <select name="category" value={drawingCtx.category} onChange={handleCtx} className="input-field">
+                  <option>Vanity</option><option>Kitchen</option><option>Laundry</option><option>Island</option><option>Splashes</option><option>Utility</option><option>Other</option>
+                </select>
               </div>
-            )}
-            <div className="col-span-6 rounded-md border border-[#dbe4f0] bg-[#f8fafc] p-3 text-xs text-[#475569]">
-              <div className="font-semibold text-[#334155] mb-1">Edge Polish area</div>
-              <div>{edgePolishMachine ? `${edgePolishMachine.toFixed(2)} in` : '—'}</div>
-              <div className="mt-1">Calculated from Length x Depth and the selected edge polish type.</div>
+              <div><label className="label-text">Fragility</label><select name="fragility" value={drawingCtx.fragility} onChange={handleCtx} className="input-field"><option>Standard</option><option>Fragile</option><option>High</option></select></div>
+              <div><label className="label-text">Orientation</label><select name="orientation" value={drawingCtx.orientation} onChange={handleCtx} className="input-field"><option>Auto</option><option>No Rotate</option><option>Long Edge Vertical</option><option>Finished Face Protected</option></select></div>
+              <div><label className="label-text">Priority</label><select name="delivery_priority" value={drawingCtx.delivery_priority} onChange={handleCtx} className="input-field"><option>Standard</option><option>First Off</option><option>Last Off</option><option>Rush</option></select></div>
+              <div><label className="label-text">Stacking</label><select name="stack_preference" value={drawingCtx.stack_preference} onChange={handleCtx} className="input-field"><option>Auto</option><option>No Stack</option><option>Stack Allowed</option></select></div>
+              <div><label className="label-text">Wt Override (kg)</label><input name="weight_override" type="number" step="0.1" value={drawingCtx.weight_override} onChange={handleCtx} className="input-field" placeholder="Optional" /></div>
             </div>
           </div>
-          <div className="relative border-t border-[#e2e8f0] px-5 py-4 bg-[#f8fafc] rounded-b-lg flex justify-between items-center">
-            <div className="text-sm text-[#475569] font-medium">Live Calculation: <span className={liveCalc.sqft ? 'text-[#2563eb] font-bold ml-2' : 'text-[#94a3b8] ml-2'}>{liveCalc.sqft ? `${liveCalc.sqft.toFixed(2)} sq ft / ${liveCalc.kg.toFixed(1)} kg` : '— sq ft / — kg'}</span></div>
-            <button type="submit" disabled={isSubmitting} className={`btn-primary inline-flex items-center gap-2 ${isSubmitting ? 'opacity-70 cursor-not-allowed' : ''}`}>
-              {showSpinner && (
-                <span className="inline-flex h-4 w-4 items-center justify-center">
-                  <span className="h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
-                </span>
-              )}
-              <span>{showSpinner ? 'Saving...' : '+ Add Piece'}</span>
-            </button>
-            {showSpinner && (
-              <div className="absolute right-5 -top-10 rounded-md border border-[#cbd5e1] bg-white px-3 py-1.5 text-xs text-[#475569] shadow-sm">
-                Saving piece data...
+
+          {/* Destination Section */}
+          <div className="px-5 py-3 border-b border-[#edf2f7] bg-[#f8fafc]">
+            <div className="flex items-center gap-4 mb-3">
+              <span className="text-sm font-semibold text-[#334155]">Destination</span>
+              <div className="flex gap-1">
+                <button type="button" onClick={() => setDestMode('single')}
+                  className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${destMode === 'single' ? 'bg-[#1e293b] text-white' : 'bg-white border border-[#cbd5e1] text-[#475569]'}`}>
+                  Single / Comma-List
+                </button>
+                <button type="button" onClick={() => setDestMode('matrix')}
+                  className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${destMode === 'matrix' ? 'bg-[#1e293b] text-white' : 'bg-white border border-[#cbd5e1] text-[#475569]'}`}>
+                  Matrix Grid
+                </button>
+              </div>
+            </div>
+
+            {destMode === 'single' && (
+              <div className="grid grid-cols-3 gap-3">
+                <div><label className="label-text">Building</label><input name="building" value={drawingCtx.building} onChange={handleCtx} className="input-field" placeholder="e.g., 13 or A,B" /></div>
+                <div><label className="label-text">Floor</label><input name="floor" value={drawingCtx.floor} onChange={handleCtx} className="input-field" placeholder="e.g., 1,2,3" /></div>
+                <div><label className="label-text">Flat</label><input name="flat" value={drawingCtx.flat} onChange={handleCtx} className="input-field" placeholder="e.g., 101,102,201" /></div>
               </div>
             )}
+
+            {destMode === 'matrix' && (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div><label className="label-text">Buildings (comma-separated)</label><input value={matrixData.buildings} onChange={e => setMatrixData(p => ({ ...p, buildings: e.target.value }))} className="input-field" placeholder="1,2,3,4" /></div>
+                  <div><label className="label-text">Floors (comma-separated)</label><input value={matrixData.floors} onChange={e => setMatrixData(p => ({ ...p, floors: e.target.value }))} className="input-field" placeholder="1,2,3" /></div>
+                </div>
+                {matrixConfig.buildings.length > 0 && matrixConfig.floors.length > 0 && (
+                  <div className="overflow-x-auto rounded-md border border-[#cbd5e1] bg-white">
+                    <table className="w-full text-xs">
+                      <thead className="bg-[#f1f5f9]">
+                        <tr>
+                          <th className="p-2 text-left sticky left-0 bg-[#f1f5f9] z-10">Floor / Bldg</th>
+                          {matrixConfig.buildings.map(b => <th key={b} className="p-2 text-left min-w-[120px]">Bldg {b}</th>)}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {matrixConfig.floors.map(floor => (
+                          <tr key={floor} className="border-t border-[#e2e8f0]">
+                            <td className="p-2 font-semibold text-[#1e293b] sticky left-0 bg-white">Floor {floor}</td>
+                            {matrixConfig.buildings.map(building => {
+                              const key = normalizeCellKey(building, floor);
+                              return (
+                                <td key={key} className="p-1 align-top">
+                                  <textarea rows={2} value={matrixData.cells[key] || ''}
+                                    onChange={e => handleMatrixCellChange(building, floor, e.target.value)}
+                                    onPaste={e => {
+                                      const t = e.clipboardData.getData('text');
+                                      if (!t.includes('\n') && !t.includes('\t')) return;
+                                      e.preventDefault();
+                                      handleMatrixPaste(matrixConfig.buildings.indexOf(building), matrixConfig.floors.indexOf(floor), t);
+                                    }}
+                                    className="input-field min-h-[48px] resize-y text-xs" placeholder="101, 102" />
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <div className="text-[10px] text-[#94a3b8]">Paste flat numbers from Excel — rows map to floors, columns to buildings.</div>
+              </div>
+            )}
+          </div>
+
+          {/* Pieces Grid */}
+          <div className="px-5 py-4">
+            <PiecesGrid
+              rows={pieceRows}
+              setRows={setPieceRows}
+              material={project.material}
+              thickness={project.thickness}
+              onCategoryDetected={(cat) => setDrawingCtx(prev => ({ ...prev, category: cat }))}
+            />
+          </div>
+
+          {/* Footer */}
+          <div className="border-t border-[#edf2f7] px-5 py-4 bg-[#f8fafc] rounded-b-lg flex justify-between items-center flex-wrap gap-3">
+            <div className="text-sm text-[#475569] font-medium">
+              {validRows.length > 0 ? (
+                <>
+                  <span className="text-[#2563eb] font-bold">{validRows.length}</span> piece type{validRows.length !== 1 ? 's' : ''}
+                  {destCount > 1 && <> × <span className="text-[#2563eb] font-bold">{destCount}</span> flat{destCount !== 1 ? 's' : ''}</>}
+                  {' = '}
+                  <span className="text-[#059669] font-bold">{totalPieces}</span> total records
+                </>
+              ) : (
+                <span className="text-[#94a3b8]">Add pieces above to save</span>
+              )}
+            </div>
+            <div className="flex gap-3">
+              <button type="button" onClick={clearDrawing} className="rounded-full border border-[#cbd5e1] bg-white px-4 py-2 text-sm font-medium text-[#334155] hover:bg-[#f1f5f9]">
+                Clear All
+              </button>
+              <button type="submit" disabled={isSubmitting || !validRows.length}
+                className={`btn-primary inline-flex items-center gap-2 ${isSubmitting || !validRows.length ? 'opacity-60 cursor-not-allowed' : ''}`}>
+                {showSpinner && <span className="h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" />}
+                {showSpinner ? 'Saving...' : `Save Drawing (${totalPieces} pcs)`}
+              </button>
+            </div>
           </div>
         </form>
       </div>
