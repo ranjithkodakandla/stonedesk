@@ -298,7 +298,7 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
       ? uniqueParts.map((p) => {
         const r = newRow(nextThickness);
         r.part_no = p.part_no || '';
-        r._partNoAuto = !r.part_no;
+        r._partNoAuto = true;
         r.part = p.part || '';
         r.length = p.length || '';
         r.width = p.width || '';
@@ -329,7 +329,7 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
     });
     setDestMode((loadedDrawing.buildings || []).length && (loadedDrawing.floors || []).length ? 'matrix' : 'single');
     setMirrorMessage('');
-  }, [loadedDrawing, project.thickness, setProject]);
+  }, [loadedDrawing, setProject]);
 
   // ── Handlers ──
   const handleCtx = (e) => {
@@ -645,10 +645,11 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
       setIsSubmitting(true);
       setShowSpinner(false);
       spinnerTimerRef.current = setTimeout(() => setShowSpinner(true), 2000);
-      const isEditingExisting = loadedPieceIdsRef.current.length > 0 && loadedDrawingNoRef.current === drawingCtx.drawing;
+      const isEditingExisting = loadedPieceIdsRef.current.length > 0;
+      let updateCount = 0;
       if (isEditingExisting) {
         const existingIds = [...loadedPieceIdsRef.current];
-        const updateCount = Math.min(existingIds.length, piecesToCreate.length);
+        updateCount = Math.min(existingIds.length, piecesToCreate.length);
         for (let i = 0; i < updateCount; i++) {
           await axios.put(`${API_BASE}/pieces/${existingIds[i]}`, piecesToCreate[i]);
         }
