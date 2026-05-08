@@ -91,7 +91,9 @@ export const usePlannerStore = create((set, get) => ({
   setActiveTab: (activeTab) => set({ activeTab }),
   openSourceData: () => set({ sourceDataOpen: true }),
   closeSourceData: () => set({ sourceDataOpen: false }),
-  setProjectDraft: (project) => set({ project }),
+  setProjectDraft: (project) => set((state) => ({
+    project: typeof project === 'function' ? project(state.project) : project,
+  })),
   setSelectedCrateId: (selectedCrateId) => set({ selectedCrateId }),
   setSelectedContainerId: (selectedContainerId) => set({ selectedContainerId, selectedPlacementCrateId: null }),
   setSelectedPlacementCrateId: (selectedPlacementCrateId) => set({ selectedPlacementCrateId }),

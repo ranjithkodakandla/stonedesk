@@ -11,6 +11,67 @@ const parseCommaList = (str) => {
 
 const normalizeCellKey = (building, floor) => `${String(building).trim()}__${String(floor).trim()}`;
 
+const parseFlatTokens = (text) =>
+  String(text || '')
+    .replace(/\r/g, '')
+    .split(/[\s,]+/)
+    .map(s => s.trim())
+    .filter(Boolean);
+
+const formatFlatDraft = (text) => {
+  const raw = String(text || '')
+    .replace(/[\r\n\t]+/g, ',')
+    .replace(/\s+/g, '');
+  const tokens = raw.split(',').map(s => s.trim()).filter(Boolean);
+  const deduped = [];
+  const seen = new Set();
+  tokens.forEach(token => {
+    if (seen.has(token)) return;
+    seen.add(token);
+    deduped.push(token);
+  });
+  let next = deduped.join(',');
+  const lastToken = deduped[deduped.length - 1] || '';
+  if (/^\d{3}$/.test(lastToken) && !raw.endsWith(',')) next += ',';
+  return next;
+};
+
+const getThicknessHint = (part = '', category = '') => {
+  const text = `${part || ''} ${category || ''}`.trim();
+  if (/window sill/i.test(text)) return '2CM';
+  if (/back splash/i.test(text)) return '2CM';
+  if (/side splash/i.test(text)) return '2CM';
+  if (/full height splash/i.test(text)) return '2CM';
+  if (/splash/i.test(text)) return '2CM';
+  if (/kitchen/i.test(text)) return '3CM';
+  if (/island/i.test(text)) return '3CM';
+  if (/vanity/i.test(text)) return '3CM';
+  return '';
+};
+
+const inferMirrorThickness = (parts = [], fallback = '') => {
+  const hints = parts.map(p => String(p?.thickness || '').trim()).filter(Boolean);
+  if (!hints.length) return fallback || '';
+  const unique = [...new Set(hints)];
+  return unique.length === 1 ? unique[0] : 'Mixed';
+};
+
+const getNextNumericPartNo = (rows = [], drawingNo = '') => {
+  const prefix = drawingNo ? `${drawingNo}-` : '';
+  if (!prefix) return '';
+  let maxValue = 0;
+  let width = 2;
+  rows.forEach(row => {
+    const partNo = String(row?.part_no || '').trim();
+    if (!partNo.startsWith(prefix)) return;
+    const suffix = partNo.slice(prefix.length);
+    if (!/^\d+$/.test(suffix)) return;
+    maxValue = Math.max(maxValue, Number(suffix));
+    width = Math.max(width, suffix.length);
+  });
+  return `${prefix}${String(maxValue + 1).padStart(width, '0')}`;
+};
+
 // ── Matrix Cell with bulk comma entry ──────────────────────────────────────
 const MatrixCell = ({ cellKey, entries, onSetEntries, onUpdateEntry, onRemoveEntry, buildingIdx, floorIdx, onMatrixPaste }) => {
   const [bulkText, setBulkText] = useState('');
@@ -19,7 +80,7 @@ const MatrixCell = ({ cellKey, entries, onSetEntries, onUpdateEntry, onRemoveEnt
   const commit = () => {
     const raw = bulkText.trim();
     if (!raw) return;
-    const parsed = raw.split(',').map(s => s.trim()).filter(s => s.length > 0);
+    const parsed = parseFlatTokens(raw);
     if (!parsed.length) return;
     const existing = new Set(entries.map(e => String(e.flat).trim()));
     const toAdd = parsed.filter(f => !existing.has(f));
@@ -55,7 +116,7 @@ const MatrixCell = ({ cellKey, entries, onSetEntries, onUpdateEntry, onRemoveEnt
       <div className="flex items-center gap-1">
         <input
           value={bulkText}
-          onChange={e => setBulkText(e.target.value)}
+          onChange={e => setBulkText(formatFlatDraft(e.target.value))}
           onBlur={commit}
           onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } }}
           onPaste={e => {
@@ -63,7 +124,10 @@ const MatrixCell = ({ cellKey, entries, onSetEntries, onUpdateEntry, onRemoveEnt
             if (t.includes('\n') || t.includes('\t')) {
               e.preventDefault();
               onMatrixPaste(buildingIdx, floorIdx, t);
+              return;
             }
+            e.preventDefault();
+            setBulkText(formatFlatDraft(t));
           }}
           className="input-field py-0.5 text-xs flex-1 min-w-0 font-mono"
           placeholder={entries.length ? 'Add more…' : '101,102,103'}
@@ -167,10 +231,13 @@ const MirrorModal = ({ drawings, loading, onClose, onApply }) => {
   );
 };
 
-const EntryForm = ({ project, setProject, onDataChange }) => {
+const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedDrawingClear }) => {
+  const thicknessAutoLockRef = useRef(false);
+  const loadedPieceIdsRef = useRef([]);
+  const loadedDrawingNoRef = useRef('');
   // ── Drawing Context (shared metadata) ──
   const [drawingCtx, setDrawingCtx] = useState({
-    drawing: '', unit: '', category: 'Vanity', building: '', floor: '', flat: '', notes: '',
+    drawing: '', unit: '', category: 'Vanity', thickness: project.thickness || '3CM', building: '', floor: '', flat: '', notes: '',
     fragility: 'Standard', orientation: 'Auto', delivery_priority: 'Standard',
     stack_preference: 'Auto', weight_override: '',
   });
@@ -191,6 +258,7 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
   const [mirrorDrawings, setMirrorDrawings] = useState([]);
   const [mirrorLoading, setMirrorLoading] = useState(false);
   const [mirrorMessage, setMirrorMessage] = useState('');
+  const [editBanner, setEditBanner] = useState('');
 
   // ── UI state ──
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -199,17 +267,95 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
 
   useEffect(() => () => { if (spinnerTimerRef.current) clearTimeout(spinnerTimerRef.current); }, []);
 
+  useEffect(() => {
+    if (!loadedDrawing) return;
+
+    const nextThickness = loadedDrawing.thickness || inferMirrorThickness(loadedDrawing.unique_parts || [], project.thickness || '3CM') || '3CM';
+    loadedDrawingNoRef.current = loadedDrawing.drawing || '';
+    loadedPieceIdsRef.current = (loadedDrawing.pieces || []).map((piece) => piece.id).filter(Boolean);
+    thicknessAutoLockRef.current = true;
+
+    setEditBanner(`Editing existing drawing ${loadedDrawing.drawing || ''}`);
+    setDrawingCtx(prev => ({
+      ...prev,
+      drawing: loadedDrawing.drawing || '',
+      unit: loadedDrawing.unit || '',
+      category: loadedDrawing.category || 'Vanity',
+      thickness: nextThickness,
+      fragility: loadedDrawing.fragility || 'Standard',
+      orientation: loadedDrawing.orientation || 'Auto',
+      delivery_priority: loadedDrawing.delivery_priority || 'Standard',
+      stack_preference: loadedDrawing.stack_preference || 'Auto',
+      weight_override: loadedDrawing.weight_override || '',
+      building: '',
+      floor: '',
+      flat: '',
+    }));
+    setProject(prev => prev.thickness === nextThickness ? prev : { ...prev, thickness: nextThickness });
+
+    const uniqueParts = loadedDrawing.unique_parts || [];
+    const rows = uniqueParts.length > 0
+      ? uniqueParts.map((p) => {
+        const r = newRow(nextThickness);
+        r.part_no = p.part_no || '';
+        r._partNoAuto = !r.part_no;
+        r.part = p.part || '';
+        r.length = p.length || '';
+        r.width = p.width || '';
+        r.thickness = p.thickness || nextThickness;
+        r.qty = p.qty || 1;
+        r.sink_type = p.sink_type || 'No Sink';
+        r.sink_cut = p.sink_cut || '-';
+        r.tap_holes = p.tap_holes || '-';
+        r.grooves = p.grooves || '-';
+        r.edge = p.edge || 'None';
+        r.edge_area = p.edge_area || '';
+        r.edge_map = p.edge_map ? { ...r.edge_map, ...p.edge_map } : { ...r.edge_map };
+        r.edge_polish_manual = p.edge_polish_manual || '';
+        r.radius = p.radius || '-';
+        r.radius_value = p.radius_value || '';
+        r.radius_corners = p.radius_corners ? { ...r.radius_corners, ...p.radius_corners } : { ...r.radius_corners };
+        r.shape_type = p.shape_type || '';
+        r.notes = p.notes || '';
+        return r;
+      })
+      : [newRow(nextThickness)];
+
+    setPieceRows(rows);
+    setMatrixData({
+      buildings: (loadedDrawing.buildings || []).join(','),
+      floors: (loadedDrawing.floors || []).join(','),
+      cells: loadedDrawing.cells || {},
+    });
+    setDestMode((loadedDrawing.buildings || []).length && (loadedDrawing.floors || []).length ? 'matrix' : 'single');
+    setMirrorMessage('');
+  }, [loadedDrawing, project.thickness, setProject]);
+
   // ── Handlers ──
   const handleCtx = (e) => {
     const { name, value } = e.target;
     setDrawingCtx(prev => ({ ...prev, [name]: value }));
     // When Drawing # changes, regenerate auto part_nos (respects splash → letter / other → number)
     if (name === 'drawing') {
-      setPieceRows(prev => reindexAutoPartNos(prev, value));
+      setPieceRows(prev => reindexAutoPartNos(prev, value, { forceReassign: true }));
+    }
+    if (name === 'category') {
+      const hint = getThicknessHint('', value);
+      if (hint && !thicknessAutoLockRef.current) {
+        setDrawingCtx(prev => ({ ...prev, thickness: hint }));
+        setProject(prev => prev.thickness === hint ? prev : { ...prev, thickness: hint });
+      }
+    }
+    if (name === 'thickness') {
+      thicknessAutoLockRef.current = true;
+      setProject(prev => prev.thickness === value ? prev : { ...prev, thickness: value });
     }
   };
 
-  const handleProjectChange = (e) => setProject({ ...project, [e.target.name]: e.target.value });
+  const handleProjectChange = (e) => {
+    const { name, value } = e.target;
+    setProject(prev => ({ ...prev, [name]: value }));
+  };
 
   const handleProjectBlur = async (e) => {
     if (!project.id) return;
@@ -250,7 +396,7 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
           const building = matrixConfig.buildings[startBldgIdx + ci];
           if (!building) return;
           const key = normalizeCellKey(building, floor);
-          const entries = val.split(',').map(s => s.trim()).filter(Boolean).map(s => ({ flat: s, qty: 1 }));
+          const entries = parseFlatTokens(val).map(s => ({ flat: s, qty: 1 }));
           if (entries.length) nextCells[key] = entries;
         });
       });
@@ -305,6 +451,12 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
   };
 
   const handleApplyMirror = (d, opts) => {
+    const mirroredThickness = inferMirrorThickness(d.unique_parts || [], project.thickness || '');
+    if (mirroredThickness) {
+      thicknessAutoLockRef.current = false;
+      setDrawingCtx(prev => ({ ...prev, thickness: mirroredThickness }));
+      setProject(prev => prev.thickness === mirroredThickness ? prev : { ...prev, thickness: mirroredThickness });
+    }
     if (opts.specs) {
       setDrawingCtx(prev => ({
         ...prev,
@@ -327,6 +479,7 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
         r.part = p.part || '';
         r.length = p.length || '';
         r.width = p.width || '';
+        r.thickness = p.thickness || mirroredThickness || project.thickness || '3CM';
         r.qty = opts.quantities ? (p.qty || 1) : 1;
         if (opts.specs) {
           r.sink_type = p.sink_type || 'No Sink';
@@ -398,6 +551,19 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [destMode, drawingCtx.building, drawingCtx.floor, drawingCtx.flat, matrixData, matrixConfig]);
 
+  useEffect(() => {
+    const nextThickness = drawingCtx.thickness || project.thickness || '3CM';
+    setPieceRows(prev => {
+      let changed = false;
+      const nextRows = prev.map(row => {
+        if (row.thickness === nextThickness) return row;
+        changed = true;
+        return { ...row, thickness: nextThickness };
+      });
+      return changed ? nextRows : prev;
+    });
+  }, [drawingCtx.thickness, project.thickness]);
+
   const activeDests = destinations.filter(d => d.building || d.floor || d.flat);
   const destCount = activeDests.length || 1;
 
@@ -445,7 +611,7 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
             drawing: drawingCtx.drawing || '',
             length: row.length,
             width: row.width,
-            thickness: row.thickness || project.thickness || '3CM',
+            thickness: drawingCtx.thickness || row.thickness || project.thickness || '3CM',
             unit: drawingCtx.unit || '',
             sink_type: row.sink_type || 'No Sink',
             sink_cut: row.sink_cut || '-',
@@ -479,10 +645,35 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
       setIsSubmitting(true);
       setShowSpinner(false);
       spinnerTimerRef.current = setTimeout(() => setShowSpinner(true), 2000);
-      await axios.post(`${API_BASE}/projects/${project.id}/pieces/batch`, piecesToCreate);
-      const [freshRow] = reindexAutoPartNos([newRow(project.thickness)], drawingCtx.drawing);
+      const isEditingExisting = loadedPieceIdsRef.current.length > 0 && loadedDrawingNoRef.current === drawingCtx.drawing;
+      if (isEditingExisting) {
+        const existingIds = [...loadedPieceIdsRef.current];
+        const updateCount = Math.min(existingIds.length, piecesToCreate.length);
+        for (let i = 0; i < updateCount; i++) {
+          await axios.put(`${API_BASE}/pieces/${existingIds[i]}`, piecesToCreate[i]);
+        }
+        if (piecesToCreate.length !== existingIds.length) {
+          console.warn(`Loaded drawing ${drawingCtx.drawing} saved with ${updateCount} updates from ${piecesToCreate.length} prepared piece rows and ${existingIds.length} existing records.`);
+        }
+      } else {
+        await axios.post(`${API_BASE}/projects/${project.id}/pieces/batch`, piecesToCreate);
+      }
+      const nextPartNo = getNextNumericPartNo(validRows, drawingCtx.drawing);
+      const [freshRow] = reindexAutoPartNos([{
+        ...newRow(drawingCtx.thickness || project.thickness || '3CM'),
+        part_no: nextPartNo,
+        _partNoAuto: true,
+      }], drawingCtx.drawing);
       setPieceRows([freshRow]);
-      alert(`${piecesToCreate.length} pieces saved successfully!`);
+      if (isEditingExisting) {
+        alert(`${updateCount || piecesToCreate.length} existing pieces updated successfully!`);
+        onLoadedDrawingClear?.();
+        loadedPieceIdsRef.current = [];
+        loadedDrawingNoRef.current = '';
+        setEditBanner('');
+      } else {
+        alert(`${piecesToCreate.length} pieces saved successfully!`);
+      }
       onDataChange();
     } catch (error) {
       console.error(error);
@@ -496,10 +687,16 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
 
   const clearDrawing = () => {
     setDrawingCtx({ drawing: '', unit: '', category: 'Vanity', building: '', floor: '', flat: '', notes: '',
+      thickness: project.thickness || '3CM',
       fragility: 'Standard', orientation: 'Auto', delivery_priority: 'Standard', stack_preference: 'Auto', weight_override: '' });
-    setPieceRows([newRow(project.thickness)]);
+    thicknessAutoLockRef.current = false;
+    setPieceRows([newRow(drawingCtx.thickness || project.thickness || '3CM')]);
     setMatrixData({ buildings: '', floors: '', cells: {} });
     setMirrorMessage('');
+    setEditBanner('');
+    loadedPieceIdsRef.current = [];
+    loadedDrawingNoRef.current = '';
+    onLoadedDrawingClear?.();
   };
 
   // ── Stone color options by material ──
@@ -539,7 +736,6 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
         <div className="grid grid-cols-2 md:grid-cols-8 gap-4">
           <div><label className="label-text">Project Name</label><input name="name" value={project.name || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
           <div><label className="label-text">Material</label><select name="material" value={project.material} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field"><option>Granite</option><option>Quartz</option><option>Marble</option></select></div>
-          <div><label className="label-text">Thickness</label><select name="thickness" value={project.thickness} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field"><option>2CM</option><option>3CM</option><option>Mixed</option></select></div>
           <div>
             <label className="label-text">Stone Color</label>
             <select name="stone_color" value={project.stone_color || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field">
@@ -625,6 +821,7 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
                   <option>Vanity</option><option>Kitchen</option><option>Laundry</option><option>Island</option><option>Splashes</option><option>Hearth</option><option>Bar</option><option>Utility</option><option>Other</option>
                 </select>
               </div>
+              <div><label className="label-text">Thickness</label><select name="thickness" value={drawingCtx.thickness} onChange={handleCtx} className="input-field"><option>2CM</option><option>3CM</option><option>Mixed</option></select></div>
               <div><label className="label-text">Fragility</label><select name="fragility" value={drawingCtx.fragility} onChange={handleCtx} className="input-field"><option>Standard</option><option>Fragile</option><option>High</option></select></div>
               <div><label className="label-text">Orientation</label><select name="orientation" value={drawingCtx.orientation} onChange={handleCtx} className="input-field"><option>Auto</option><option>No Rotate</option><option>Long Edge Vertical</option><option>Finished Face Protected</option></select></div>
               <div><label className="label-text">Priority</label><select name="delivery_priority" value={drawingCtx.delivery_priority} onChange={handleCtx} className="input-field"><option>Standard</option><option>First Off</option><option>Last Off</option><option>Rush</option></select></div>
@@ -638,6 +835,12 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
             <div className="px-5 py-2 bg-violet-50 border-b border-violet-100 flex items-center justify-between">
               <span className="text-xs text-violet-700 font-medium">{mirrorMessage}</span>
               <button type="button" onClick={() => setMirrorMessage('')} className="text-violet-400 hover:text-violet-600 ml-3 text-base leading-none">×</button>
+            </div>
+          )}
+          {editBanner && (
+            <div className="px-5 py-2 bg-amber-50 border-b border-amber-100 flex items-center justify-between">
+              <span className="text-xs text-amber-700 font-medium">{editBanner}</span>
+              <button type="button" onClick={() => { setEditBanner(''); loadedPieceIdsRef.current = []; loadedDrawingNoRef.current = ''; onLoadedDrawingClear?.(); }} className="text-amber-400 hover:text-amber-600 ml-3 text-base leading-none">×</button>
             </div>
           )}
 
@@ -721,14 +924,19 @@ const EntryForm = ({ project, setProject, onDataChange }) => {
 
           {/* Pieces Grid */}
           <div className="px-5 py-4">
-            <PiecesGrid
+              <PiecesGrid
               rows={pieceRows}
               setRows={setPieceRows}
               material={project.material}
-              thickness={project.thickness}
-              defaultThickness={project.thickness}
+              thickness={drawingCtx.thickness || project.thickness}
+              defaultThickness={drawingCtx.thickness || project.thickness}
               category={drawingCtx.category}
               onCategoryDetected={(cat) => setDrawingCtx(prev => ({ ...prev, category: cat }))}
+              onThicknessSuggested={(hint) => {
+                if (!hint || thicknessAutoLockRef.current) return;
+                setDrawingCtx(prev => ({ ...prev, thickness: hint }));
+                setProject(prev => prev.thickness === hint ? prev : { ...prev, thickness: hint });
+              }}
               destinations={destinations}
               drawingNo={drawingCtx.drawing}
             />

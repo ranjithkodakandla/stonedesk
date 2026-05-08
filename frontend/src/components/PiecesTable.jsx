@@ -3,7 +3,7 @@ import axios from 'axios';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
-const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
+const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing }) => {
   const [selectedIds, setSelectedIds] = useState([]);
   const [editMode, setEditMode] = useState(null);
   const [editDraft, setEditDraft] = useState(null);
@@ -115,6 +115,10 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
   const openSelectedEdit = () => {
     const selectedPieces = pieces.filter((piece) => selectedIds.includes(piece.id));
     if (selectedPieces.length === 0) return;
+    if (onLoadDrawing) {
+      onLoadDrawing(selectedPieces);
+      return;
+    }
     if (selectedPieces.length === 1) {
       openEdit(selectedPieces[0]);
       return;
@@ -351,7 +355,7 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
             disabled={selectedIds.length === 0}
             className={`btn-primary ${selectedIds.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
-            Edit Selected
+            Edit
           </button>
           {selectedIds.length > 0 && (
             <>
@@ -469,7 +473,7 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange }) => {
                   <td className="p-3 text-center">
                     <div className="flex items-center justify-center gap-2">
                       <button
-                        onClick={() => openEdit(p)}
+                        onClick={() => (onLoadDrawing ? onLoadDrawing(p.drawing) : openEdit(p))}
                         className="text-[#2563eb] hover:text-[#1d4ed8] font-medium text-xs px-3 py-1 bg-[#eff6ff] hover:bg-[#dbeafe] rounded-md border border-[#bfdbfe] transition-colors"
                       >
                         Edit

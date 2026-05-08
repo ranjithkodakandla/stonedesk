@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import axios from 'axios';
 import Logo from './Logo';
 import EntryForm from './EntryForm';
 import UploadWorkspace from './UploadWorkspace';
@@ -8,6 +9,8 @@ import PlannerCrateTab from './PlannerCrateTab';
 import PlannerContainerTab from './PlannerContainerTab';
 import { usePlannerStore } from '../store/plannerStore';
 import { formatNumber, getPieceWeight } from '../utils/plannerUtils';
+
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
 const plannerSubTabs = [
   { id: 'summary', label: 'Summary / Insights', step: 'Step 1' },
@@ -34,6 +37,7 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [mainTab, setMainTab] = useState('source-data'); // 'source-data' | 'planning'
   const [entryMode, setEntryMode] = useState('manual');  // 'manual' | 'upload'
+  const [loadedDrawing, setLoadedDrawing] = useState(null);
 
   useEffect(() => {
     initialize(projectId);
@@ -43,6 +47,140 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
   const totalWeight = pieces.reduce((sum, piece) => sum + getPieceWeight(piece, project), 0);
   const totalSqFt = pieces.reduce((sum, piece) => sum + ((Number(piece.length || 0) * Number(piece.width || 0)) / 144) * (Number(piece.qty) || 1), 0);
   const totalQty = pieces.reduce((sum, p) => sum + (Number(p.qty) || 1), 0);
+
+  const drawingsByNumber = useMemo(() => {
+    const map = new Map();
+    pieces.forEach((piece) => {
+      const drawingNo = piece.drawing || 'Unnamed';
+      if (!map.has(drawingNo)) {
+        map.set(drawingNo, []);
+      }
+      map.get(drawingNo).push(piece);
+    });
+    return map;
+  }, [pieces]);
+
+  const buildDrawingDraftFromPieces = (sourcePieces, drawingNo = '') => {
+    if (!sourcePieces.length) return null;
+    const sortedPieces = [...sourcePieces].sort((a, b) => (a.id || 0) - (b.id || 0));
+    const first = sortedPieces[0];
+    const seen = new Set();
+    const uniqueParts = [];
+
+    sortedPieces.forEach((piece) => {
+      const key = [
+        piece.part_no || '',
+        piece.part || '',
+        piece.length || '',
+        piece.width || '',
+      ].join('|');
+      if (seen.has(key)) {
+        const idx = uniqueParts.findIndex((row) => (
+          row.part_no === (piece.part_no || '') &&
+          row.part === (piece.part || '') &&
+          row.length === (piece.length || '') &&
+          row.width === (piece.width || '')
+        ));
+        if (idx >= 0) uniqueParts[idx].qty += 1;
+        return;
+      }
+      seen.add(key);
+      uniqueParts.push({
+        part_no: piece.part_no || '',
+        part: piece.part || '',
+        length: piece.length || '',
+        width: piece.width || '',
+        thickness: piece.thickness || '3CM',
+        qty: 1,
+        sink_type: piece.sink_type || 'No Sink',
+        sink_cut: piece.sink_cut || '-',
+        tap_holes: piece.tap_holes || '-',
+        grooves: piece.grooves || '-',
+        edge: piece.edge || 'None',
+        edge_area: piece.edge_area || '',
+        edge_map: piece.edge_map || {},
+        edge_polish_manual: piece.edge_polish_manual || '',
+        radius: piece.radius || '-',
+        radius_value: piece.radius_value || '',
+        radius_corners: piece.radius_corners || {},
+        shape_type: piece.shape_type || '',
+        notes: piece.notes || '',
+      });
+    });
+
+    const buildings = [...new Set(sortedPieces.map((p) => String(p.building || '').trim()).filter(Boolean))].sort();
+    const floors = [...new Set(sortedPieces.map((p) => String(p.floor || '').trim()).filter(Boolean))].sort();
+    const cells = {};
+    sortedPieces.forEach((piece) => {
+      const building = String(piece.building || '').trim();
+      const floor = String(piece.floor || '').trim();
+      const flat = String(piece.flat || '').trim();
+      if (!building || !floor || !flat) return;
+      const key = `${building}__${floor}`;
+      if (!cells[key]) cells[key] = [];
+      if (!cells[key].some((entry) => entry.flat === flat)) {
+        cells[key].push({ flat, qty: 1 });
+      }
+    });
+
+    return {
+      drawing: drawingNo,
+      unit: first.unit || '',
+      category: first.category || 'Vanity',
+      fragility: first.fragility || 'Standard',
+      orientation: first.orientation || 'Auto',
+      delivery_priority: first.delivery_priority || 'Standard',
+      stack_preference: first.stack_preference || 'Auto',
+      weight_override: first.weight_override || 0,
+      thickness: first.thickness || project.thickness || '3CM',
+      pieces: sortedPieces,
+      unique_parts: uniqueParts,
+      buildings,
+      floors,
+      cells,
+    };
+  };
+
+  const buildDrawingDraft = (drawingNo) => {
+    const drawingPieces = drawingsByNumber.get(drawingNo) || [];
+    return buildDrawingDraftFromPieces(drawingPieces, drawingNo);
+  };
+
+  const handleLoadDrawing = (selection) => {
+    if (!selection) return;
+
+    let sourcePieces = [];
+    let drawingNo = '';
+
+    if (Array.isArray(selection)) {
+      const selectedPieces = selection.filter(Boolean);
+      if (!selectedPieces.length) return;
+      const uniqueDrawings = [...new Set(selectedPieces.map((piece) => piece.drawing).filter(Boolean))];
+      if (uniqueDrawings.length === 1) {
+        drawingNo = uniqueDrawings[0];
+        sourcePieces = drawingsByNumber.get(drawingNo) || selectedPieces;
+      } else {
+        const union = new Map();
+        uniqueDrawings.forEach((dn) => {
+          (drawingsByNumber.get(dn) || []).forEach((piece) => union.set(piece.id, piece));
+        });
+        sourcePieces = [...union.values()];
+        drawingNo = uniqueDrawings[0] || selectedPieces[0].drawing || '';
+      }
+    } else if (typeof selection === 'object') {
+      drawingNo = selection.drawing || '';
+      sourcePieces = drawingsByNumber.get(drawingNo) || [];
+    } else {
+      drawingNo = selection;
+      sourcePieces = drawingsByNumber.get(drawingNo) || [];
+    }
+
+    const draft = buildDrawingDraftFromPieces(sourcePieces, drawingNo);
+    if (!draft) return;
+    setLoadedDrawing(draft);
+    setEntryMode('manual');
+    setMainTab('source-data');
+  };
 
   const handleGeneratePlan = async () => {
     if (pieces.length === 0) {
@@ -124,7 +262,7 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
                   <span>•</span>
                   <span>{project.job_number || 'No job number'}</span>
                   <span>•</span>
-                  <span>{project.material} / {project.thickness}</span>
+                  <span>{project.material}</span>
                 </div>
               </div>
 
@@ -206,12 +344,14 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
                 </button>
               </div>
 
-              <div className="px-6 py-6">
+              <div className="px-6 py-6 pb-64">
                 {entryMode === 'manual' && (
                   <EntryForm
                     project={project}
                     setProject={setProjectDraft}
                     onDataChange={refreshWorkspace}
+                    loadedDrawing={loadedDrawing}
+                    onLoadedDrawingClear={() => setLoadedDrawing(null)}
                   />
                 )}
                 {entryMode === 'upload' && (
@@ -226,11 +366,12 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
                   project={project}
                   onDelete={deletePiece}
                   onDataChange={refreshWorkspace}
+                  onLoadDrawing={handleLoadDrawing}
                 />
               </div>
 
               {/* Source Data Footer */}
-              <div className="sticky bottom-0 border-t border-[#edf2f7] bg-white px-6 py-5 rounded-b-[36px]">
+              <div className="sticky bottom-0 z-20 border-t border-[#edf2f7] bg-white px-6 py-5 rounded-b-[36px]">
                 <div className="flex items-center justify-between flex-wrap gap-4">
                   <div className="text-sm text-[#64748b]">
                     {pieces.length === 0
