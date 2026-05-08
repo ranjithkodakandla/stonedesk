@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import PartDrawer from './PartDrawer';
 
 // ── Part options ────────────────────────────────────────────────────────────
@@ -54,6 +54,27 @@ const suggestThicknessForPart = (part = '', category = '') => {
     if (pattern.test(text)) return thickness;
   }
   return '';
+};
+
+export const MASTER_DESCRIPTIONS = [
+  'Island Tops', 'Perimeter Kitchen Tops', 'Range Tops',
+  'Kitchen Back Splash', 'Kitchen Side Splash',
+  'Vanity Top', 'Vanity Back Splash', 'Vanity Side Splash',
+  'Full Height Splash', 'Window Sill', 'Bar Top',
+];
+
+export const DEFAULT_THICKNESS_MAP = {
+  'Island Tops': '3CM',
+  'Perimeter Kitchen Tops': '3CM',
+  'Range Tops': '3CM',
+  'Kitchen Back Splash': '2CM',
+  'Kitchen Side Splash': '2CM',
+  'Vanity Top': '3CM',
+  'Vanity Back Splash': '2CM',
+  'Vanity Side Splash': '2CM',
+  'Full Height Splash': '2CM',
+  'Window Sill': '2CM',
+  'Bar Top': '3CM',
 };
 
 // ── Row factory ─────────────────────────────────────────────────────────────
@@ -243,20 +264,70 @@ const CornersBadge = ({ row, onClick }) => {
   );
 };
 
+// ── Description Combobox ─────────────────────────────────────────────────────
+const DescriptionCombobox = ({ value, onChange, options, placeholder }) => {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [pos, setPos] = useState(null);
+  const inputRef = useRef(null);
+
+  const openDropdown = () => {
+    if (inputRef.current) {
+      const r = inputRef.current.getBoundingClientRect();
+      setPos({ top: r.bottom, left: r.left, width: Math.max(r.width, 200) });
+    }
+    setDraft('');
+    setOpen(true);
+  };
+
+  const handleChange = (e) => {
+    setDraft(e.target.value);
+    onChange(e.target.value);
+    if (!open) openDropdown();
+  };
+
+  const handleBlur = () => { setTimeout(() => setOpen(false), 150); };
+
+  const handleSelect = (opt) => { onChange(opt); setDraft(''); setOpen(false); };
+
+  const filtered = draft ? options.filter(o => o.toLowerCase().includes(draft.toLowerCase())) : options;
+
+  return (
+    <div>
+      <input
+        ref={inputRef}
+        value={open ? draft : (value || '')}
+        onChange={handleChange}
+        onFocus={openDropdown}
+        onBlur={handleBlur}
+        className="grid-cell"
+        placeholder={placeholder}
+      />
+      {open && pos && (
+        <div style={{ position: 'fixed', top: pos.top, left: pos.left, minWidth: pos.width, zIndex: 9999 }}
+          className="bg-white border border-slate-200 rounded-md shadow-xl max-h-52 overflow-y-auto">
+          {filtered.length === 0
+            ? <div className="px-2 py-2 text-xs text-slate-400 italic">Custom text kept</div>
+            : filtered.map(opt => (
+              <button key={opt} type="button"
+                onMouseDown={e => { e.preventDefault(); handleSelect(opt); }}
+                className={`block w-full text-left px-3 py-1.5 text-xs transition-colors
+                  ${opt === value ? 'bg-blue-50 text-blue-700 font-semibold' : 'text-slate-700 hover:bg-slate-50'}`}>
+                {opt}
+              </button>
+            ))
+          }
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ── PiecesGrid ──────────────────────────────────────────────────────────────
-const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCategoryDetected, onThicknessSuggested, destinations, category, drawingNo }) => {
+const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCategoryDetected, onThicknessSuggested, destinations, category, drawingNo, masterDescriptions, descriptionThicknessMap }) => {
   const [drawerRow, setDrawerRow] = useState(null);
   const [drawerScrollTo, setDrawerScrollTo] = useState(null);
-  const validPartOptions = useMemo(() => new Set(PART_OPTIONS[category] || ALL_PART_OPTIONS), [category]);
-
-  useEffect(() => {
-    setRows(prev => prev.map(row => {
-      if (!row.part) return row;
-      if (!ALL_PART_OPTIONS.includes(row.part)) return row;
-      if (validPartOptions.has(row.part)) return row;
-      return { ...row, part: '' };
-    }));
-  }, [category, setRows, validPartOptions]);
+  const descOptions = useMemo(() => masterDescriptions || MASTER_DESCRIPTIONS, [masterDescriptions]);
 
   const openDrawer = (row, section = null) => {
     setDrawerRow(row);
@@ -264,22 +335,21 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
   };
 
   const updateRow = useCallback((id, field, value) => {
-    const nextCategory = field === 'part' ? (PART_CAT_MAP[value] || category) : null;
-    const nextThicknessHint = field === 'part' ? suggestThicknessForPart(value, nextCategory) : '';
     setRows(prev => {
       const updated = prev.map(r => {
         if (r._id !== id) return r;
         const next = { ...r, [field]: value };
-        if (field === 'part_no') next._partNoAuto = false; // user manually edited — protect from auto-updates
+        if (field === 'part_no') next._partNoAuto = false;
+        if (field === 'part' && value) {
+          const hint = (descriptionThicknessMap || DEFAULT_THICKNESS_MAP)[value];
+          if (hint) next.thickness = hint;
+        }
         return next;
       });
-      // When description changes, reindex so splash/non-splash suffix updates immediately
       if (field === 'part') return reindexAutoPartNos(updated, drawingNo, { forceReassign: true });
       return updated;
     });
-    if (field === 'part' && nextCategory) onCategoryDetected?.(nextCategory);
-    if (nextThicknessHint) onThicknessSuggested?.(nextThicknessHint);
-  }, [setRows, onCategoryDetected, onThicknessSuggested, drawingNo, category]);
+  }, [setRows, drawingNo, descriptionThicknessMap]);
 
   const updateRowFull = useCallback((updated) => {
     setRows(prev => prev.map(r => r._id === updated._id ? updated : r));
@@ -302,7 +372,7 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
     setRows(prev => {
       const src = prev.find(r => r._id === id);
       if (!src) return prev;
-      const copy = dupeRow(src);
+      const copy = { ...dupeRow(src), dest_qty_overrides: {} };
       const next = [...prev];
       next.splice(prev.indexOf(src) + 1, 0, copy);
       return reindexAutoPartNos(next, drawingNo);
@@ -333,7 +403,6 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
         r.edge_area = c[11]?.trim() || '';
         r.radius    = c[12]?.trim() || '-';
         r.notes     = c[13]?.trim() || '';
-        if (r.part && PART_CAT_MAP[r.part]) onCategoryDetected?.(PART_CAT_MAP[r.part]);
         return r;
       });
       if (parsed.length) {
@@ -341,10 +410,11 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
           const empty = prev.length === 1 && !prev[0].part_no && !prev[0].part && !prev[0].length;
           return reindexAutoPartNos(empty ? parsed : [...prev, ...parsed], drawingNo);
         });
-        const hints = parsed.map(r => suggestThicknessForPart(r.part, PART_CAT_MAP[r.part] || category)).filter(Boolean);
-        if (hints.length) onThicknessSuggested?.(hints[0]);
+        const map = descriptionThicknessMap || DEFAULT_THICKNESS_MAP;
+        const hint = parsed.map(r => map[r.part]).find(Boolean);
+        if (hint) onThicknessSuggested?.(hint);
       }
-  }, [setRows, onCategoryDetected, onThicknessSuggested, defaultThickness, thickness, drawingNo, category]);
+  }, [setRows, onThicknessSuggested, defaultThickness, thickness, drawingNo, descriptionThicknessMap]);
 
   const totalSqft = rows.reduce((s, r) => s + calcSqft(r.length, r.width, r.qty), 0);
   const totalWt   = rows.reduce((s, r) => s + calcWeight(r.length, r.width, r.qty, material, r.thickness, thickness), 0);
@@ -352,11 +422,6 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
 
   return (
     <div className="mt-4">
-      {/* Datalist filtered by active drawing category */}
-      <datalist key={category} id="part-descriptions">
-        {(PART_OPTIONS[category] || ALL_PART_OPTIONS).map(p => <option key={p} value={p} />)}
-      </datalist>
-
       {/* Toolbar */}
       <div className="flex items-center justify-between mb-2">
         <div className="text-sm font-semibold text-slate-900">
@@ -389,7 +454,7 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
               <th className="px-2 py-2 text-left w-24 font-medium">Edge</th>
               <th className="px-2 py-2 text-left w-24 font-medium">Radius</th>
               <th className="px-2 py-2 text-left min-w-[90px] font-medium">Notes</th>
-              <th className="px-2 py-2 w-24 font-medium"></th>
+              <th className="px-2 py-2 w-36 font-medium"></th>
             </tr>
           </thead>
           <tbody>
@@ -415,14 +480,13 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
                     />
                   </td>
 
-                  {/* Description — text with datalist suggestions */}
+                  {/* Description — searchable combobox */}
                   <td className="px-1 py-1">
-                    <input
-                      list="part-descriptions"
+                    <DescriptionCombobox
                       value={row.part || ''}
-                      onChange={e => updateRow(row._id, 'part', e.target.value)}
-                      className="grid-cell"
-                      placeholder="Vanity Top…"
+                      onChange={v => updateRow(row._id, 'part', v)}
+                      options={descOptions}
+                      placeholder="Description…"
                     />
                   </td>
 
@@ -443,11 +507,11 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
 
                   <td className="px-1 py-1">
                     <input
-                      value={thickness || row.thickness || defaultThickness || '3CM'}
+                      value={row.thickness || defaultThickness || thickness || '3CM'}
                       readOnly
                       tabIndex={-1}
                       className="grid-cell text-[11px] bg-slate-50 text-slate-500 cursor-not-allowed"
-                      aria-label="Thickness inherited from header"
+                      aria-label="Thickness set by description mapping"
                     />
                   </td>
 
@@ -484,6 +548,10 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
                   {/* Actions */}
                   <td className="px-1 py-1">
                     <div className="flex gap-1 items-center">
+                      <button type="button" onClick={() => duplicateRow(row._id)} title="Copy row — duplicates piece properties, not destinations"
+                        className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500 hover:bg-slate-50 hover:border-slate-400">
+                        Copy
+                      </button>
                       <button type="button" onClick={() => openDrawer(row)}
                         title="Edit destination and technical details"
                         className={`rounded border px-1.5 py-0.5 text-[10px] font-medium transition-colors
