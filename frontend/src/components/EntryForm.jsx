@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
-import PiecesGrid, { newRow, calcEdge, calcEdgeFromMap, edgeAreaFromMap, reindexAutoPartNos } from './PiecesGrid';
+import PiecesGrid, { newRow, calcEdge, calcEdgeFromMap, edgeAreaFromMap, reindexAutoPartNos, MASTER_DESCRIPTIONS, DEFAULT_THICKNESS_MAP } from './PiecesGrid';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
@@ -18,21 +18,27 @@ const parseFlatTokens = (text) =>
     .map(s => s.trim())
     .filter(Boolean);
 
-const formatFlatDraft = (text) => {
-  const raw = String(text || '')
-    .replace(/[\r\n\t]+/g, ',')
-    .replace(/\s+/g, '');
-  const tokens = raw.split(',').map(s => s.trim()).filter(Boolean);
+const formatFlatDraft = (text, format = '3-digit') => {
+  if (format === 'manual') {
+    return String(text || '').replace(/[\r\n\t]+/g, ',').replace(/\s+/g, '');
+  }
+  const digitWidth = format === '4-digit' ? 4 : 3;
+  const raw = String(text || '').replace(/[\r\n\t]+/g, ',').replace(/\s+/g, '');
+  const segments = raw.split(',').filter(Boolean);
+  const tokens = [];
+  for (const seg of segments) {
+    if (/^\d+$/.test(seg) && seg.length > digitWidth) {
+      for (let i = 0; i < seg.length; i += digitWidth) tokens.push(seg.slice(i, i + digitWidth));
+    } else {
+      tokens.push(seg);
+    }
+  }
   const deduped = [];
   const seen = new Set();
-  tokens.forEach(token => {
-    if (seen.has(token)) return;
-    seen.add(token);
-    deduped.push(token);
-  });
+  tokens.forEach(token => { if (!token || seen.has(token)) return; seen.add(token); deduped.push(token); });
   let next = deduped.join(',');
   const lastToken = deduped[deduped.length - 1] || '';
-  if (/^\d{3}$/.test(lastToken) && !raw.endsWith(',')) next += ',';
+  if (/^\d+$/.test(lastToken) && lastToken.length === digitWidth && !raw.endsWith(',')) next += ',';
   return next;
 };
 
@@ -73,7 +79,7 @@ const getNextNumericPartNo = (rows = [], drawingNo = '') => {
 };
 
 // ── Matrix Cell with bulk comma entry ──────────────────────────────────────
-const MatrixCell = ({ cellKey, entries, onSetEntries, onUpdateEntry, onRemoveEntry, buildingIdx, floorIdx, onMatrixPaste }) => {
+const MatrixCell = ({ cellKey, entries, onSetEntries, onUpdateEntry, onRemoveEntry, buildingIdx, floorIdx, onMatrixPaste, flatFormat }) => {
   const [bulkText, setBulkText] = useState('');
   const [bulkQty, setBulkQty] = useState(1);
 
@@ -116,7 +122,7 @@ const MatrixCell = ({ cellKey, entries, onSetEntries, onUpdateEntry, onRemoveEnt
       <div className="flex items-center gap-1">
         <input
           value={bulkText}
-          onChange={e => setBulkText(formatFlatDraft(e.target.value))}
+          onChange={e => setBulkText(formatFlatDraft(e.target.value, flatFormat || '3-digit'))}
           onBlur={commit}
           onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } }}
           onPaste={e => {
@@ -127,7 +133,7 @@ const MatrixCell = ({ cellKey, entries, onSetEntries, onUpdateEntry, onRemoveEnt
               return;
             }
             e.preventDefault();
-            setBulkText(formatFlatDraft(t));
+            setBulkText(formatFlatDraft(t, flatFormat || '3-digit'));
           }}
           className="input-field py-0.5 text-xs flex-1 min-w-0 font-mono"
           placeholder={entries.length ? 'Add more…' : '101,102,103'}
@@ -404,6 +410,24 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
     });
   };
 
+  const handleFlatFormatChange = async (e) => {
+    const value = e.target.value;
+    setProject(prev => ({ ...prev, flat_format: value }));
+    if (!project.id) return;
+    try { await axios.put(`${API_BASE}/projects/${project.id}`, { ...project, flat_format: value }); }
+    catch (err) { console.error('Failed to save flat format', err); }
+  };
+
+  const handleDescriptionThicknessChange = async (description, newThickness) => {
+    const newMap = { ...DEFAULT_THICKNESS_MAP, ...(project.description_thickness_map || {}), [description]: newThickness };
+    setProject(prev => ({ ...prev, description_thickness_map: newMap }));
+    // Update any existing rows that use this description immediately
+    setPieceRows(prev => prev.map(r => r.part === description ? { ...r, thickness: newThickness } : r));
+    if (!project.id) return;
+    try { await axios.put(`${API_BASE}/projects/${project.id}`, { ...project, description_thickness_map: newMap }); }
+    catch (err) { console.error('Failed to save thickness map', err); }
+  };
+
   // ── Quick Actions ──────────────────────────────────────────────────────────
   const handleDuplicateDrawing = () => {
     setDrawingCtx(prev => ({ ...prev, drawing: '', unit: '' }));
@@ -553,16 +577,19 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
 
   useEffect(() => {
     const nextThickness = drawingCtx.thickness || project.thickness || '3CM';
+    const thicknessMap = { ...DEFAULT_THICKNESS_MAP, ...(project.description_thickness_map || {}) };
     setPieceRows(prev => {
       let changed = false;
       const nextRows = prev.map(row => {
+        // Leave rows alone if their description already drives thickness
+        if (row.part && thicknessMap[row.part]) return row;
         if (row.thickness === nextThickness) return row;
         changed = true;
         return { ...row, thickness: nextThickness };
       });
       return changed ? nextRows : prev;
     });
-  }, [drawingCtx.thickness, project.thickness]);
+  }, [drawingCtx.thickness, project.thickness, project.description_thickness_map]);
 
   const activeDests = destinations.filter(d => d.building || d.floor || d.flat);
   const destCount = activeDests.length || 1;
@@ -611,7 +638,7 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
             drawing: drawingCtx.drawing || '',
             length: row.length,
             width: row.width,
-            thickness: drawingCtx.thickness || row.thickness || project.thickness || '3CM',
+            thickness: row.thickness || drawingCtx.thickness || project.thickness || '3CM',
             unit: drawingCtx.unit || '',
             sink_type: row.sink_type || 'No Sink',
             sink_cut: row.sink_cut || '-',
@@ -751,6 +778,48 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
           <div><label className="label-text">Job #</label><input name="job_number" value={project.job_number || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
           <div><label className="label-text">Date</label><input type="date" name="date" value={project.date || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
         </div>
+
+        {/* ── Flat Format & Thickness Mapping ── */}
+        <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-1 md:grid-cols-8 gap-4">
+          <div className="md:col-span-2">
+            <label className="label-text">Flat # Format</label>
+            <div className="flex gap-3 mt-1.5">
+              {[['3-digit', '3-digit'], ['4-digit', '4-digit'], ['manual', 'Manual']].map(([v, l]) => (
+                <label key={v} className="flex items-center gap-1 cursor-pointer select-none">
+                  <input type="radio" name="flat_format" value={v}
+                    checked={(project.flat_format || '3-digit') === v}
+                    onChange={handleFlatFormatChange}
+                    className="text-blue-600" />
+                  <span className="text-xs text-slate-600">{l}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="md:col-span-6">
+            <label className="label-text">Default Thickness per Description</label>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-1.5 mt-1.5">
+              {MASTER_DESCRIPTIONS.map(desc => {
+                const map = { ...DEFAULT_THICKNESS_MAP, ...(project.description_thickness_map || {}) };
+                const current = map[desc] || '3CM';
+                return (
+                  <div key={desc} className="flex items-center gap-2">
+                    <span className="text-xs text-slate-600 truncate flex-1 min-w-0" title={desc}>{desc}</span>
+                    <div className="flex gap-0.5 shrink-0">
+                      {['2CM', '3CM'].map(t => (
+                        <button key={t} type="button"
+                          onClick={() => handleDescriptionThicknessChange(desc, t)}
+                          className={`px-1.5 py-0.5 text-[10px] rounded border font-medium transition-colors
+                            ${current === t ? 'bg-slate-700 text-white border-slate-700' : 'bg-white text-slate-500 border-slate-200 hover:border-slate-400'}`}>
+                          {t}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* ── Drawing Workspace ── */}
@@ -822,8 +891,7 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
                   <option>Vanity</option><option>Kitchen</option><option>Laundry</option><option>Island</option><option>Splashes</option><option>Hearth</option><option>Bar</option><option>Utility</option><option>Other</option>
                 </select>
               </div>
-              <div><label className="label-text">Thickness</label><select name="thickness" value={drawingCtx.thickness} onChange={handleCtx} className="input-field"><option>2CM</option><option>3CM</option><option>Mixed</option></select></div>
-              <div><label className="label-text">Fragility</label><select name="fragility" value={drawingCtx.fragility} onChange={handleCtx} className="input-field"><option>Standard</option><option>Fragile</option><option>High</option></select></div>
+<div><label className="label-text">Fragility</label><select name="fragility" value={drawingCtx.fragility} onChange={handleCtx} className="input-field"><option>Standard</option><option>Fragile</option><option>High</option></select></div>
               <div><label className="label-text">Orientation</label><select name="orientation" value={drawingCtx.orientation} onChange={handleCtx} className="input-field"><option>Auto</option><option>No Rotate</option><option>Long Edge Vertical</option><option>Finished Face Protected</option></select></div>
               <div><label className="label-text">Priority</label><select name="delivery_priority" value={drawingCtx.delivery_priority} onChange={handleCtx} className="input-field"><option>Standard</option><option>First Off</option><option>Last Off</option><option>Rush</option></select></div>
               <div><label className="label-text">Stacking</label><select name="stack_preference" value={drawingCtx.stack_preference} onChange={handleCtx} className="input-field"><option>Auto</option><option>No Stack</option><option>Stack Allowed</option></select></div>
@@ -906,6 +974,7 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
                                     buildingIdx={matrixConfig.buildings.indexOf(building)}
                                     floorIdx={matrixConfig.floors.indexOf(floor)}
                                     onMatrixPaste={handleMatrixPaste}
+                                    flatFormat={project.flat_format || '3-digit'}
                                   />
                                 </td>
                               );
@@ -940,6 +1009,8 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
               }}
               destinations={destinations}
               drawingNo={drawingCtx.drawing}
+              masterDescriptions={MASTER_DESCRIPTIONS}
+              descriptionThicknessMap={{ ...DEFAULT_THICKNESS_MAP, ...(project.description_thickness_map || {}) }}
             />
           </div>
 
