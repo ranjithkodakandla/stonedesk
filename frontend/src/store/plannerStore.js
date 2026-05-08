@@ -21,6 +21,18 @@ const withSelectedCrate = (crates, insightsCrates, currentId) => {
   return available[0]?.id || null;
 };
 
+const triggerBrowserDownload = (url, filename) => {
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename || '';
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => window.URL.revokeObjectURL(url), 1500);
+};
+
 export const usePlannerStore = create((set, get) => ({
   projectId: null,
   project: emptyProject,
@@ -314,15 +326,9 @@ export const usePlannerStore = create((set, get) => ({
       }
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
       const disposition = response.headers.get('Content-Disposition') || '';
       const filenameMatch = disposition.match(/filename=([^;]+)/);
-      link.download = filenameMatch ? filenameMatch[1] : `StoneDesk_export.xlsx`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
+      triggerBrowserDownload(url, filenameMatch ? filenameMatch[1] : `StoneDesk_export.xlsx`);
     } catch (err) {
       console.error('Export error:', err);
       alert('Export failed. Please regenerate plan or contact support.');
@@ -345,15 +351,9 @@ export const usePlannerStore = create((set, get) => ({
       }
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
       const disposition = response.headers.get('Content-Disposition') || '';
       const filenameMatch = disposition.match(/filename=([^;]+)/);
-      link.download = filenameMatch ? filenameMatch[1] : `SourceData_export.xlsx`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
+      triggerBrowserDownload(url, filenameMatch ? filenameMatch[1] : `SourceData_export.xlsx`);
     } catch (err) {
       console.error('Source data export error:', err);
       alert('Source data export failed.');
