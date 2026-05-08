@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import PartDrawer from './PartDrawer';
 
 // ── Part options ────────────────────────────────────────────────────────────
@@ -14,8 +14,47 @@ const PART_OPTIONS = {
   Other:    ['Custom Part', 'Bar Top', 'Laundry Top', 'Other'],
 };
 const ALL_PART_OPTIONS = Object.values(PART_OPTIONS).flat();
-const PART_CAT_MAP = {};
-Object.entries(PART_OPTIONS).forEach(([cat, parts]) => parts.forEach(p => { PART_CAT_MAP[p] = cat; }));
+const PART_CAT_MAP = {
+  'Vanity Top': 'Vanity',
+  'Kitchen Top': 'Kitchen',
+  'Island Top': 'Island',
+  'Laundry Top': 'Laundry',
+  'Hearth Surround': 'Hearth',
+  'Hearth Slab': 'Hearth',
+  Mantle: 'Hearth',
+  'Hearth Step': 'Hearth',
+  'Bar Top': 'Bar',
+  'Bar Back Splash': 'Bar',
+  'Bar Side Splash': 'Bar',
+  'Utility Top': 'Utility',
+  Shelf: 'Utility',
+  'Step Tread': 'Utility',
+  'Counter Extension': 'Kitchen',
+  'Range Top': 'Kitchen',
+  'Kitchen Perimeter': 'Kitchen',
+  'Kitchen Others': 'Kitchen',
+  'Custom Part': 'Other',
+  Other: 'Other',
+};
+
+const PART_THICKNESS_HINTS = [
+  [/window sill/i, '2CM'],
+  [/back splash/i, '2CM'],
+  [/side splash/i, '2CM'],
+  [/full height splash/i, '2CM'],
+  [/splash/i, '2CM'],
+  [/kitchen/i, '3CM'],
+  [/island/i, '3CM'],
+  [/vanity/i, '3CM'],
+];
+
+const suggestThicknessForPart = (part = '', category = '') => {
+  const text = `${part || ''} ${category || ''}`.trim();
+  for (const [pattern, thickness] of PART_THICKNESS_HINTS) {
+    if (pattern.test(text)) return thickness;
+  }
+  return '';
+};
 
 // ── Row factory ─────────────────────────────────────────────────────────────
 const DEFAULT_EDGE_MAP     = { top: 'none', bottom: 'none', left: 'none', right: 'none' };
@@ -58,17 +97,55 @@ const incrementPartNo = (partNo) => {
 export const isSplashPart = (part) => /splash/i.test(part || '');
 
 // Reindex all _partNoAuto rows: splash → letter suffix (A,B,C), others → number suffix (01,02,03)
-export const reindexAutoPartNos = (rows, drawingNo) => {
-  let numIdx = 0, alphaIdx = 0;
+const getAutoPrefix = (drawingNo) => (drawingNo ? `${drawingNo}-` : '');
+
+const parseAutoPartNo = (partNo, drawingNo) => {
+  const prefix = getAutoPrefix(drawingNo);
+  if (!prefix || !String(partNo || '').startsWith(prefix)) return null;
+  const suffix = String(partNo).slice(prefix.length);
+  if (/^\d+$/.test(suffix)) return { kind: 'num', value: Number(suffix), width: suffix.length };
+  if (/^[A-Z]$/.test(suffix)) return { kind: 'alpha', value: suffix.charCodeAt(0) - 64 };
+  return null;
+};
+
+export const reindexAutoPartNos = (rows, drawingNo, options = {}) => {
+  const forceReassign = Boolean(options.forceReassign);
+  const prefix = getAutoPrefix(drawingNo);
+  if (!prefix) return rows.map(row => (row._partNoAuto ? { ...row, part_no: '' } : row));
+
+  if (forceReassign) {
+    let numIdx = 0;
+    let alphaIdx = 0;
+    return rows.map(row => {
+      if (!row._partNoAuto) return row;
+      if (isSplashPart(row.part)) {
+        alphaIdx += 1;
+        return { ...row, part_no: `${prefix}${String.fromCharCode(64 + alphaIdx)}` };
+      }
+      numIdx += 1;
+      return { ...row, part_no: `${prefix}${String(numIdx).padStart(2, '0')}` };
+    });
+  }
+
+  let maxNum = 0;
+  let maxAlpha = 0;
+  rows.forEach(row => {
+    if (!row._partNoAuto) return;
+    const parsed = parseAutoPartNo(row.part_no, drawingNo);
+    if (parsed?.kind === 'num') maxNum = Math.max(maxNum, parsed.value);
+    if (parsed?.kind === 'alpha') maxAlpha = Math.max(maxAlpha, parsed.value);
+  });
+
   return rows.map(row => {
     if (!row._partNoAuto) return row;
+    const parsed = parseAutoPartNo(row.part_no, drawingNo);
+    if (parsed) return row;
     if (isSplashPart(row.part)) {
-      alphaIdx++;
-      return { ...row, part_no: drawingNo ? `${drawingNo}-${String.fromCharCode(64 + alphaIdx)}` : '' };
-    } else {
-      numIdx++;
-      return { ...row, part_no: drawingNo ? `${drawingNo}-${String(numIdx).padStart(2, '0')}` : '' };
+      maxAlpha += 1;
+      return { ...row, part_no: `${prefix}${String.fromCharCode(64 + maxAlpha)}` };
     }
+    maxNum += 1;
+    return { ...row, part_no: `${prefix}${String(maxNum).padStart(2, '0')}` };
   });
 };
 
@@ -94,7 +171,7 @@ const WEIGHT_FACTORS = {
 };
 
 const calcWeight = (l, w, qty, material, rowThickness, projectThickness) => {
-  const thick = rowThickness || projectThickness || '3CM';
+  const thick = projectThickness || rowThickness || '3CM';
   const f = (WEIGHT_FACTORS[material] || WEIGHT_FACTORS.Granite)[thick] || 7.5;
   return calcSqft(l, w, qty) * f;
 };
@@ -167,9 +244,19 @@ const CornersBadge = ({ row, onClick }) => {
 };
 
 // ── PiecesGrid ──────────────────────────────────────────────────────────────
-const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCategoryDetected, destinations, category, drawingNo }) => {
+const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCategoryDetected, onThicknessSuggested, destinations, category, drawingNo }) => {
   const [drawerRow, setDrawerRow] = useState(null);
   const [drawerScrollTo, setDrawerScrollTo] = useState(null);
+  const validPartOptions = useMemo(() => new Set(PART_OPTIONS[category] || ALL_PART_OPTIONS), [category]);
+
+  useEffect(() => {
+    setRows(prev => prev.map(row => {
+      if (!row.part) return row;
+      if (!ALL_PART_OPTIONS.includes(row.part)) return row;
+      if (validPartOptions.has(row.part)) return row;
+      return { ...row, part: '' };
+    }));
+  }, [category, setRows, validPartOptions]);
 
   const openDrawer = (row, section = null) => {
     setDrawerRow(row);
@@ -177,19 +264,22 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
   };
 
   const updateRow = useCallback((id, field, value) => {
+    const nextCategory = field === 'part' ? (PART_CAT_MAP[value] || category) : null;
+    const nextThicknessHint = field === 'part' ? suggestThicknessForPart(value, nextCategory) : '';
     setRows(prev => {
       const updated = prev.map(r => {
         if (r._id !== id) return r;
         const next = { ...r, [field]: value };
-        if (field === 'part' && PART_CAT_MAP[value]) onCategoryDetected?.(PART_CAT_MAP[value]);
         if (field === 'part_no') next._partNoAuto = false; // user manually edited — protect from auto-updates
         return next;
       });
       // When description changes, reindex so splash/non-splash suffix updates immediately
-      if (field === 'part') return reindexAutoPartNos(updated, drawingNo);
+      if (field === 'part') return reindexAutoPartNos(updated, drawingNo, { forceReassign: true });
       return updated;
     });
-  }, [setRows, onCategoryDetected, drawingNo]);
+    if (field === 'part' && nextCategory) onCategoryDetected?.(nextCategory);
+    if (nextThicknessHint) onThicknessSuggested?.(nextThicknessHint);
+  }, [setRows, onCategoryDetected, onThicknessSuggested, drawingNo, category]);
 
   const updateRowFull = useCallback((updated) => {
     setRows(prev => prev.map(r => r._id === updated._id ? updated : r));
@@ -224,35 +314,37 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
     if (!text.includes('\t') && !text.includes('\n')) return;
     e.preventDefault();
     const lines = text.replace(/\r/g, '').split('\n').filter(l => l.trim());
-    const parsed = lines.map(line => {
-      const c = line.split('\t');
-      const r = newRow();
-      // Column order: Part #, Description, Length, Width, Thickness, Qty, Sink, Cuts, Taps, Grooves, Edge, Area, Radius, Notes
-      r.part_no     = c[0]?.trim() || '';
-      r._partNoAuto = !r.part_no; // treat as auto only if pasted Part # was empty
-      r.part      = c[1]?.trim() || '';
-      r.length    = c[2]?.trim() || '';
-      r.width     = c[3]?.trim() || '';
-      r.thickness = c[4]?.trim() || defaultThickness || thickness || '3CM';
-      r.qty       = Number(c[5]?.trim()) || 1;
+      const parsed = lines.map(line => {
+        const c = line.split('\t');
+        const r = newRow();
+        // Column order: Part #, Description, Length, Width, Thickness, Qty, Sink, Cuts, Taps, Grooves, Edge, Area, Radius, Notes
+        r.part_no     = c[0]?.trim() || '';
+        r._partNoAuto = !r.part_no; // treat as auto only if pasted Part # was empty
+        r.part      = c[1]?.trim() || '';
+        r.length    = c[2]?.trim() || '';
+        r.width     = c[3]?.trim() || '';
+        r.thickness = c[4]?.trim() || defaultThickness || thickness || '3CM';
+        r.qty       = Number(c[5]?.trim()) || 1;
       r.sink_type = c[6]?.trim() || 'No Sink';
       r.sink_cut  = c[7]?.trim() || '-';
       r.tap_holes = c[8]?.trim() || '-';
       r.grooves   = c[9]?.trim() || '-';
       r.edge      = c[10]?.trim() || 'None';
-      r.edge_area = c[11]?.trim() || '';
-      r.radius    = c[12]?.trim() || '-';
-      r.notes     = c[13]?.trim() || '';
-      if (r.part && PART_CAT_MAP[r.part]) onCategoryDetected?.(PART_CAT_MAP[r.part]);
-      return r;
-    });
-    if (parsed.length) {
-      setRows(prev => {
-        const empty = prev.length === 1 && !prev[0].part_no && !prev[0].part && !prev[0].length;
-        return empty ? parsed : [...prev, ...parsed];
+        r.edge_area = c[11]?.trim() || '';
+        r.radius    = c[12]?.trim() || '-';
+        r.notes     = c[13]?.trim() || '';
+        if (r.part && PART_CAT_MAP[r.part]) onCategoryDetected?.(PART_CAT_MAP[r.part]);
+        return r;
       });
-    }
-  }, [setRows, onCategoryDetected]);
+      if (parsed.length) {
+        setRows(prev => {
+          const empty = prev.length === 1 && !prev[0].part_no && !prev[0].part && !prev[0].length;
+          return reindexAutoPartNos(empty ? parsed : [...prev, ...parsed], drawingNo);
+        });
+        const hints = parsed.map(r => suggestThicknessForPart(r.part, PART_CAT_MAP[r.part] || category)).filter(Boolean);
+        if (hints.length) onThicknessSuggested?.(hints[0]);
+      }
+  }, [setRows, onCategoryDetected, onThicknessSuggested, defaultThickness, thickness, drawingNo, category]);
 
   const totalSqft = rows.reduce((s, r) => s + calcSqft(r.length, r.width, r.qty), 0);
   const totalWt   = rows.reduce((s, r) => s + calcWeight(r.length, r.width, r.qty, material, r.thickness, thickness), 0);
@@ -261,7 +353,7 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
   return (
     <div className="mt-4">
       {/* Datalist filtered by active drawing category */}
-      <datalist id="part-descriptions">
+      <datalist key={category} id="part-descriptions">
         {(PART_OPTIONS[category] || ALL_PART_OPTIONS).map(p => <option key={p} value={p} />)}
       </datalist>
 
@@ -350,14 +442,13 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
                   </td>
 
                   <td className="px-1 py-1">
-                    <select
-                      value={row.thickness || '3CM'}
-                      onChange={e => updateRow(row._id, 'thickness', e.target.value)}
-                      className="grid-cell text-[11px]">
-                      <option>2CM</option>
-                      <option>3CM</option>
-                      <option>Mixed</option>
-                    </select>
+                    <input
+                      value={thickness || row.thickness || defaultThickness || '3CM'}
+                      readOnly
+                      tabIndex={-1}
+                      className="grid-cell text-[11px] bg-slate-50 text-slate-500 cursor-not-allowed"
+                      aria-label="Thickness inherited from header"
+                    />
                   </td>
 
                   <td className="px-2 py-1 text-slate-500 tabular-nums">{sqft > 0 ? sqft.toFixed(1) : '—'}</td>
@@ -394,16 +485,12 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
                   <td className="px-1 py-1">
                     <div className="flex gap-1 items-center">
                       <button type="button" onClick={() => openDrawer(row)}
-                        title="Open advanced details"
+                        title="Edit destination and technical details"
                         className={`rounded border px-1.5 py-0.5 text-[10px] font-medium transition-colors
                           ${isActive
                             ? 'bg-blue-100 border-blue-300 text-blue-700'
                             : 'bg-white border-slate-200 text-slate-500 hover:border-slate-400 hover:bg-slate-50'}`}>
-                        {isActive ? '◀ Open' : 'Edit ›'}
-                      </button>
-                      <button type="button" onClick={() => duplicateRow(row._id)} title="Duplicate row"
-                        className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] text-slate-500 hover:bg-slate-100">
-                        ⧉
+                        {isActive ? '◀ Edit' : 'Edit'}
                       </button>
                       <button type="button" onClick={() => deleteRow(row._id)} title="Delete row"
                         className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] text-rose-400 hover:bg-rose-50">
@@ -420,7 +507,7 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
 
       <p className="mt-1 text-[10px] text-slate-400">
         Paste from Excel: <span className="font-mono">Part #, Description, Length, Width, Thickness, Qty, Sink, Cuts, Taps, Grooves, Edge, Area, Radius, Notes</span>
-        &nbsp;— then paste anywhere in the grid. Click <span className="font-medium">Edit ›</span> or any badge to open advanced details.
+        &nbsp;— then paste anywhere in the grid. Click <span className="font-medium">Edit</span> or any badge to review destination and technical details.
       </p>
 
       {/* Part Details Drawer */}

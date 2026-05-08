@@ -52,7 +52,7 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo }) => {
     }
   }, [row._id, scrollTo]);
 
-  const push = (next) => { setLocal(next); onUpdate(next); };
+  const push = (next) => { setLocal(next); };
   const set = (k, v) => push({ ...local, [k]: v });
   const setEdge = (side, v) => {
     const newEdgeMap = { ...local.edge_map, [side]: v };
@@ -95,6 +95,10 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo }) => {
   );
 
   const validDests = (destinations || []).filter(d => d.building || d.floor || d.flat);
+  const handleSave = () => {
+    onUpdate?.(local);
+    onClose?.();
+  };
 
   return (
     <>
@@ -112,6 +116,7 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo }) => {
               )}
             </div>
             {local.part && <div className="text-xs text-slate-500 mt-0.5">{local.part}</div>}
+            <div className="text-[10px] text-slate-400 mt-1">Matrix family review updates this same part row.</div>
           </div>
           <button type="button" onClick={onClose}
             className="w-7 h-7 flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200 transition-colors text-base">
@@ -257,7 +262,7 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo }) => {
 
           {/* Destination Qty Overrides */}
           {validDests.length > 0 && (
-            <Section id="section-dest" title="Per-Destination Qty Overrides" defaultOpen={false}>
+            <Section id="section-dest" title="Matrix Family / Destination Review" defaultOpen={false}>
               <p className="text-[11px] text-slate-500 mb-3">
                 Override qty per destination. Leave blank to use default qty
                 <span className="font-bold text-slate-700"> ({local.qty ?? 1})</span>.
@@ -292,6 +297,20 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo }) => {
               placeholder="Special instructions, part notes..." />
           </Section>
 
+        </div>
+
+        <div className="shrink-0 border-t border-slate-200 bg-white px-5 py-4 flex items-center justify-between gap-3">
+          <div className="text-[11px] text-slate-500">
+            Changes are applied when you click Save.
+          </div>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={onClose} className="btn-primary bg-white text-slate-700 border border-slate-200 hover:bg-slate-50">
+              Cancel
+            </button>
+            <button type="button" onClick={handleSave} className="btn-primary">
+              Save
+            </button>
+          </div>
         </div>
       </div>
     </>
