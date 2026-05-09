@@ -4,6 +4,7 @@ import axios from 'axios';
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
 const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing }) => {
+  const [partSearch, setPartSearch] = useState('');
   const [selectedIds, setSelectedIds] = useState([]);
   const [editMode, setEditMode] = useState(null);
   const [editDraft, setEditDraft] = useState(null);
@@ -252,12 +253,23 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing })
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
   };
 
+  const filteredPieces = useMemo(() => {
+    const q = partSearch.trim().toLowerCase();
+    if (!q) return pieces;
+    return pieces.filter(p =>
+      String(p.part_no || '').toLowerCase().includes(q) ||
+      String(p.drawing || '').toLowerCase().includes(q)
+    );
+  }, [pieces, partSearch]);
+
   const toggleAllSelection = () => {
-    if (selectedIds.length === pieces.length) {
-      setSelectedIds([]);
-      return;
+    const visibleIds = filteredPieces.map(p => p.id);
+    const allVisibleSelected = visibleIds.every(id => selectedIds.includes(id));
+    if (allVisibleSelected) {
+      setSelectedIds(prev => prev.filter(id => !visibleIds.includes(id)));
+    } else {
+      setSelectedIds(prev => [...new Set([...prev, ...visibleIds])]);
     }
-    setSelectedIds(pieces.map((piece) => piece.id));
   };
 
   const selectedPieces = pieces.filter((piece) => selectedIds.includes(piece.id));
@@ -344,6 +356,18 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing })
 
   return (
     <div className="mt-6">
+      <div className="flex items-center gap-2 mb-2">
+        <label className="text-xs text-[#64748b] whitespace-nowrap">Search Part #</label>
+        <input
+          value={partSearch}
+          onChange={e => setPartSearch(e.target.value)}
+          className="rounded border border-[#e2e8f0] px-2 py-1 text-xs w-40 outline-none focus:border-[#94a3b8]"
+          placeholder="1051…"
+        />
+        {partSearch && (
+          <span className="text-xs text-[#94a3b8]">{filteredPieces.length} of {pieces.length}</span>
+        )}
+      </div>
       <div className="flex items-center justify-between mb-3">
         <div className="text-sm text-[#64748b]">
           {selectedIds.length > 0 ? `${selectedIds.length} selected` : 'Select rows to edit them together'}
@@ -385,7 +409,7 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing })
               <th className="p-3 w-10 sticky left-0 z-20 bg-[#f1f5f9]">
                 <input
                   type="checkbox"
-                  checked={pieces.length > 0 && selectedIds.length === pieces.length}
+                  checked={filteredPieces.length > 0 && filteredPieces.every(p => selectedIds.includes(p.id))}
                   onChange={toggleAllSelection}
                   className="h-4 w-4"
                 />
@@ -413,7 +437,7 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing })
             </tr>
           </thead>
           <tbody>
-            {pieces.map((p) => {
+            {filteredPieces.map((p) => {
               const sqft = (p.length * p.width) / 144;
               const wt = getWeight(p);
               return (
@@ -487,6 +511,7 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing })
               );
             })}
             {pieces.length === 0 && <tr><td colSpan="21" className="p-8 text-center text-[#64748b] italic">No pieces added to this project yet.</td></tr>}
+            {pieces.length > 0 && filteredPieces.length === 0 && <tr><td colSpan="21" className="p-8 text-center text-[#64748b] italic">No pieces match &ldquo;{partSearch}&rdquo;</td></tr>}
           </tbody>
         </table>
       </div>

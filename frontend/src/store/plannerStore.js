@@ -141,6 +141,28 @@ export const usePlannerStore = create((set, get) => ({
     }
   },
 
+  generateFamilyPlan: async ({ dispatchBasis = 'flat', dispatchValues = [] } = {}) => {
+    set({ isRefreshing: true });
+    try {
+      await axios.post(`${API_BASE}/projects/${get().projectId}/crates/auto-generate`, {
+        packing_strategy: 'family',
+        dispatch_basis: dispatchBasis,
+        dispatch_values: dispatchValues,
+        max_weight: 1000,
+      });
+      await get().refreshWorkspace();
+      set({ activeTab: 'summary' });
+    } finally {
+      set({ isRefreshing: false });
+    }
+  },
+
+  approveProject: async (status) => {
+    const projectId = get().projectId;
+    await axios.patch(`${API_BASE}/projects/${projectId}/status`, { status });
+    await get().refreshWorkspace();
+  },
+
   regenerateWithStrategy: async (strategy, weights = {}) => {
     set({ isRefreshing: true });
     try {

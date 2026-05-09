@@ -19,6 +19,7 @@ Falls back to pdfplumber table extraction for non-Template-A PDFs.
 """
 
 import io
+import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -73,9 +74,9 @@ HEADER_ALIASES: Dict[str, List[str]] = {
 _TITLE_Y_MAX = 115.0
 _DIM_X_MAX = 450.0
 _DIM_Y_MIN = 120.0
-_MATRIX_X_MIN = 460.0
+_MATRIX_X_MIN = 455.0
 _MATRIX_Y_MIN = 130.0
-_MATRIX_Y_MAX = 560.0   # expanded: was 300, now covers full page height
+_MATRIX_Y_MAX = 780.0   # expanded to include bottom-page destination matrices
 
 # Title block x-bands (±tolerance)
 _TB = {
@@ -102,7 +103,7 @@ _MATRIX_ROW_TOL = 18.0   # y-band tolerance for flat→building association (was
 
 # Drawing-area shape detection thresholds
 _DRAWING_X_MAX = 458.0   # x boundary for piece-shape search
-_SHAPE_MIN_AREA = 350.0  # pts² — excludes hairlines and tiny annotation boxes
+_SHAPE_MIN_AREA = 220.0  # pts² — excludes hairlines and tiny annotation boxes
 _SHAPE_MIN_DIM  = 10.0   # pts — minimum width OR height for a candidate shape
 
 # Words that appear in the building column but are NOT building identifiers
@@ -110,6 +111,8 @@ _BLD_SKIP_WORDS = {
     "IN", "QT", "QTY", "TOT", "SUM", "BLK", "FLR", "BLD", "FLT", "NO",
     "BLDG", "FLAT", "UNIT", "FLOOR", "TOTAL", "BLOCK", "TOWER",
 }
+
+PARSER_DEBUG = os.getenv("PDF_PARSER_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -143,6 +146,10 @@ def _normalize_thickness(val: str) -> str:
     if not val:
         return ""
     v = val.strip().upper()
+    has_2 = ("2" in v) and ("CM" in v or "20" in v)
+    has_3 = ("3" in v) and ("CM" in v or "30" in v)
+    if has_2 and has_3:
+        return "Mixed"
     if "2" in v and ("CM" in v or "20" in v):
         return "2CM"
     if "3" in v and ("CM" in v or "30" in v):
@@ -219,6 +226,245 @@ def _score_field(field: str, val: Any) -> float:
     return 0.8
 
 
+def _filter_offset_dims(values: List[float], tol: float = 1.5) -> List[float]:
+    """
+    Remove offset sub-components from a list of dimension values.
+    Rule: if a + b ≈ c for any triple (c > a, c > b), a and b are offset
+    dimensions (e.g. sink-to-edge distances) and should be discarded.
+    Example: [55, 28, 27, 22.5] → 28+27=55 → returns [55, 22.5].
+    """
+    if len(values) < 3:
+        return list(values)
+    vals = sorted(set(values), reverse=True)
+    to_remove: set = set()
+    for i, big in enumerate(vals):
+        for j in range(i + 1, len(vals)):
+            a = vals[j]
+            if a in to_remove:
+                continue
+            for k in range(j + 1, len(vals)):
+                b = vals[k]
+                if b in to_remove:
+                    continue
+                if abs(a + b - big) <= tol:
+                    to_remove.add(a)
+                    to_remove.add(b)
+    return [v for v in vals if v not in to_remove]
+
+
+def _debug_enabled(project: Optional[Dict] = None) -> bool:
+    project = project or {}
+    if project.get("parser_debug") or project.get("pdf_debug") or project.get("debug_parser"):
+        return True
+    return PARSER_DEBUG
+
+
+def _new_page_report(page_num: int, template: str) -> Dict[str, Any]:
+    return {
+        "page": page_num,
+        "template": template,
+        "drawing_no": "",
+        "unit": "",
+        "category": "",
+        "rectangles_found": 0,
+        "rectangles_kept": 0,
+        "rectangles_filtered": 0,
+        "dimensions_found": 0,
+        "dimensions_bound": 0,
+        "destinations_found": 0,
+        "pieces_found": 0,
+        "expected_rows": 0,
+        "generated_rows": 0,
+        "warnings": [],
+    }
+
+
+def _log_page_report(report: Dict[str, Any], debug: bool = False) -> None:
+    if not debug:
+        return
+    warning_str = f" warnings={'; '.join(report['warnings'])}" if report.get("warnings") else ""
+    print(
+        "[PDF] p{page} {template} drawing={drawing} unit={unit} pieces={pieces} dests={dests} "
+        "rows={rows}/{expected} rects={rects}/{kept} dims={dims}/{bound}{warnings}".format(
+            page=report.get("page", "?"),
+            template=report.get("template", "unknown"),
+            drawing=report.get("drawing_no", ""),
+            unit=report.get("unit", ""),
+            pieces=report.get("pieces_found", 0),
+            dests=report.get("destinations_found", 0),
+            rows=report.get("generated_rows", 0),
+            expected=report.get("expected_rows", 0),
+            rects=report.get("rectangles_found", 0),
+            kept=report.get("rectangles_kept", 0),
+            dims=report.get("dimensions_found", 0),
+            bound=report.get("dimensions_bound", 0),
+            warnings=warning_str,
+        )
+    )
+
+
+def _summarize_page_reports(page_reports: List[Dict[str, Any]]) -> Dict[str, Any]:
+    total = len(page_reports)
+    parsed = sum(1 for p in page_reports if p.get("generated_rows", 0) > 0)
+    zero_rows = sum(1 for p in page_reports if p.get("generated_rows", 0) == 0)
+    overage = sum(1 for p in page_reports if "overage" in " ".join(p.get("warnings", [])).lower())
+    blank_or_legend = sum(
+        1
+        for p in page_reports
+        if p.get("generated_rows", 0) == 0 and "overage" not in " ".join(p.get("warnings", [])).lower()
+    )
+    return {
+        "pages_total": total,
+        "pages_parsed": parsed,
+        "pages_zero_rows": zero_rows,
+        "pages_overage": overage,
+        "pages_blank_or_legend": blank_or_legend,
+    }
+
+
+def _iter_point_coords(value: Any):
+    if value is None:
+        return
+    if hasattr(value, "x") and hasattr(value, "y"):
+        yield float(value.x), float(value.y)
+        return
+    if hasattr(value, "x0") and hasattr(value, "y0") and hasattr(value, "x1") and hasattr(value, "y1"):
+        yield float(value.x0), float(value.y0)
+        yield float(value.x1), float(value.y1)
+        return
+    if isinstance(value, (tuple, list)):
+        if len(value) >= 2 and all(isinstance(v, (int, float)) for v in value[:2]):
+            yield float(value[0]), float(value[1])
+            return
+        for item in value:
+            yield from _iter_point_coords(item)
+
+
+def _drawing_bbox(path: Dict[str, Any]) -> Optional[Tuple[float, float, float, float]]:
+    rect = path.get("rect")
+    if rect is not None:
+        try:
+            x0, y0, x1, y1 = float(rect[0]), float(rect[1]), float(rect[2]), float(rect[3])
+            if x1 > x0 and y1 > y0:
+                return x0, y0, x1, y1
+        except Exception:
+            pass
+
+    xs: List[float] = []
+    ys: List[float] = []
+    for item in path.get("items", []) or []:
+        for obj in item[1:]:
+            for x, y in _iter_point_coords(obj):
+                xs.append(x)
+                ys.append(y)
+    if xs and ys:
+        x0, x1 = min(xs), max(xs)
+        y0, y1 = min(ys), max(ys)
+        if x1 > x0 and y1 > y0:
+            return x0, y0, x1, y1
+    return None
+
+
+def _classify_dim_role(span: Dict[str, Any], shape: Optional[Tuple[float, float, float, float]]) -> Optional[str]:
+    if not shape:
+        return None
+    sx0, sy0, sx1, sy1 = shape
+    cx = (sx0 + sx1) / 2.0
+    cy = (sy0 + sy1) / 2.0
+    dx = abs(span["cx"] - cx)
+    dy = abs(span["cy"] - cy)
+    return "length" if dy >= dx else "width"
+
+
+def _pick_length_width_from_spans(
+    spans: List[Dict[str, Any]],
+    shape: Optional[Tuple[float, float, float, float]] = None,
+    parse_value_fn=None,
+) -> Dict[str, Any]:
+    parse_value_fn = parse_value_fn or (lambda t: _parse_inch_value(t))
+    length_candidates: List[float] = []
+    width_candidates: List[float] = []
+    all_plain: List[float] = []
+    radius_val = ""
+    tap_count = 0
+
+    for span in spans:
+        t = span.get("text", "")
+        prefix_m = re.match(r"^([RØO])", t.strip(), re.IGNORECASE)
+        is_radius = bool(prefix_m and prefix_m.group(1).upper() == "R")
+        is_tap = bool(prefix_m and prefix_m.group(1).upper() in ("Ø", "O"))
+        val = parse_value_fn(t)
+        if val is None:
+            continue
+        if is_radius:
+            radius_val = str(val)
+            continue
+        if is_tap:
+            tap_count += 1
+            continue
+
+        all_plain.append(val)
+        role = _classify_dim_role(span, shape)
+        if role == "length":
+            length_candidates.append(val)
+        elif role == "width":
+            width_candidates.append(val)
+
+    unique_plain = sorted(set(all_plain), reverse=True)
+    if not unique_plain:
+        return {
+            "length": "",
+            "width": "",
+            "radius": radius_val or "-",
+            "tap_holes": "-" if tap_count == 0 else str(tap_count),
+            "plain_count": 0,
+            "bound_count": 0,
+        }
+
+    def _pick(vals: List[float]) -> Optional[float]:
+        uniq = sorted(set(vals), reverse=True)
+        return uniq[0] if uniq else None
+
+    if shape and (length_candidates or width_candidates):
+        sx0, sy0, sx1, sy1 = shape
+        shape_w = sx1 - sx0
+        shape_h = sy1 - sy0
+        # On these CAD sheets, the longer physical dimension is usually drawn
+        # along the larger visual axis of the shape. Use that to decide whether
+        # to prefer the nearest horizontal-vs-vertical callouts.
+        if shape_h >= shape_w:
+            length = _pick(width_candidates) or unique_plain[0]
+            width = _pick(length_candidates) or ""
+        else:
+            # Shape is wider than tall: horizontal annotations (above/below) → length
+            # Vertical annotations (left/right) → width
+            length = _pick(length_candidates) or unique_plain[0]
+            width  = _pick(width_candidates) if width_candidates else ""
+            # Fallback when no width candidate: use offset-pair filter on length
+            # candidates to recover the true slab depth (e.g. 22.5 from [55, 28, 27, 22.5])
+            if not width and len(length_candidates) >= 3:
+                _filt = _filter_offset_dims(length_candidates)
+                if len(_filt) >= 2:
+                    length, width = _filt[0], _filt[1]
+            if not width and len(unique_plain) > 1:
+                _others = [v for v in unique_plain if abs(v - float(length or 0)) > 1e-6]
+                if _others:
+                    width = _others[0]
+    else:
+        length = _pick(length_candidates) or unique_plain[0]
+        remaining = [v for v in unique_plain if abs(v - length) > 1e-6]
+        width = _pick(width_candidates) or (remaining[0] if remaining else "")
+
+    return {
+        "length": str(length) if length != "" else "",
+        "width": str(width) if width != "" else "",
+        "radius": radius_val or "-",
+        "tap_holes": "-" if tap_count == 0 else str(tap_count),
+        "plain_count": len(unique_plain),
+        "bound_count": len(length_candidates) + len(width_candidates),
+    }
+
+
 # ── Template A: title block ───────────────────────────────────────────────────
 
 def _parse_title_block(spans: List[Dict]) -> Dict:
@@ -226,7 +472,7 @@ def _parse_title_block(spans: List[Dict]) -> Dict:
 
     part_no = ""
     unit = ""
-    desc_lines: List[Tuple[float, str]] = []   # (y0, text)
+    desc_lines: List[Tuple[float, float, str]] = []   # (x0, y0, text)
     thickness_val = ""
     qty_val = ""
     sink_texts: List[str] = []
@@ -249,7 +495,7 @@ def _parse_title_block(spans: List[Dict]) -> Dict:
             # skip obvious labels
             lower = t.lower()
             if not any(kw in lower for kw in ("description", "unit:", "project", "date", "drawing")):
-                desc_lines.append((s["y0"], t))
+                desc_lines.append((s["x0"], s["y0"], t))
 
         # Thickness value (label is at x≈154, value is to its right)
         elif _in_band(s, *_TB["thickness_val"]):
@@ -275,18 +521,20 @@ def _parse_title_block(spans: List[Dict]) -> Dict:
             if not any(kw in lower for kw in ("project", "job", "customer", "date", "drawing", "revision")):
                 project_texts.append(t)
 
-    # Sort description lines by y
-    desc_lines.sort(key=lambda x: x[0])
-    desc_parts = [d[1] for d in desc_lines]
+    # Description text is laid out visually left-to-right on these sheets.
+    # Sorting by y alone flips important phrases like 'Right Wall' and 'Vanity Top'.
+    desc_lines.sort(key=lambda x: (x[0], x[1]))
+    desc_parts = [d[2] for d in desc_lines]
 
-    # Description line 1 → part name, line 2 → sub-description, line 3 → category hint
-    part_name = desc_parts[0] if len(desc_parts) > 0 else ""
-    desc2 = desc_parts[1] if len(desc_parts) > 1 else ""
-    cat_hint = desc_parts[2] if len(desc_parts) > 2 else ""
+    part_name = " ".join(desc_parts[:2]).strip() if desc_parts else ""
+    desc2 = desc_parts[2] if len(desc_parts) > 2 else ""
+    cat_hint = " ".join(desc_parts[3:]).strip() if len(desc_parts) > 3 else ""
 
-    # Category inference
-    combined_text = " ".join([part_name, desc2, cat_hint]).lower()
-    category = _infer_category(combined_text)
+    # Category inference should ignore Overage noise unless no real category exists.
+    combined_text = " ".join(desc_parts).lower()
+    category = _infer_category(re.sub(r"\b(?:ovg|overage)\b", " ", combined_text))
+    if category == "Other" and ("ovg" in combined_text or "overage" in combined_text):
+        category = "Overage"
 
     # Sink assembly
     sink_type = "No Sink"
@@ -313,8 +561,11 @@ def _parse_title_block(spans: List[Dict]) -> Dict:
             if m:
                 raw_thick = _normalize_thickness(m.group(0))
                 break
+    if not raw_thick and any("2cm" in s["text"].lower() for s in title_spans) and any("3cm" in s["text"].lower() for s in title_spans):
+        raw_thick = "Mixed"
 
     project_name = " ".join(project_texts).strip()
+    unit_display = unit  # keep unit identifier separate from part description
 
     confidence = {
         "part_no":   _score_field("part_no", part_no),
@@ -327,7 +578,7 @@ def _parse_title_block(spans: List[Dict]) -> Dict:
 
     return {
         "part_no":     part_no,
-        "unit":        unit,
+        "unit":        unit_display,
         "part":        part_name,
         "desc2":       desc2,
         "category":    category,
@@ -370,33 +621,11 @@ def _parse_dimensions(spans: List[Dict]) -> Dict:
         if s["x0"] < _DIM_X_MAX and s["y0"] > _DIM_Y_MIN and "in [" in s["text"]
     ]
 
-    plain_dims: List[float] = []
-    radius_val = ""
-    tap_holes = "-"
-    tap_count = 0
-
-    for s in dim_spans:
-        t = s["text"]
-        prefix_m = re.match(r"^([RØO])", t.strip(), re.IGNORECASE)
-        is_radius = bool(prefix_m and prefix_m.group(1).upper() == "R")
-        is_tap = bool(prefix_m and prefix_m.group(1).upper() in ("Ø", "O"))
-
-        val = _parse_inch_value(t)
-        if val is None:
-            continue
-
-        if is_radius:
-            radius_val = str(val)
-        elif is_tap:
-            tap_count += 1
-            tap_holes = str(int(tap_count))
-        else:
-            plain_dims.append(val)
-
-    # Largest two plain dims = length × width
-    plain_dims.sort(reverse=True)
-    length = str(plain_dims[0]) if len(plain_dims) > 0 else ""
-    width  = str(plain_dims[1]) if len(plain_dims) > 1 else ""
+    meas = _pick_length_width_from_spans(dim_spans, parse_value_fn=_parse_inch_value)
+    length = meas["length"]
+    width = meas["width"]
+    radius_val = meas["radius"]
+    tap_holes = meas["tap_holes"]
 
     confidence = {
         "length": _score_dimension(length),
@@ -420,6 +649,7 @@ def _extract_piece_shapes(
     drawing_x_max: float = _DRAWING_X_MAX,
     min_area: float = _SHAPE_MIN_AREA,
     min_short_dim: float = 0.0,
+    debug: Optional[Dict[str, Any]] = None,
 ) -> List[Tuple[float, float, float, float]]:
     """
     Detect stone-piece rectangles from vector paths in the drawing area.
@@ -445,28 +675,51 @@ def _extract_piece_shapes(
     max_h = (page_h - drawing_y_min) * 0.88
 
     candidates: List[Tuple[float, float, float, float, float]] = []  # (x0,y0,x1,y1,area)
+    raw_drawings = 0
+    no_bbox = 0
+    too_small = 0
+    outside = 0
+    too_large = 0
     for path in page.get_drawings():
-        r = path.get("rect")
+        raw_drawings += 1
+        r = _drawing_bbox(path)
         if r is None:
+            no_bbox += 1
             continue
         x0, y0, x1, y1 = float(r[0]), float(r[1]), float(r[2]), float(r[3])
         w, h = x1 - x0, y1 - y0
         if w < _SHAPE_MIN_DIM or h < _SHAPE_MIN_DIM:
+            too_small += 1
             continue
         if min_short_dim > 0 and min(w, h) < min_short_dim:
+            too_small += 1
             continue
-        # Must start within drawing area (y0 inside page, x within drawing region)
-        if y0 < drawing_y_min or y0 >= page_h or x1 > drawing_x_max + 20 or x0 >= drawing_x_max:
+        # Must start below the title block. Keep the horizontal search broad so
+        # real piece outlines on the right half of the sheet are not discarded.
+        if y0 < drawing_y_min or y0 >= page_h:
+            outside += 1
             continue
         area = w * h
         if area < min_area:
+            too_small += 1
             continue
         # Reject full-area frames
         if w > max_w or h > max_h:
+            too_large += 1
             continue
         candidates.append((x0, y0, x1, y1, area))
 
     if not candidates:
+        if debug is not None:
+            debug.update({
+                "rectangles_found": raw_drawings,
+                "rectangles_kept": 0,
+                "rectangles_filtered": raw_drawings,
+                "rectangles_no_bbox": no_bbox,
+                "rectangles_too_small": too_small,
+                "rectangles_outside": outside,
+                "rectangles_too_large": too_large,
+            })
         return []
 
     # Deduplicate near-identical bounding boxes from overlapping paths
@@ -490,7 +743,47 @@ def _extract_piece_shapes(
         if not inside:
             outer.append(r)
 
-    return [(r[0], r[1], r[2], r[3]) for r in outer]
+    # Remove obvious false hits: page-border fragments and tiny overlaps that sit
+    # inside a much larger piece. This helps drop left-margin frames and sink cutouts.
+    filtered_outer: List[Tuple] = []
+    for r in outer:
+        rx0, ry0, rx1, ry1, ra = r
+        rw, rh = rx1 - rx0, ry1 - ry0
+        if rx1 < 50 and ra < 5000:
+            continue
+        false_inside = False
+        for u in outer:
+            if u is r:
+                continue
+            ux0, uy0, ux1, uy1, ua = u
+            if ua <= ra:
+                continue
+            if ra >= ua * 0.30:
+                continue
+            # Overlap with a larger sibling expanded slightly in all directions.
+            ex0, ey0, ex1, ey1 = ux0 - 20, uy0 - 20, ux1 + 20, uy1 + 20
+            if rx1 < ex0 or rx0 > ex1 or ry1 < ey0 or ry0 > ey1:
+                continue
+            overlap_x = max(0.0, min(rx1, ex1) - max(rx0, ex0))
+            overlap_y = max(0.0, min(ry1, ey1) - max(ry0, ey0))
+            if overlap_x > 0 and overlap_y > 0:
+                false_inside = True
+                break
+        if not false_inside:
+            filtered_outer.append(r)
+
+    shapes = [(r[0], r[1], r[2], r[3]) for r in filtered_outer]
+    if debug is not None:
+        debug.update({
+            "rectangles_found": raw_drawings,
+            "rectangles_kept": len(shapes),
+            "rectangles_filtered": max(raw_drawings - len(shapes), 0),
+            "rectangles_no_bbox": no_bbox,
+            "rectangles_too_small": too_small,
+            "rectangles_outside": outside,
+            "rectangles_too_large": too_large,
+        })
+    return shapes
 
 
 # ── Layer 3: dimension association (Voronoi nearest-shape) ────────────────────
@@ -498,6 +791,7 @@ def _extract_piece_shapes(
 def _assign_dims_voronoi(
     shapes: List[Tuple[float, float, float, float]],
     dim_spans: List[Dict],
+    debug: Optional[Dict[str, Any]] = None,
 ) -> List[Dict]:
     """
     Assign each dimension span to its nearest piece shape (by distance from
@@ -514,7 +808,24 @@ def _assign_dims_voronoi(
         cy = max(sy0, min(span["cy"], sy1))
         return ((span["cx"] - cx) ** 2 + (span["cy"] - cy) ** 2) ** 0.5
 
-    MAX_ASSIGN_DIST = 150.0  # pts — ignore spans further than this from every shape
+    MAX_ASSIGN_DIST = 220.0  # pts — keep a wider net so distant callouts still bind
+
+    # Exclude dimensions that fall inside any shape bounding box.
+    # Interior callouts are sink offsets, notch depths, and hole centers — not
+    # overall piece dimensions.  Overall L×W annotations are always placed
+    # outside the shape boundary.
+    _INSIDE_MARGIN = 5.0
+    exterior_dim_spans: List[Dict] = []
+    for s in dim_spans:
+        cx, cy = s["cx"], s["cy"]
+        inside = any(
+            sx0 + _INSIDE_MARGIN < cx < sx1 - _INSIDE_MARGIN
+            and sy0 + _INSIDE_MARGIN < cy < sy1 - _INSIDE_MARGIN
+            for sx0, sy0, sx1, sy1 in shapes
+        )
+        if not inside:
+            exterior_dim_spans.append(s)
+    dim_spans = exterior_dim_spans
 
     # Assign each relevant span to its nearest shape
     span_to_shape: Dict[int, int] = {}
@@ -537,42 +848,29 @@ def _assign_dims_voronoi(
     # Extract length/width/radius/tap_holes per shape
     pieces: List[Dict] = []
     for j, (sx0, sy0, sx1, sy1) in enumerate(shapes):
-        plain_dims: List[float] = []
-        radius_val = ""
-        tap_count = 0
-
-        for s in buckets[j]:
-            t = s["text"]
-            prefix_m = re.match(r"^([RØO])", t.strip(), re.IGNORECASE)
-            is_radius = bool(prefix_m and prefix_m.group(1).upper() == "R")
-            is_tap    = bool(prefix_m and prefix_m.group(1).upper() in ("Ø", "O"))
-            val = _parse_inch_value(t)
-            if val is None:
-                continue
-            if is_radius:
-                radius_val = str(val)
-            elif is_tap:
-                tap_count += 1
-            else:
-                plain_dims.append(val)
-
-        if not plain_dims:
+        meas = _pick_length_width_from_spans(
+            buckets[j],
+            shape=(sx0, sy0, sx1, sy1),
+            parse_value_fn=_parse_inch_value,
+        )
+        if not meas["length"]:
             continue  # shape has no associated dimensions — skip
-
-        plain_dims.sort(reverse=True)
-        length = str(plain_dims[0])
-        width  = str(plain_dims[1]) if len(plain_dims) > 1 else ""
-
         pieces.append({
             "shape":     (sx0, sy0, sx1, sy1),
-            "length":    length,
-            "width":     width,
-            "radius":    radius_val or "-",
-            "tap_holes": str(tap_count) if tap_count > 0 else "-",
+            "length":    meas["length"],
+            "width":     meas["width"],
+            "radius":    meas["radius"],
+            "tap_holes": meas["tap_holes"],
             "_confidence": {
-                "length": _score_dimension(length),
-                "width":  _score_dimension(width),
+                "length": _score_dimension(meas["length"]),
+                "width":  _score_dimension(meas["width"]),
             },
+        })
+
+    if debug is not None:
+        debug.update({
+            "dimensions_found": len(dim_spans),
+            "dimensions_bound": sum(1 for piece in pieces if piece.get("length")),
         })
 
     return pieces
@@ -583,6 +881,37 @@ def _piece_name(base: str, idx: int, total: int) -> str:
     if total <= 1:
         return base
     return f"{base} - {chr(65 + idx)}"   # A, B, C, …
+
+
+def _classify_piece_name(piece: Dict, base_name: str) -> Tuple[str, str]:
+    """
+    Return (part_name, category) for a piece.
+
+    Splash rule (deterministic):
+      if min(length, width) <= 4.5 inches → splash piece
+      Orientation is determined from page-coordinate shape geometry:
+        shape wider than tall  → Back Splash  (horizontal)
+        shape taller than wide → Side Splash  (vertical)
+
+    Otherwise: use title-block description and infer category from keywords.
+    """
+    try:
+        length = float(piece.get("length") or 0)
+        width  = float(piece.get("width")  or 0)
+    except (ValueError, TypeError):
+        return base_name, _infer_category(base_name)
+
+    if length > 0 and width > 0 and min(length, width) <= 4.5:
+        shape = piece.get("shape", ())
+        if len(shape) == 4:
+            sx0, sy0, sx1, sy1 = shape
+            if (sx1 - sx0) >= (sy1 - sy0):   # wider than tall in page coordinates
+                return "Back Splash", "Splashes"
+            return "Side Splash", "Splashes"
+        # Fallback if no shape bbox available
+        return ("Back Splash" if length >= width else "Side Splash"), "Splashes"
+
+    return base_name, _infer_category(base_name)
 
 
 # ── Template C: Unit:/Qty: format (single-unit-per-page, XX" [MM] dims) ──────
@@ -619,7 +948,7 @@ def _is_template_c(page) -> bool:
     return has_dim
 
 
-def _parse_template_c_page(page, project: Dict) -> List[Dict]:
+def _parse_template_c_page(page, project: Dict, debug: Optional[Dict[str, Any]] = None) -> List[Dict]:
     """
     Parse one Template C page → rows.
 
@@ -727,40 +1056,34 @@ def _parse_template_c_page(page, project: Dict) -> List[Dict]:
             buckets[shi].append(exterior_dims[si])
 
         for j, (sx0, sy0, sx1, sy1) in enumerate(shapes):
-            plain: List[float] = []
-            for s in buckets[j]:
-                v = _parse_inch_value_c(s["text"])
-                if v is not None:
-                    plain.append(v)
-            if not plain:
+            meas = _pick_length_width_from_spans(
+                buckets[j],
+                shape=(sx0, sy0, sx1, sy1),
+                parse_value_fn=_parse_inch_value_c,
+            )
+            if not meas["length"]:
                 continue
-            unique_vals = sorted(set(plain), reverse=True)
-            plain_deduped = unique_vals if len(unique_vals) >= 2 else sorted(plain, reverse=True)
-            if plain_deduped[0] < 12.0:
+            if float(meas["length"]) < 12.0:
                 continue
-            length = str(plain_deduped[0])
-            width  = str(plain_deduped[1]) if len(plain_deduped) > 1 else ""
             pieces.append({
                 "shape": (sx0, sy0, sx1, sy1),
-                "length": length, "width": width,
-                "radius": "-", "tap_holes": "-",
-                "_confidence": {"length": _score_dimension(length), "width": _score_dimension(width)},
+                "length": meas["length"], "width": meas["width"],
+                "radius": meas["radius"], "tap_holes": meas["tap_holes"],
+                "_confidence": {"length": _score_dimension(meas["length"]), "width": _score_dimension(meas["width"])},
             })
 
     if not pieces and dim_spans_c:
         # Fallback: largest two distinct dim values as single piece
-        all_vals = sorted(
-            set(filter(None, (_parse_inch_value_c(s["text"]) for s in dim_spans_c))),
-            reverse=True,
+        meas = _pick_length_width_from_spans(
+            dim_spans_c,
+            parse_value_fn=_parse_inch_value_c,
         )
-        if all_vals and all_vals[0] >= 12.0:
-            length = str(all_vals[0])
-            width  = str(all_vals[1]) if len(all_vals) > 1 else ""
+        if meas["length"] and float(meas["length"]) >= 12.0:
             pieces = [{
                 "shape": (0.0, 0.0, 0.0, 0.0),
-                "length": length, "width": width,
-                "radius": "-", "tap_holes": "-",
-                "_confidence": {"length": _score_dimension(length), "width": _score_dimension(width)},
+                "length": meas["length"], "width": meas["width"],
+                "radius": meas["radius"], "tap_holes": meas["tap_holes"],
+                "_confidence": {"length": _score_dimension(meas["length"]), "width": _score_dimension(meas["width"])},
             }]
 
     if not pieces:
@@ -811,7 +1134,29 @@ def _parse_template_c_page(page, project: Dict) -> List[Dict]:
                 "flat":     dest["flat"],
             })
 
+    if debug is not None:
+        debug.update({
+            "unit": unit_name,
+            "drawing_no": unit_name,
+            "destinations_found": len(destinations),
+            "pieces_found": len(pieces),
+            "expected_rows": len(pieces) * len(destinations),
+            "generated_rows": len(rows),
+            "dimensions_found": len(dim_spans_c),
+            "dimensions_bound": len(pieces),
+        })
+
     return rows
+
+
+def _detect_template(page) -> str:
+    if _is_template_a(page):
+        return "template_a"
+    if _is_template_b(page):
+        return "template_b"
+    if _is_template_c(page):
+        return "template_c"
+    return "fallback"
 
 
 # ── Template B: UNITS: format (A3/A4 sheets, fractional inch dimensions) ─────
@@ -918,7 +1263,7 @@ def _parse_template_b_title(spans: List[Dict]) -> Dict:
     }
 
 
-def _parse_template_b_page(page, project: Dict) -> List[Dict]:
+def _parse_template_b_page(page, project: Dict, debug: Optional[Dict[str, Any]] = None) -> List[Dict]:
     """
     Parse one Template B page → rows.
 
@@ -1005,43 +1350,34 @@ def _parse_template_b_page(page, project: Dict) -> List[Dict]:
             buckets[shi].append(exterior_dims[si])
 
         for j, (sx0, sy0, sx1, sy1) in enumerate(shapes):
-            plain: List[float] = []
-            for s in buckets[j]:
-                v = _parse_inch_value_b(s["text"])
-                if v is not None:
-                    plain.append(v)
-            if not plain:
+            meas = _pick_length_width_from_spans(
+                buckets[j],
+                shape=(sx0, sy0, sx1, sy1),
+                parse_value_fn=_parse_inch_value_b,
+            )
+            if not meas["length"]:
                 continue
-            # Deduplicate identical values (same dim annotated twice) before picking top-2
-            unique_vals = sorted(set(plain), reverse=True)
-            plain_deduped = unique_vals if len(unique_vals) >= 2 else sorted(plain, reverse=True)
-            # Skip shapes whose largest assigned dim is implausibly small — these are
-            # legend boxes or detail annotations, not real stone pieces (min 12").
-            if plain_deduped[0] < 12.0:
+            if float(meas["length"]) < 12.0:
                 continue
-            length = str(plain_deduped[0])
-            width  = str(plain_deduped[1]) if len(plain_deduped) > 1 else ""
             pieces.append({
                 "shape": (sx0, sy0, sx1, sy1),
-                "length": length, "width": width,
-                "radius": "-", "tap_holes": "-",
-                "_confidence": {"length": _score_dimension(length), "width": _score_dimension(width)},
+                "length": meas["length"], "width": meas["width"],
+                "radius": meas["radius"], "tap_holes": meas["tap_holes"],
+                "_confidence": {"length": _score_dimension(meas["length"]), "width": _score_dimension(meas["width"])},
             })
 
     if not pieces and dim_spans_b:
         # Fallback: take all dimension values, largest two as one piece
-        all_vals = sorted(
-            filter(None, (_parse_inch_value_b(s["text"]) for s in dim_spans_b)),
-            reverse=True,
+        meas = _pick_length_width_from_spans(
+            dim_spans_b,
+            parse_value_fn=_parse_inch_value_b,
         )
-        if all_vals:
-            length = str(all_vals[0])
-            width  = str(all_vals[1]) if len(all_vals) > 1 else ""
+        if meas["length"]:
             pieces = [{
                 "shape": (0.0, 0.0, 0.0, 0.0),
-                "length": length, "width": width,
-                "radius": "-", "tap_holes": "-",
-                "_confidence": {"length": _score_dimension(length), "width": _score_dimension(width)},
+                "length": meas["length"], "width": meas["width"],
+                "radius": meas["radius"], "tap_holes": meas["tap_holes"],
+                "_confidence": {"length": _score_dimension(meas["length"]), "width": _score_dimension(meas["width"])},
             }]
 
     if not pieces:
@@ -1104,6 +1440,18 @@ def _parse_template_b_page(page, project: Dict) -> List[Dict]:
                 "flat":     dest["flat"],
             })
 
+    if debug is not None:
+        debug.update({
+            "drawing_no": drawing_code,
+            "unit": drawing_code,
+            "destinations_found": len(destinations),
+            "pieces_found": len(pieces),
+            "expected_rows": len(pieces) * len(destinations),
+            "generated_rows": len(rows),
+            "dimensions_found": len(dim_spans_b),
+            "dimensions_bound": len(pieces),
+        })
+
     return rows
 
 
@@ -1148,9 +1496,12 @@ def _parse_matrix(spans: List[Dict]) -> List[Dict]:
         t_up = t.upper()
         if t_up in _BLD_SKIP_WORDS:
             continue
-        if re.match(r"^\d{1,2}$", t) and 1 <= int(t) <= 99:
-            bld_cells.append({"y_mid": s["cy"], "x_mid": s["cx"], "building": t})
-        elif re.match(r"^[A-Za-z]{1,3}$", t):
+        # 1–2 digit numbers (1–99) or 1–4 letter codes (A, BLD, BLDA, …)
+        if re.match(r"^\d{1,2}$", t):
+            n = int(t)
+            if 1 <= n <= 99:
+                bld_cells.append({"y_mid": s["cy"], "x_mid": s["cx"], "building": t})
+        elif re.match(r"^[A-Za-z]{1,4}$", t):
             bld_cells.append({"y_mid": s["cy"], "x_mid": s["cx"], "building": t_up})
 
     # ── 2. Find flat/unit identifier cells ───────────────────────────────────────
@@ -1188,7 +1539,7 @@ def _parse_matrix(spans: List[Dict]) -> List[Dict]:
             m = re.match(r"^(\d+)", flat)
             floor = m.group(1) if m else ""
 
-        key = (building, flat)
+        key = (building, floor, flat, round(cell["x0"], 1), round(cell["y0"], 1))
         if key not in seen:
             seen.add(key)
             destinations.append({"building": building, "floor": floor, "flat": flat})
@@ -1205,10 +1556,11 @@ def _classify_page(title_data: Dict, spans: List[Dict]) -> str:
         title_data.get("desc2", ""),
         " ".join(s["text"] for s in spans if s["y0"] < _TITLE_Y_MAX),
     ]).lower()
-
-    if "ovg" in combined or "overage" in combined:
-        return "Overage"
-    return _infer_category(combined)
+    cleaned = re.sub(r"\b(?:ovg|overage)\b", " ", combined)
+    category = _infer_category(cleaned)
+    if category != "Other":
+        return category
+    return "Overage" if ("ovg" in combined or "overage" in combined) else "Other"
 
 
 # ── Template A: detect ────────────────────────────────────────────────────────
@@ -1237,7 +1589,7 @@ def _is_template_a(page) -> bool:
 
 # ── Template A: full page parse ───────────────────────────────────────────────
 
-def _parse_template_a_page(page, project: Dict) -> List[Dict]:
+def _parse_template_a_page(page, project: Dict, debug: Optional[Dict[str, Any]] = None) -> List[Dict]:
     """
     Parse one Template A page → rows at piece × destination granularity.
 
@@ -1254,8 +1606,6 @@ def _parse_template_a_page(page, project: Dict) -> List[Dict]:
     destinations = _parse_matrix(all_spans)
 
     category = _classify_page(title, all_spans)
-    if category == "Overage":
-        return []
 
     thickness  = title.get("thickness") or project.get("thickness", "3CM")
     base_name  = title.get("part", "") or category
@@ -1268,9 +1618,21 @@ def _parse_template_a_page(page, project: Dict) -> List[Dict]:
     ]
 
     pieces: List[Dict] = []
-    shapes = _extract_piece_shapes(page)
+    shapes = _extract_piece_shapes(page, min_area=160.0, min_short_dim=8.0, debug=debug)
+    if len(shapes) < 13 and len(dim_spans) >= 10:
+        relaxed_shapes = _extract_piece_shapes(
+            page,
+            drawing_y_min=100.0,
+            drawing_x_max=page.rect.width,
+            min_area=120.0,
+            min_short_dim=6.0,
+        )
+        if len(relaxed_shapes) > len(shapes):
+            shapes = relaxed_shapes
+            if debug is not None:
+                debug.setdefault("warnings", []).append("relaxed shape pass used")
     if shapes and dim_spans:
-        pieces = _assign_dims_voronoi(shapes, dim_spans)
+        pieces = _assign_dims_voronoi(shapes, dim_spans, debug=debug)
 
     # Fallback to original single-piece parser (keeps backward compatibility)
     if not pieces:
@@ -1293,12 +1655,42 @@ def _parse_template_a_page(page, project: Dict) -> List[Dict]:
 
     title_conf = title.get("_confidence", {})
     n_pieces   = len(pieces)
+    _page_sz   = [page.rect.width, page.rect.height]
+
+    # Pre-classify all pieces by geometry so each gets its own name/category.
+    # Pieces sharing the same name get A/B/C suffix to stay distinct.
+    _classified   = [_classify_piece_name(p, base_name) for p in pieces]
+    _name_count: Dict[str, int] = {}
+    for _pn, _ in _classified:
+        _name_count[_pn] = _name_count.get(_pn, 0) + 1
+    _name_seen: Dict[str, int] = {}
+    _slab_seq   = 0   # for {drawing}-01, {drawing}-02, …
+    _splash_seq = 0   # for {drawing}-A, {drawing}-B, …
 
     # ── Layer 5: expansion ──────────────────────────────────────────────────
     rows: List[Dict] = []
     for idx, piece in enumerate(pieces):
+        pname, pcat = _classified[idx]
+        if _name_count[pname] > 1:
+            _seen = _name_seen.get(pname, 0)
+            final_part_name = f"{pname} - {chr(65 + _seen)}"
+            _name_seen[pname] = _seen + 1
+        else:
+            final_part_name = pname
+
         length = piece.get("length", "")
         width  = piece.get("width",  "")
+
+        # Splash pieces: enforce width = the small (~4") dimension, length = larger
+        if pcat == "Splashes" and length and width:
+            try:
+                l_f, w_f = float(length), float(width)
+                if l_f < w_f:
+                    length, width = str(w_f), str(l_f)
+                else:
+                    width = str(min(l_f, w_f))
+            except (ValueError, TypeError):
+                pass
 
         sq_ft = 0.0
         if length and width:
@@ -1307,19 +1699,26 @@ def _parse_template_a_page(page, project: Dict) -> List[Dict]:
             except (ValueError, TypeError):
                 pass
 
-        # When there are multiple pieces, append A/B/C suffix to drawing no.
-        part_no_out = f"{drawing_no}{chr(65 + idx)}" if n_pieces > 1 else drawing_no
+        # Part numbering: {drawing}-01/02/… for slabs, {drawing}-A/B/… for splashes
+        if pcat == "Splashes":
+            part_no_out = f"{drawing_no}-{chr(65 + _splash_seq)}" if drawing_no else chr(65 + _splash_seq)
+            _splash_seq += 1
+        else:
+            _slab_seq += 1
+            part_no_out = f"{drawing_no}-{_slab_seq:02d}" if drawing_no else f"{_slab_seq:02d}"
 
         piece_conf = {**title_conf, **piece.get("_confidence", {})}
 
         piece_base = {
             "_source":     "template_a",
             "_confidence": piece_conf,
+            "_shape_bbox": list(piece.get("shape", [])),
+            "_page_size":  _page_sz,
             "drawing":     drawing_no,
             "unit":        title.get("unit", ""),
             "part_no":     part_no_out,
-            "part":        _piece_name(base_name, idx, n_pieces),
-            "category":    category,
+            "part":        final_part_name,
+            "category":    pcat,
             "length":      length,
             "width":       width,
             "thickness":   thickness,
@@ -1342,6 +1741,19 @@ def _parse_template_a_page(page, project: Dict) -> List[Dict]:
                 "floor":    dest.get("floor", ""),
                 "flat":     dest.get("flat", ""),
             })
+
+    if debug is not None:
+        debug.update({
+            "drawing_no": drawing_no,
+            "unit": title.get("unit", ""),
+            "category": category,
+            "destinations_found": len(destinations),
+            "pieces_found": len(pieces),
+            "expected_rows": len(pieces) * len(destinations),
+            "generated_rows": len(rows),
+            "dimensions_found": len(dim_spans),
+            "dimensions_bound": len(pieces),
+        })
 
     return rows
 
@@ -1457,31 +1869,50 @@ def parse_pdf(pdf_bytes: bytes, project: Optional[Dict] = None) -> Dict:
 
     result_rows: List[Dict] = []
     methods_used = set()
+    page_reports: List[Dict[str, Any]] = []
+    page_dims: Dict[int, List[float]] = {}
+    debug_mode = _debug_enabled(project)
 
     try:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         row_id = 1
 
-        for page in doc:
-            if _is_template_a(page):
-                page_rows = _parse_template_a_page(page, project)
+        for page_num, page in enumerate(doc, start=1):
+            page_dims[page_num] = [page.rect.width, page.rect.height]
+            template = _detect_template(page)
+            page_report = _new_page_report(page_num, template)
+            page_rows: List[Dict[str, Any]] = []
+            if template == "template_a":
+                page_rows = _parse_template_a_page(page, project, debug=page_report)
                 if page_rows:
                     methods_used.add("template_a")
-            elif _is_template_b(page):
-                page_rows = _parse_template_b_page(page, project)
+            elif template == "template_b":
+                page_rows = _parse_template_b_page(page, project, debug=page_report)
                 if page_rows:
                     methods_used.add("template_b")
-            elif _is_template_c(page):
-                page_rows = _parse_template_c_page(page, project)
+            elif template == "template_c":
+                page_rows = _parse_template_c_page(page, project, debug=page_report)
                 if page_rows:
                     methods_used.add("template_c")
             else:
-                page_rows = []
+                page_report["warnings"].append("page did not match any template")
             # non-Template pages fall through to pdfplumber below
             for r in page_rows:
                 r["_id"] = row_id
+                r["_page_num"] = page_num
                 row_id += 1
             result_rows.extend(page_rows)
+            page_report["generated_rows"] = len(page_rows)
+            if not page_report.get("expected_rows"):
+                page_report["expected_rows"] = len(page_rows)
+            if page_report.get("expected_rows") and page_report.get("generated_rows") < page_report.get("expected_rows"):
+                page_report["warnings"].append("generated rows below expected")
+            if template != "fallback" and page_report.get("generated_rows", 0) == 0:
+                page_report["warnings"].append("template page produced no rows")
+            if template != "fallback" and page_report.get("pieces_found", 0) == 0:
+                page_report["warnings"].append("no piece shapes bound")
+            page_reports.append(page_report)
+            _log_page_report(page_report, debug_mode)
 
         doc.close()
     except Exception as e:
@@ -1495,9 +1926,10 @@ def parse_pdf(pdf_bytes: bytes, project: Optional[Dict] = None) -> Dict:
             for i, r in enumerate(raw_rows):
                 result_rows.append(_build_row_from_raw(r, i + 1, project))
 
-    # Deduplicate by (drawing, part_no, building, flat).
-    # part_no has piece suffix (A/B/C) so multi-piece rows are preserved.
-    if "template_a" in methods_used or "template_b" in methods_used or "template_c" in methods_used:
+    # Deduplicate only for the table fallback. Template-based parsing should
+    # keep every matrix cell row, even when the same flat number appears in
+    # multiple positions on the drawing.
+    if methods_used == {"table"}:
         seen_keys: set = set()
         deduped = []
         for r in result_rows:
@@ -1505,6 +1937,7 @@ def parse_pdf(pdf_bytes: bytes, project: Optional[Dict] = None) -> Dict:
                 r.get("drawing", ""),
                 r.get("part_no", ""),
                 r.get("building", ""),
+                r.get("floor", ""),
                 r.get("flat", ""),
             )
             if key not in seen_keys:
@@ -1524,11 +1957,60 @@ def parse_pdf(pdf_bytes: bytes, project: Optional[Dict] = None) -> Dict:
             overall = round(sum(scores) / len(scores), 2)
 
     method_str = "+".join(sorted(methods_used)) if methods_used else "none"
+    page_summary = _summarize_page_reports(page_reports)
+
+    # ── Build review data: unique shapes per page for the frontend overlay ──
+    _review_pages: Dict[int, Dict] = {}
+    for r in result_rows:
+        pn = r.get("_page_num", 1)
+        if pn not in _review_pages:
+            pw, ph = page_dims.get(pn, [792.0, 612.0])
+            _review_pages[pn] = {
+                "page_num": pn, "page_width": pw, "page_height": ph, "shapes": [],
+            }
+        bbox = r.get("_shape_bbox")
+        if bbox and len(bbox) == 4 and any(v != 0 for v in bbox):
+            bbox_k = tuple(round(v, 1) for v in bbox)
+            if not any(tuple(round(v, 1) for v in s["bbox"]) == bbox_k
+                       for s in _review_pages[pn]["shapes"]):
+                _review_pages[pn]["shapes"].append({
+                    "bbox":          list(bbox),
+                    "part_no":       r.get("part_no", ""),
+                    "part":          r.get("part", ""),
+                    "category":      r.get("category", ""),
+                    "length":        r.get("length", ""),
+                    "width":         r.get("width", ""),
+                    "dims_assigned": bool(r.get("length")),
+                })
+    review_data = {
+        "pages": sorted(_review_pages.values(), key=lambda p: p["page_num"])
+    }
 
     return {
         "rows":               result_rows,
-        "metadata":           {},
+        "metadata":           {
+            "page_reports": page_reports,
+            "page_summary": page_summary,
+            "template_counts": {
+                "template_a": sum(1 for p in page_reports if p.get("template") == "template_a"),
+                "template_b": sum(1 for p in page_reports if p.get("template") == "template_b"),
+                "template_c": sum(1 for p in page_reports if p.get("template") == "template_c"),
+                "fallback": sum(1 for p in page_reports if p.get("template") == "fallback"),
+            },
+        },
         "extraction_method":  method_str,
         "row_count":          len(result_rows),
         "overall_confidence": overall,
+        "review_data":        review_data,
+        "debug": {
+            "enabled": debug_mode,
+            "pages": page_reports,
+            "summary": page_summary,
+            "templates": {
+                "template_a": sum(1 for p in page_reports if p.get("template") == "template_a"),
+                "template_b": sum(1 for p in page_reports if p.get("template") == "template_b"),
+                "template_c": sum(1 for p in page_reports if p.get("template") == "template_c"),
+                "fallback": sum(1 for p in page_reports if p.get("template") == "fallback"),
+            },
+        },
     }

@@ -2,7 +2,7 @@ from copy import deepcopy
 from datetime import date, datetime
 from io import BytesIO
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import certifi
 from dotenv import load_dotenv
@@ -203,6 +203,9 @@ def project_response(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         "crate_wood_thickness": doc.get("crate_wood_thickness", 1.25),
         "preferred_container_mode": doc.get("preferred_container_mode", "recommended"),
         "date": doc.get("date", date.today().isoformat()),
+        "flat_format": doc.get("flat_format", "3-digit"),
+        "description_thickness_map": doc.get("description_thickness_map", {}),
+        "status": doc.get("status", "draft"),
         "created_at": as_iso(doc.get("created_at")),
         "updated_at": as_iso(doc.get("updated_at")),
     }
@@ -423,6 +426,28 @@ def _get_template(category: str) -> Dict[str, Any]:
     return CRATE_TEMPLATES.get(category, CRATE_TEMPLATES["Other"])
 
 
+# ─── Family-Based Packing Config ─────────────────────────────────────────────
+
+FAMILY_DESCRIPTIONS: Dict[str, frozenset] = {
+    "island":    frozenset(["Island Countertop"]),
+    "perimeter": frozenset(["Kitchen Countertop"]),
+    "vanity":    frozenset(["Vanity Top", "Laundry Top"]),
+    "range":     frozenset(["Range Top", "Shower Ledge"]),
+    "splash":    frozenset(["Back Splash", "Side Splash"]),
+    "misc":      frozenset(["Window Sill", "Hearth", "Threshold"]),
+}
+
+FAMILY_WEIGHT_CONFIG: Dict[str, Dict[str, Any]] = {
+    "island":    {"max_weight": 1500, "ideal_weight": (600, 1200), "max_pieces": 12, "label": "Island"},
+    "perimeter": {"max_weight": 1200, "ideal_weight": (500, 1000), "max_pieces": 18, "label": "Perimeter"},
+    "vanity":    {"max_weight": 900,  "ideal_weight": (400, 750),  "max_pieces": 25, "label": "Vanity"},
+    "range":     {"max_weight": 900,  "ideal_weight": (300, 700),  "max_pieces": 20, "label": "Range"},
+    "misc":      {"max_weight": 650,  "ideal_weight": (200, 500),  "max_pieces": 30, "label": "Special"},
+}
+
+SPLASH_PRIORITY = ["island", "perimeter", "vanity", "range"]
+
+
 def _piece_destination_key(piece: Dict[str, Any]) -> str:
     building = str(piece.get("building", "")).strip()
     floor = str(piece.get("floor", "")).strip()
@@ -459,6 +484,24 @@ def _weight_band_status(total_weight: float, template: Dict[str, Any]) -> str:
         return "below_ideal"
     else:
         return "above_ideal"
+
+
+def _classify_family(piece: Dict[str, Any]) -> Tuple[str, bool]:
+    """Returns (family_key, is_splash). Splash pieces get paired with their parent family crate."""
+    desc = (piece.get("part") or "").strip()
+    for family, descs in FAMILY_DESCRIPTIONS.items():
+        if desc in descs:
+            return (family, family == "splash")
+    return ("misc", False)
+
+
+def _dispatch_key(piece: Dict[str, Any], basis: str) -> str:
+    if basis == "building":
+        return _piece_building_key(piece)
+    elif basis == "floor":
+        return _piece_floor_key(piece)
+    else:
+        return _piece_flat_key(piece)
 
 
 def _distribute_pieces(
@@ -699,6 +742,86 @@ def strategy_flat_based(
     return generated
 
 
+# ─── Strategy 3: Family-Based ─────────────────────────────────────────────────
+
+def strategy_family_based(
+    pieces: List[Dict[str, Any]],
+    dispatch_basis: str,
+    dispatch_values: List[str],
+    material: str,
+    thickness: str,
+    color: str = "",
+) -> List[Dict[str, Any]]:
+    """Group by dispatch unit (building/floor/flat), then by stone family within each unit.
+    Splash pieces are kept in the same crate as their parent family tops."""
+    # Filter to requested dispatch values when specified
+    if dispatch_values:
+        dispatch_set = set(dispatch_values)
+        pieces = [p for p in pieces if _dispatch_key(p, dispatch_basis) in dispatch_set]
+
+    by_dispatch: Dict[str, List[Dict[str, Any]]] = {}
+    for p in pieces:
+        key = _dispatch_key(p, dispatch_basis)
+        by_dispatch.setdefault(key, []).append(p)
+
+    generated: List[Dict[str, Any]] = []
+    serial = 1
+
+    for dk, group_pieces in sorted(by_dispatch.items()):
+        family_tops: Dict[str, List[Dict[str, Any]]] = {f: [] for f in FAMILY_WEIGHT_CONFIG}
+        splash_pieces: List[Dict[str, Any]] = []
+
+        for piece in group_pieces:
+            family, is_splash = _classify_family(piece)
+            if is_splash:
+                splash_pieces.append(piece)
+            elif family in family_tops:
+                family_tops[family].append(piece)
+            else:
+                family_tops.setdefault("misc", []).append(piece)
+
+        # Attach splash pieces to the highest-priority family that has tops
+        splash_assigned = False
+        for priority_family in SPLASH_PRIORITY:
+            if family_tops.get(priority_family):
+                family_tops[priority_family].extend(splash_pieces)
+                splash_assigned = True
+                break
+        if not splash_assigned and splash_pieces:
+            family_tops.setdefault("misc", []).extend(splash_pieces)
+
+        for family_key, family_pieces in family_tops.items():
+            if not family_pieces:
+                continue
+
+            config = FAMILY_WEIGHT_CONFIG[family_key]
+            batches = _distribute_pieces(
+                family_pieces, config["max_weight"], config["max_pieces"], material, thickness, color
+            )
+
+            for batch in batches:
+                total_wt = _crate_weight(batch, material, thickness, color)
+                has_splash = any(_classify_family(p)[1] for p in batch)
+                generated.append({
+                    "serial": serial,
+                    "name": f"{config['label']} — {dk}-{serial}",
+                    "pieces": batch,
+                    "max_weight": config["max_weight"],
+                    "crate_type": config["label"],
+                    "packing_mode": "family",
+                    "primary_flat": dk,
+                    "secondary_flats": [],
+                    "weight_band_status": _weight_band_status(total_wt, config),
+                    "grouping_reason": f"{config['label']} family for {dk}"
+                        + (" (includes splash pieces)" if has_splash else ""),
+                    "packing_family": family_key,
+                    "splash_layer": has_splash,
+                })
+                serial += 1
+
+    return generated
+
+
 # ─── Orchestrator ─────────────────────────────────────────────────────────────
 
 def auto_generate_crates(
@@ -709,13 +832,19 @@ def auto_generate_crates(
     material: str,
     thickness: str,
     color: str = "",
+    dispatch_basis: str = "flat",
+    dispatch_values: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     if not pieces:
         return []
 
     effective_max_weight = max_weight if max_weight and max_weight > 0 else 1000.0
 
-    if strategy == "flat":
+    if strategy == "family":
+        return strategy_family_based(
+            pieces, dispatch_basis, dispatch_values or [], material, thickness, color
+        )
+    elif strategy == "flat":
         return strategy_flat_based(pieces, effective_max_weight, material, thickness, color)
     else:
         # "category", "smart", "type", or any other value → category-based
@@ -952,6 +1081,8 @@ class ProjectUpdate(BaseModel):
     customer: str
     job_number: str
     date: str
+    flat_format: str = "3-digit"
+    description_thickness_map: Dict[str, str] = {}
 
 
 app = FastAPI()
@@ -1021,11 +1152,27 @@ def update_project(project_id: int, data: ProjectUpdate):
         "customer": data.customer,
         "job_number": data.job_number,
         "date": data.date,
+        "flat_format": data.flat_format,
+        "description_thickness_map": data.description_thickness_map,
         "updated_at": utc_now(),
     }
     projects_col.update_one({"id": project_id}, {"$set": update})
     clear_manual_container_plan(project_id)
     return {"message": "ok"}
+
+
+VALID_PROJECT_STATUSES = {
+    "draft", "review_pending", "approved_for_packing", "crate_planned", "container_planned"
+}
+
+
+@app.patch("/api/projects/{project_id}/status")
+def update_project_status(project_id: int, data: Dict[str, Any]):
+    status = data.get("status", "")
+    if status not in VALID_PROJECT_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Invalid status '{status}'")
+    projects_col.update_one({"id": project_id}, {"$set": {"status": status, "updated_at": utc_now()}})
+    return {"message": "ok", "status": status}
 
 
 @app.delete("/api/projects/{project_id}")
@@ -1591,6 +1738,14 @@ def auto_generate(project_id: int, data: Dict[str, Any]):
         crates_col.delete_many({"project_id": project_id, "id": {"$in": unlocked_crate_ids}})
 
     strategy = data.get("group_by", "type")
+    packing_strategy = data.get("packing_strategy", "")
+    dispatch_basis = data.get("dispatch_basis", "flat")
+    dispatch_values: List[str] = data.get("dispatch_values") or []
+
+    # packing_strategy overrides group_by when provided
+    if packing_strategy:
+        strategy = packing_strategy
+
     max_pieces = data.get("max_pieces")
     try:
         max_pieces = int(max_pieces) if max_pieces not in (None, "") else None
@@ -1613,12 +1768,12 @@ def auto_generate(project_id: int, data: Dict[str, Any]):
     effective_max_weight = max(300.0, max_weight * balance_scale)
 
     # High apartment_grouping score auto-switches to flat strategy when no explicit choice
-    if strategy not in ("flat", "category") and apartment_grouping >= 7:
+    if strategy not in ("flat", "category", "family") and apartment_grouping >= 7:
         strategy = "flat"
 
-    # High fragility_separation → separate known fragile categories (polished, thin pieces)
+    # Family strategy bypasses fragility separation (splashes stay with tops)
     unlocked_pieces = [piece for piece in pieces if piece["id"] not in locked_piece_ids]
-    if fragility_separation >= 7:
+    if strategy != "family" and fragility_separation >= 7:
         fragile_cats = {"Window Sill", "Hearth", "Threshold"}
         fragile_pieces = [p for p in unlocked_pieces if (p.get("category") or "") in fragile_cats]
         non_fragile_pieces = [p for p in unlocked_pieces if (p.get("category") or "") not in fragile_cats]
@@ -1638,6 +1793,8 @@ def auto_generate(project_id: int, data: Dict[str, Any]):
         material=_mat,
         thickness=_thick,
         color=_stone_color,
+        dispatch_basis=dispatch_basis,
+        dispatch_values=dispatch_values,
     )
     if fragile_pieces:
         fragile_generated = auto_generate_crates(
@@ -1648,6 +1805,8 @@ def auto_generate(project_id: int, data: Dict[str, Any]):
             material=_mat,
             thickness=_thick,
             color=_stone_color,
+            dispatch_basis=dispatch_basis,
+            dispatch_values=dispatch_values,
         )
         for crate in fragile_generated:
             crate["name"] = f"FRAGILE-{crate['name']}"
@@ -1695,6 +1854,8 @@ def auto_generate(project_id: int, data: Dict[str, Any]):
             "secondary_flats": crate.get("secondary_flats", []),
             "weight_band_status": crate.get("weight_band_status", ""),
             "grouping_reason": crate.get("grouping_reason", ""),
+            "packing_family": crate.get("packing_family", ""),
+            "splash_layer": crate.get("splash_layer", False),
             "created_at": utc_now(),
         }
         next_serial += 1
@@ -1868,6 +2029,7 @@ async def upload_pdf(project_id: int, file: UploadFile = File(...)):
         **result,
         "file_name": file.filename,
         "similar_drawing": similar_drawing,
+        "parser_summary": result.get("metadata", {}).get("page_summary", {}),
     }
 
 
@@ -2280,4 +2442,3 @@ def export_excel(project_id: int):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
-
