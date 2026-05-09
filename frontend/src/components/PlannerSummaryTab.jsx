@@ -23,6 +23,13 @@ const PACKING_MODES = [
     subtitle: 'Installation efficiency',
     desc: 'Groups by apartment/flat. One crate per flat when possible. Best for on-site delivery.',
   },
+  {
+    id: 'family',
+    label: 'Family-Based',
+    subtitle: 'Stone family + dispatch logic',
+    desc: 'Groups by stone family (Island, Perimeter, Vanity, Range) within dispatch units. Keeps splash pieces with parent tops.',
+    readOnly: true,
+  },
 ];
 
 const PlannerSummaryTab = () => {
@@ -40,6 +47,16 @@ const PlannerSummaryTab = () => {
     () => summarizeWarnings(insights?.exceptions || []),
     [insights]
   );
+
+  const familySummary = useMemo(() => {
+    if (!crates.length || crates[0]?.packing_mode !== 'family') return null;
+    const counts = {};
+    crates.forEach((c) => {
+      const f = c.packing_family || 'other';
+      counts[f] = (counts[f] || 0) + 1;
+    });
+    return counts;
+  }, [crates]);
 
   const recommendationReasons = useMemo(
     () => buildRecommendationReasons(insights),
@@ -87,28 +104,34 @@ const PlannerSummaryTab = () => {
             </div>
           )}
         </div>
-        <div className="mt-5 grid gap-4 md:grid-cols-2">
+        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {PACKING_MODES.map((mode) => {
             const isActive = currentPackingMode === mode.id;
+            const clickable = !mode.readOnly && !isRefreshing && !isActive;
             return (
               <button
                 key={mode.id}
                 type="button"
-                disabled={isRefreshing}
-                onClick={() => {
-                  if (!isActive) regenerateWithStrategy(mode.id);
-                }}
+                disabled={isRefreshing || mode.readOnly}
+                onClick={() => { if (clickable) regenerateWithStrategy(mode.id); }}
                 className={`rounded-[28px] border p-5 text-left transition-all ${
                   isActive
                     ? 'border-[#1d4ed8] bg-[#eff6ff] shadow-[0_0_0_3px_rgba(29,78,216,0.1)]'
-                    : 'border-[#e2e8f0] bg-[#f8fafc] hover:border-[#bfdbfe] hover:bg-white'
-                } ${isRefreshing ? 'opacity-60 cursor-wait' : ''}`}
+                    : mode.readOnly
+                    ? 'border-[#e2e8f0] bg-[#f8fafc] opacity-60 cursor-default'
+                    : 'border-[#e2e8f0] bg-[#f8fafc] hover:border-[#bfdbfe] hover:bg-white cursor-pointer'
+                } ${isRefreshing && !mode.readOnly ? 'opacity-60 cursor-wait' : ''}`}
               >
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-lg font-semibold text-[#0f172a]">{mode.label}</div>
                   {isActive && (
                     <span className="rounded-full bg-[#dbeafe] px-3 py-1 text-[11px] font-semibold text-[#1d4ed8]">
                       Active
+                    </span>
+                  )}
+                  {mode.readOnly && !isActive && (
+                    <span className="rounded-full bg-[#f1f5f9] px-3 py-1 text-[11px] text-[#94a3b8]">
+                      Via Approval
                     </span>
                   )}
                 </div>
@@ -118,6 +141,21 @@ const PlannerSummaryTab = () => {
             );
           })}
         </div>
+
+        {/* Family breakdown — shown only for family-based plans */}
+        {familySummary && (
+          <div className="mt-5 border-t border-[#edf2f7] pt-4">
+            <div className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-[#64748b]">Family Breakdown</div>
+            <div className="flex flex-wrap gap-3">
+              {Object.entries(familySummary).map(([family, count]) => (
+                <div key={family} className="flex items-center gap-2 rounded-full border border-[#dbeafe] bg-[#eff6ff] px-4 py-2">
+                  <span className="text-sm font-semibold capitalize text-[#1d4ed8]">{family}</span>
+                  <span className="text-sm text-[#475569]">{count} crate{count !== 1 ? 's' : ''}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
       <div className="grid gap-6 xl:grid-cols-[1.3fr,0.7fr]">
         <div className="rounded-[36px] border border-[#dbe4f0] bg-[radial-gradient(circle_at_top_left,_rgba(37,99,235,0.12),_transparent_30%),linear-gradient(135deg,_#ffffff,_#f8fbff)] p-7 shadow-sm">

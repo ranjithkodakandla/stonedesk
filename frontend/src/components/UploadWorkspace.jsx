@@ -1,6 +1,7 @@
 import React, { useCallback, useRef, useState } from 'react';
 import axios from 'axios';
 import UploadGrid, { blankRow, UPLOAD_COLUMNS } from './UploadGrid';
+import PdfReviewModal from './PdfReviewModal';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
@@ -165,6 +166,8 @@ const UploadWorkspace = ({ project, onDataChange }) => {
   const [saveResult, setSaveResult]   = useState(null);
   const [similarDrawing, setSimilarDrawing] = useState(null);
   const [parseErrors, setParseErrors] = useState([]);
+  const [reviewData, setReviewData]   = useState(null);
+  const [showReview, setShowReview]   = useState(false);
   const fileInputRef = useRef(null);
   const dropRef      = useRef(null);
   const gridRef      = useRef(null);
@@ -215,6 +218,13 @@ const UploadWorkspace = ({ project, onDataChange }) => {
         allRows.push(...(res.data.rows || []));
         if (res.data.similar_drawing && !similarDrawing) {
           setSimilarDrawing(res.data.similar_drawing);
+        }
+        if (res.data.review_data?.pages?.length) {
+          setReviewData(prev => {
+            if (!prev) return res.data.review_data;
+            // Merge pages from multiple PDFs
+            return { pages: [...prev.pages, ...res.data.review_data.pages] };
+          });
         }
       } catch (err) {
         setFiles(prev => prev.map((f, idx) => idx === i ? { ...f, status: 'error', progress: 0 } : f));
@@ -316,7 +326,8 @@ const UploadWorkspace = ({ project, onDataChange }) => {
   // ── Reset / start over ─────────────────────────────────────────────────────
   const resetAll = () => {
     setStep('upload'); setFiles([]); setRows([]); setDraftId(null);
-    setDraftName(''); setParseErrors([]); setSimilarDrawing(null); setSaveResult(null);
+    setDraftName(''); setParseErrors([]); setSimilarDrawing(null);
+    setSaveResult(null); setReviewData(null); setShowReview(false);
   };
 
   // ── Step: Upload ───────────────────────────────────────────────────────────
@@ -415,6 +426,7 @@ const UploadWorkspace = ({ project, onDataChange }) => {
   // ── Step: Review ───────────────────────────────────────────────────────────
   if (step === 'review') {
     return (
+      <>
       <div className="flex flex-col" style={{ minHeight: 560 }}>
         {/* Header bar */}
         <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#edf2f7]">
@@ -425,6 +437,13 @@ const UploadWorkspace = ({ project, onDataChange }) => {
             {rows.length > 0 && <span className="text-xs text-[#94a3b8]">{rows.length} rows</span>}
           </div>
           <div className="flex flex-wrap gap-2 items-center">
+            {/* Review Shapes button */}
+            {reviewData?.pages?.length > 0 && (
+              <button type="button" onClick={() => setShowReview(true)}
+                className="rounded-full border border-[#2563eb] px-3 py-1.5 text-xs font-medium text-[#2563eb] hover:bg-blue-50">
+                Review Shapes
+              </button>
+            )}
             {/* Filter */}
             <input
               value={filterText} onChange={e => setFilterText(e.target.value)}
@@ -510,6 +529,20 @@ const UploadWorkspace = ({ project, onDataChange }) => {
           Orange cells = low confidence — please verify · All edits save locally until you click "Save to Project"
         </p>
       </div>
+
+      {/* PDF Review Modal */}
+      {showReview && (
+        <PdfReviewModal
+          rows={gridRef.current?.getRows() || rows}
+          reviewData={reviewData}
+          onClose={() => setShowReview(false)}
+          onSave={(corrected) => {
+            gridRef.current?.setRows(corrected);
+            setRows(corrected);
+          }}
+        />
+      )}
+      </>
     );
   }
 
