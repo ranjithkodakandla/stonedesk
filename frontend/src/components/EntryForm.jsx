@@ -153,7 +153,7 @@ const MatrixCell = ({ cellKey, entries, onSetEntries, onUpdateEntry, onRemoveEnt
 const MirrorModal = ({ drawings, loading, onClose, onApply }) => {
   const [filter, setFilter] = useState('');
   const [selected, setSelected] = useState(null);
-  const [opts, setOpts] = useState({ parts: true, specs: true, matrix: false, quantities: true });
+  const [opts, setOpts] = useState({ parts: true, specs: true, matrix: false });
 
   const filtered = drawings.filter(d =>
     !filter || d.drawing.toLowerCase().includes(filter.toLowerCase()) ||
@@ -214,7 +214,7 @@ const MirrorModal = ({ drawings, loading, onClose, onApply }) => {
         <div className="px-5 py-3 border-t border-[#edf2f7] bg-[#f8fafc]">
           <p className="text-xs font-semibold text-[#475569] mb-2">Copy from selected drawing:</p>
           <div className="flex flex-wrap gap-3">
-            {[['parts', 'Part rows'], ['specs', 'Tech specs (edge/sink/radius)'], ['matrix', 'Copy matrix destinations'], ['quantities', 'Quantities']].map(([k, label]) => (
+            {[['parts', 'Part rows'], ['specs', 'Tech specs (edge/sink/radius)'], ['matrix', 'Copy matrix destinations']].map(([k, label]) => (
               <label key={k} className="flex items-center gap-1.5 cursor-pointer select-none">
                 <input type="checkbox" checked={opts[k]} onChange={() => toggleOpt(k)}
                   className="rounded text-[#2563eb]" />
@@ -504,7 +504,7 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
         r.length = p.length || '';
         r.width = p.width || '';
         r.thickness = p.thickness || mirroredThickness || project.thickness || '3CM';
-        r.qty = opts.quantities ? (p.qty || 1) : 1;
+        r.qty = 1;
         if (opts.specs) {
           r.sink_type = p.sink_type || 'No Sink';
           r.sink_cut = p.sink_cut || '-';
@@ -525,17 +525,13 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
       setPieceRows(rows);
     }
     if (opts.matrix) {
-      const cells = opts.quantities
-        ? (d.cells || {})
-        : Object.fromEntries(Object.entries(d.cells || {}).map(([k, v]) => [k, v.map(e => ({ ...e, qty: 1 }))]));
       setMatrixData({
         buildings: (d.buildings || []).join(','),
         floors: (d.floors || []).join(','),
-        cells,
+        cells: d.cells || {},
       });
       setDestMode('matrix');
     } else {
-      // Default: clear destinations so user enters fresh flat mapping
       setMatrixData({ buildings: '', floors: '', cells: {} });
     }
     setMirrorMessage('Parts/specs copied. Destination matrix cleared for fresh assignment.');

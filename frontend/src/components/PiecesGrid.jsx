@@ -416,9 +416,19 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
       }
   }, [setRows, onThicknessSuggested, defaultThickness, thickness, drawingNo, descriptionThicknessMap]);
 
-  const totalSqft = rows.reduce((s, r) => s + calcSqft(r.length, r.width, r.qty), 0);
-  const totalWt   = rows.reduce((s, r) => s + calcWeight(r.length, r.width, r.qty, material, r.thickness, thickness), 0);
-  const totalQty  = rows.reduce((s, r) => s + (Number(r.qty) || 1), 0);
+  const activeDests = useMemo(() =>
+    (destinations || []).filter(d => d.building || d.floor || d.flat),
+    [destinations]
+  );
+
+  const computedDestQty = useMemo(() => {
+    if (!activeDests.length) return null;
+    return activeDests.reduce((s, d) => s + (d.matrixQty != null ? Number(d.matrixQty) : 1), 0);
+  }, [activeDests]);
+
+  const totalSqft = rows.reduce((s, r) => s + calcSqft(r.length, r.width, computedDestQty ?? r.qty), 0);
+  const totalWt   = rows.reduce((s, r) => s + calcWeight(r.length, r.width, computedDestQty ?? r.qty, material, r.thickness, thickness), 0);
+  const totalQty  = rows.reduce((s, r) => s + (computedDestQty ?? (Number(r.qty) || 1)), 0);
 
   return (
     <div className="mt-4">
@@ -491,8 +501,14 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
                   </td>
 
                   <td className="px-1 py-1">
-                    <input type="number" min="1" value={row.qty}
-                      onChange={e => updateRow(row._id, 'qty', e.target.value)} className="grid-cell" />
+                    {computedDestQty != null ? (
+                      <span className="block text-center text-xs text-slate-400 bg-slate-50 rounded border border-slate-100 px-1 py-0.5 tabular-nums" title="Qty set by destination count">
+                        {computedDestQty}
+                      </span>
+                    ) : (
+                      <input type="number" min="1" value={row.qty}
+                        onChange={e => updateRow(row._id, 'qty', e.target.value)} className="grid-cell" />
+                    )}
                   </td>
 
                   <td className="px-1 py-1">
