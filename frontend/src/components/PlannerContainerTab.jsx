@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { usePlannerStore } from '../store/plannerStore';
+import Container3DPreview from './planner3d/Container3DPreview';
 import {
   buildContainerPreview,
   CONTAINER_SPECS,
@@ -8,10 +9,13 @@ import {
   placementDimensionsForDraft,
   summarizeDraftContainers,
 } from '../utils/plannerUtils';
+import { buildPlacements3DFromManual, normalizePlacementsFor3D } from '../utils/plannerDisplay';
 
 const EMPTY_CRATES = [];
 
 const PlannerContainerTab = () => {
+  const project = usePlannerStore((state) => state.project);
+  const storeCrates = usePlannerStore((state) => state.crates);
   const insights = usePlannerStore((state) => state.insights);
   const manualContainers = usePlannerStore((state) => state.manualContainers);
   const manualContainerDirty = usePlannerStore((state) => state.manualContainerDirty);
@@ -46,6 +50,21 @@ const PlannerContainerTab = () => {
   const currentSummary = useMemo(() => summarizeDraftContainers(previewContainers), [previewContainers]);
   const selectedContainer = previewContainers.find((container) => container.id === selectedContainerId) || previewContainers[0] || null;
   const selectedContainerDraft = manualContainers.find((container) => container.id === selectedContainer?.id) || null;
+
+  const placements3d = useMemo(() => {
+    const layout = project?.planner_v3_layout;
+    if (selectedContainerDraft?.placements?.length && storeCrates.length) {
+      return buildPlacements3DFromManual(selectedContainerDraft, storeCrates, project, layout);
+    }
+    return normalizePlacementsFor3D(layout, storeCrates);
+  }, [selectedContainerDraft, storeCrates, project]);
+
+  const containerSpec = CONTAINER_SPECS[selectedContainerDraft?.type || '20ft'] || CONTAINER_SPECS['20ft'];
+  const v3interior = project?.planner_v3_layout?.container_interior_in || {};
+  const clearHeightIn = Number(v3interior.max_clear_height) || 100;
+  const payloadCapKg =
+    Number(project?.delivery_payload_cap_kg) > 0 ? Number(project.delivery_payload_cap_kg) : 24000;
+
   const selectedPlacement = selectedContainer?.placements.find((placement) => placement.crate_id === selectedPlacementCrateId)
     || selectedContainer?.placements[0]
     || null;
@@ -154,6 +173,33 @@ const PlannerContainerTab = () => {
 
   return (
     <div className="space-y-6">
+      {placements3d.length > 0 && (
+        <div className="rounded-[32px] border border-[#dbe4f0] bg-white p-6 shadow-sm">
+          <div className="text-xs uppercase tracking-[0.18em] text-[#64748b]">Container 3D — live plan</div>
+          <p className="mt-1 text-sm text-[#64748b]">
+            Cutaway view with zones, crate IDs, and weights. Drag crates on the 2D canvas below — this updates in real time.
+            Click a box here to highlight it on the plan.
+          </p>
+          <div className="mt-4">
+            <Container3DPreview
+              placements={placements3d}
+              lengthIn={containerSpec.max_length}
+              widthIn={containerSpec.max_width}
+              clearHeightIn={clearHeightIn}
+              islandZoneDepthIn={project?.planner_v3_layout?.island_zone_depth_in}
+              horizontalZoneStartX={project?.planner_v3_layout?.horizontal_zone_start_x}
+              linearHorizEndX={project?.planner_v3_layout?.linear_horiz_block_end_x_in}
+              linearIslandStartX={project?.planner_v3_layout?.linear_island_strip_start_x_in}
+              maxWeightKg={payloadCapKg}
+              totalWeightKg={selectedContainer?.used_weight}
+              selectedCrateId={selectedPlacementCrateId}
+              onSelectCrate={(code) => setSelectedPlacementCrateId(code || null)}
+              hudTitle={`${selectedContainerDraft?.type || '20ft'} · interior (in)`}
+            />
+          </div>
+        </div>
+      )}
+
       <div className="rounded-[32px] border border-[#dbe4f0] bg-white p-6 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>

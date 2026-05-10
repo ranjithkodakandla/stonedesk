@@ -118,6 +118,22 @@ export const usePlannerStore = create((set, get) => ({
     await get().refreshWorkspace();
   },
 
+  /** Planner-only — does not touch entry forms; does not clear container plan on backend. */
+  setDeliveryPayloadCapKg: async (kg) => {
+    const projectId = get().projectId;
+    if (!projectId) return;
+    const res = await axios.patch(`${API_BASE}/projects/${projectId}/planner-payload`, {
+      delivery_payload_cap_kg: Number(kg),
+    });
+    set((state) => ({
+      project: {
+        ...state.project,
+        delivery_payload_cap_kg: res.data?.delivery_payload_cap_kg ?? Number(kg),
+      },
+    }));
+    await get().refreshWorkspace();
+  },
+
   setPreferredContainerMode: async (mode) => {
     await get().updateProject({ preferred_container_mode: mode });
   },
@@ -127,31 +143,17 @@ export const usePlannerStore = create((set, get) => ({
     await get().refreshWorkspace();
   },
 
-  generatePlan: async (packingMode = 'category') => {
+  /** SmartCratePlanner v3 — server packs A/B/C/D + 20ft container layout */
+  generateV3Plan: async (dispatchSelection) => {
+    const projectId = get().projectId;
     set({ isRefreshing: true });
     try {
-      await axios.post(`${API_BASE}/projects/${get().projectId}/crates/auto-generate`, {
-        group_by: packingMode,
-        max_weight: 1000,
+      const res = await axios.post(`${API_BASE}/projects/${projectId}/crates/auto-generate`, {
+        dispatch_selection: dispatchSelection || {},
       });
       await get().refreshWorkspace();
-      set({ activeTab: 'summary' });
-    } finally {
-      set({ isRefreshing: false });
-    }
-  },
-
-  generateFamilyPlan: async ({ dispatchBasis = 'flat', dispatchValues = [] } = {}) => {
-    set({ isRefreshing: true });
-    try {
-      await axios.post(`${API_BASE}/projects/${get().projectId}/crates/auto-generate`, {
-        packing_strategy: 'family',
-        dispatch_basis: dispatchBasis,
-        dispatch_values: dispatchValues,
-        max_weight: 1000,
-      });
-      await get().refreshWorkspace();
-      set({ activeTab: 'summary' });
+      set({ activeTab: 'crate-plan' });
+      return res.data;
     } finally {
       set({ isRefreshing: false });
     }
@@ -163,18 +165,10 @@ export const usePlannerStore = create((set, get) => ({
     await get().refreshWorkspace();
   },
 
-  regenerateWithStrategy: async (strategy, weights = {}) => {
-    set({ isRefreshing: true });
-    try {
-      await axios.post(`${API_BASE}/projects/${get().projectId}/crates/auto-generate`, {
-        group_by: strategy,
-        max_weight: 1000,
-        weights,
-      });
-      await get().refreshWorkspace();
-    } finally {
-      set({ isRefreshing: false });
-    }
+  approvePacking: async () => {
+    const projectId = get().projectId;
+    await axios.patch(`${API_BASE}/projects/${projectId}/status`, { status: 'packing_approved' });
+    await get().refreshWorkspace();
   },
 
   splitCrate: async (crateId, pieceIds, name) => {
@@ -211,12 +205,61 @@ export const usePlannerStore = create((set, get) => ({
 
   assignPiece: async (pieceId, crateId) => {
     await axios.post(`${API_BASE}/crates/assign`, { piece_id: pieceId, crate_id: crateId });
+    const projectId = get().projectId;
+    const hasV3 = (get().crates || []).some((c) => c.packing_mode === 'v3');
+    if (hasV3 && projectId) {
+      try {
+        await axios.post(`${API_BASE}/projects/${projectId}/crates/planner-recompute`);
+      } catch (err) {
+        console.warn('planner-recompute:', err.response?.data || err.message);
+      }
+    }
     await get().refreshWorkspace();
   },
 
   unassignPiece: async (pieceId) => {
     await axios.post(`${API_BASE}/crates/unassign`, { piece_id: pieceId });
+    const projectId = get().projectId;
+    const hasV3 = (get().crates || []).some((c) => c.packing_mode === 'v3');
+    if (hasV3 && projectId) {
+      try {
+        await axios.post(`${API_BASE}/projects/${projectId}/crates/planner-recompute`);
+      } catch (err) {
+        console.warn('planner-recompute:', err.response?.data || err.message);
+      }
+    }
     await get().refreshWorkspace();
+  },
+
+  assignFamily: async (pieceIds, crateDbId) => {
+    const projectId = get().projectId;
+    await axios.post(`${API_BASE}/projects/${projectId}/crates/assign-family`, {
+      piece_ids: pieceIds,
+      crate_id: crateDbId ?? null,
+    });
+    const hasV3 = (get().crates || []).some((c) => c.packing_mode === 'v3');
+    if (hasV3) {
+      try {
+        await axios.post(`${API_BASE}/projects/${projectId}/crates/planner-recompute`);
+      } catch (err) {
+        console.warn('planner-recompute:', err.response?.data || err.message);
+      }
+    }
+    await get().refreshWorkspace();
+  },
+
+  recalculateV3Plan: async () => {
+    const projectId = get().projectId;
+    if (!projectId) return;
+    const hasV3 = (get().crates || []).some((c) => c.packing_mode === 'v3');
+    if (!hasV3) return;
+    set({ isRefreshing: true });
+    try {
+      await axios.post(`${API_BASE}/projects/${projectId}/crates/planner-recompute`);
+      await get().refreshWorkspace();
+    } finally {
+      set({ isRefreshing: false });
+    }
   },
 
   deletePiece: async (pieceId) => {
@@ -313,6 +356,7 @@ export const usePlannerStore = create((set, get) => ({
           x: Number(placement.x || 0),
           y: Number(placement.y || 0),
           rotated: Boolean(placement.rotated),
+          stack_level: Number(placement.stack_level ?? 0),
           loading_order: Number(placement.loading_order || index + 1),
           unload_order: Number(placement.unload_order || index + 1),
         })),

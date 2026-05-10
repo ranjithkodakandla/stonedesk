@@ -5,7 +5,7 @@ CONTAINER_LIBRARY: Dict[str, Dict[str, float]] = {
     "20ft": {
         "max_length": 233.0,
         "max_width": 92.0,
-        "max_weight": 28130.0,
+        "max_weight": 24000.0,
         "cost_index": 1.0,
     },
     "40ft": {
@@ -529,6 +529,7 @@ def container_shape_from_manual(container_data: Dict[str, Any], crate_map: Dict[
 
         rotated = bool(raw.get("rotated", False))
         dims = placement_dimensions(crate, rotated)
+        stack_level = int(raw.get("stack_level", 0) or 0)
         placement = {
             "crate_id": crate["crate_id"],
             "name": crate["name"],
@@ -546,12 +547,15 @@ def container_shape_from_manual(container_data: Dict[str, Any], crate_map: Dict[
             "unload_order": int(raw.get("unload_order", max(1, len(raw_placements) - index)) or max(1, len(raw_placements) - index)),
             "stackable": crate.get("stackable", False),
             "locked": crate.get("locked", False),
+            "stack_level": stack_level,
         }
 
         if placement["x"] < 0 or placement["y"] < 0 or placement["x"] + placement["length"] > spec["max_length"] or placement["y"] + placement["width"] > spec["max_width"]:
             warnings.append(f"{crate_id} is outside {type_key} bounds")
 
         for other in placements:
+            if placement["stack_level"] != other.get("stack_level", 0):
+                continue
             if overlaps(placement, other):
                 warnings.append(f"{crate_id} overlaps {other['crate_id']}")
 
