@@ -22,8 +22,9 @@ import { printV3OperationalPackSheet } from '../utils/printUtils';
 /**
  * Smart Crate Planner v3 — dispatch selection, generate/regenerate, 3D preview, crate table.
  * Renders inside Planning Workspace (not a separate full-page shell).
+ * `onClose` is optional legacy hook (no-op) for older callers / hot-reload fragments.
  */
-const PlannerV3Screen = ({ projectId }) => {
+const PlannerV3Screen = ({ projectId, onClose = () => {} }) => {
   const project = usePlannerStore((s) => s.project);
   const pieces = usePlannerStore((s) => s.pieces);
   const crates = usePlannerStore((s) => s.crates);

@@ -1,7 +1,14 @@
 import React, { useMemo } from 'react';
 import { usePlannerStore } from '../store/plannerStore';
-import { computedCrateWeightKg } from '../utils/plannerDisplay';
 import { buildPiecesByCrate, formatNumber, getPieceWeight } from '../utils/plannerUtils';
+
+/** Prefer persisted crate kg; else sum assigned parts (keeps in sync with plannerDisplay.computedCrateWeightKg). */
+function crateDisplayWeightKg(crate, piecesInCrate, project) {
+  const w = Number(crate?.weight ?? crate?.total_weight_kg ?? crate?.gross_weight);
+  if (w > 0) return w;
+  if (!piecesInCrate?.length) return 0;
+  return piecesInCrate.reduce((s, p) => s + getPieceWeight(p, project), 0);
+}
 
 const PlannerCrateTab = () => {
   const project = usePlannerStore((s) => s.project);
@@ -59,7 +66,7 @@ const PlannerCrateTab = () => {
                         {crate.planner_v3_orientation}
                       </span>
                     )}
-                    <span>{formatNumber(computedCrateWeightKg(crate, cratePieces, project), 0)} kg</span>
+                    <span>{formatNumber(crateDisplayWeightKg(crate, cratePieces, project), 0)} kg</span>
                   </div>
                 </div>
                 <div className="text-right text-xs text-[#64748b]">
