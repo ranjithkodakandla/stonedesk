@@ -611,6 +611,9 @@ def build_crate_metrics(
         "grouping_reason": crate_doc.get("grouping_reason", ""),
         "packing_family": crate_doc.get("packing_family", ""),
         "splash_layer": crate_doc.get("splash_layer", False),
+        "main_layer_piece_ids": crate_doc.get("main_layer_piece_ids", []),
+        "splash_layer_piece_ids": crate_doc.get("splash_layer_piece_ids", []),
+        "packing_warnings": crate_doc.get("packing_warnings", []),
     }
 
 

@@ -2,21 +2,28 @@ from copy import deepcopy
 from datetime import date, datetime
 from io import BytesIO
 import os
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import certifi
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, Response, UploadFile, File, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pymongo import MongoClient, ReturnDocument
 from pydantic import BaseModel
 from .pdf_parser import parse_pdf
 from .services.container_planner import build_container_plan
+from .services.deterministic_packing import (
+    CATEGORY_CONFIG as DET_CATEGORY_CONFIG,
+    discover_dispatch_hierarchy,
+)
+from .services.planner_v3 import enrich_layout_with_crates, run_v3_planner
+from .services.planner_v3.dispatch_units import build_dispatch_units_from_pieces
+from .services.planner_v3.container_layout import linear_manual_sort_placements
 from .services.planning_engine import (
     COLOR_DENSITIES,
     build_planning_snapshot,
-    estimate_auto_dimensions,
     piece_destination_key,
     piece_weight as planning_piece_weight,
     weight_factor as planning_weight_factor,
@@ -188,6 +195,21 @@ def as_iso(value: Any) -> Any:
     return value
 
 
+def _json_safe_floats(obj: Any) -> Any:
+    """Replace NaN/inf floats so FastAPI/Starlette JSON encoding never raises."""
+    import math
+
+    if isinstance(obj, dict):
+        return {k: _json_safe_floats(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe_floats(v) for v in obj]
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    return obj
+
+
 def project_response(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not doc:
         return None
@@ -206,6 +228,14 @@ def project_response(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         "flat_format": doc.get("flat_format", "3-digit"),
         "description_thickness_map": doc.get("description_thickness_map", {}),
         "status": doc.get("status", "draft"),
+        "dispatch_selection": doc.get("dispatch_selection", {}),
+        "planner_v3_layout": _json_safe_floats(doc.get("planner_v3_layout")),
+        "planner_v3_containers": _json_safe_floats(doc.get("planner_v3_containers") or []),
+        "planner_v3_summary": _json_safe_floats(doc.get("planner_v3_summary")),
+        "planner_v3_debug_snapshot": _json_safe_floats(doc.get("planner_v3_debug_snapshot")),
+        "planner_v3_unshippable_crates": _json_safe_floats(doc.get("planner_v3_unshippable_crates") or []),
+        "planner_v3_container_optimization": _json_safe_floats(doc.get("planner_v3_container_optimization")),
+        "delivery_payload_cap_kg": float(doc.get("delivery_payload_cap_kg") or 24000),
         "created_at": as_iso(doc.get("created_at")),
         "updated_at": as_iso(doc.get("updated_at")),
     }
@@ -265,6 +295,22 @@ def crate_response(doc: Dict[str, Any]) -> Dict[str, Any]:
         "external_height": doc.get("external_height", 0.0),
         "sqft": doc.get("sqft", 0.0),
         "weight": doc.get("weight", 0.0),
+        "dispatch_order": doc.get("dispatch_order", 0),
+        "packing_mode": doc.get("packing_mode", ""),
+        "packing_family": doc.get("packing_family", ""),
+        "splash_layer": doc.get("splash_layer", False),
+        "main_layer_piece_ids": doc.get("main_layer_piece_ids", []),
+        "splash_layer_piece_ids": doc.get("splash_layer_piece_ids", []),
+        "packing_warnings": doc.get("packing_warnings", []),
+        "grouping_reason": doc.get("grouping_reason", ""),
+        "planner_notes": doc.get("planner_notes", ""),
+        "locked": doc.get("locked", False),
+        "planner_v3_crate_class": doc.get("planner_v3_crate_class"),
+        "planner_v3_orientation": doc.get("planner_v3_orientation"),
+        "planner_v3_splash_layers": doc.get("planner_v3_splash_layers"),
+        "weight_band_status": doc.get("weight_band_status"),
+        "planner_v3_pull_piece_ids": doc.get("planner_v3_pull_piece_ids") or [],
+        "planner_debug": doc.get("planner_debug"),
         "created_at": as_iso(doc.get("created_at")),
     }
 
@@ -409,446 +455,6 @@ def estimate_crate_dimensions(
         "weight": round(total_weight, 2),
         "max_weight": max_weight,
     }
-
-
-CRATE_TEMPLATES: Dict[str, Dict[str, Any]] = {
-    "Vanity":   {"max_weight": 900,  "ideal_weight": (400, 750),  "max_pieces": 25, "label": "Vanity"},
-    "Kitchen":  {"max_weight": 1200, "ideal_weight": (500, 1000), "max_pieces": 18, "label": "Kitchen"},
-    "Island":   {"max_weight": 1500, "ideal_weight": (600, 1200), "max_pieces": 12, "label": "Island"},
-    "Splashes": {"max_weight": 650,  "ideal_weight": (200, 500),  "max_pieces": 40, "label": "Side Tops / Splashes"},
-    "Laundry":  {"max_weight": 900,  "ideal_weight": (400, 750),  "max_pieces": 25, "label": "Laundry"},
-    "Utility":  {"max_weight": 1100, "ideal_weight": (400, 900),  "max_pieces": 20, "label": "Utility"},
-    "Other":    {"max_weight": 1100, "ideal_weight": (400, 900),  "max_pieces": 20, "label": "Mixed / Other"},
-}
-
-
-def _get_template(category: str) -> Dict[str, Any]:
-    return CRATE_TEMPLATES.get(category, CRATE_TEMPLATES["Other"])
-
-
-# ─── Family-Based Packing Config ─────────────────────────────────────────────
-
-FAMILY_DESCRIPTIONS: Dict[str, frozenset] = {
-    "island":    frozenset(["Island Countertop"]),
-    "perimeter": frozenset(["Kitchen Countertop"]),
-    "vanity":    frozenset(["Vanity Top", "Laundry Top"]),
-    "range":     frozenset(["Range Top", "Shower Ledge"]),
-    "splash":    frozenset(["Back Splash", "Side Splash"]),
-    "misc":      frozenset(["Window Sill", "Hearth", "Threshold"]),
-}
-
-FAMILY_WEIGHT_CONFIG: Dict[str, Dict[str, Any]] = {
-    "island":    {"max_weight": 1500, "ideal_weight": (600, 1200), "max_pieces": 12, "label": "Island"},
-    "perimeter": {"max_weight": 1200, "ideal_weight": (500, 1000), "max_pieces": 18, "label": "Perimeter"},
-    "vanity":    {"max_weight": 900,  "ideal_weight": (400, 750),  "max_pieces": 25, "label": "Vanity"},
-    "range":     {"max_weight": 900,  "ideal_weight": (300, 700),  "max_pieces": 20, "label": "Range"},
-    "misc":      {"max_weight": 650,  "ideal_weight": (200, 500),  "max_pieces": 30, "label": "Special"},
-}
-
-SPLASH_PRIORITY = ["island", "perimeter", "vanity", "range"]
-
-
-def _piece_destination_key(piece: Dict[str, Any]) -> str:
-    building = str(piece.get("building", "")).strip()
-    floor = str(piece.get("floor", "")).strip()
-    flat = str(piece.get("flat", "")).strip()
-    parts = [p for p in [building, floor, flat] if p]
-    return " / ".join(parts) if parts else ""
-
-
-def _piece_flat_key(piece: Dict[str, Any]) -> str:
-    building = str(piece.get("building", "")).strip()
-    floor = str(piece.get("floor", "")).strip()
-    flat = str(piece.get("flat", "")).strip()
-    parts = [p for p in [building, floor, flat] if p]
-    return " / ".join(parts) if parts else "No Location"
-
-
-def _piece_floor_key(piece: Dict[str, Any]) -> str:
-    building = str(piece.get("building", "")).strip()
-    floor = str(piece.get("floor", "")).strip()
-    parts = [p for p in [building, floor] if p]
-    return " / ".join(parts) if parts else "No Location"
-
-
-def _piece_building_key(piece: Dict[str, Any]) -> str:
-    building = str(piece.get("building", "")).strip()
-    return building if building else "No Location"
-
-
-def _weight_band_status(total_weight: float, template: Dict[str, Any]) -> str:
-    ideal_lo, ideal_hi = template["ideal_weight"]
-    if ideal_lo <= total_weight <= ideal_hi:
-        return "ideal"
-    elif total_weight < ideal_lo:
-        return "below_ideal"
-    else:
-        return "above_ideal"
-
-
-def _classify_family(piece: Dict[str, Any]) -> Tuple[str, bool]:
-    """Returns (family_key, is_splash). Splash pieces get paired with their parent family crate."""
-    desc = (piece.get("part") or "").strip()
-    for family, descs in FAMILY_DESCRIPTIONS.items():
-        if desc in descs:
-            return (family, family == "splash")
-    return ("misc", False)
-
-
-def _dispatch_key(piece: Dict[str, Any], basis: str) -> str:
-    if basis == "building":
-        return _piece_building_key(piece)
-    elif basis == "floor":
-        return _piece_floor_key(piece)
-    else:
-        return _piece_flat_key(piece)
-
-
-def _distribute_pieces(
-    pieces: List[Dict[str, Any]],
-    max_weight: float,
-    max_pieces: int,
-    material: str,
-    thickness: str,
-    color: str = "",
-) -> List[List[Dict[str, Any]]]:
-    """Greedy bin-pack sorted by length desc then weight desc."""
-    if not pieces:
-        return []
-    sorted_pieces = sorted(
-        pieces,
-        key=lambda p: (
-            float(p.get("length", 0)),
-            piece_weight(p, material, thickness, color),
-        ),
-        reverse=True,
-    )
-    crates: List[List[Dict[str, Any]]] = []
-    current: List[Dict[str, Any]] = []
-    current_wt = 0.0
-    for p in sorted_pieces:
-        pw = piece_weight(p, material, thickness, color)
-        if current and (len(current) >= max_pieces or current_wt + pw > max_weight):
-            crates.append(current)
-            current = [p]
-            current_wt = pw
-        else:
-            current.append(p)
-            current_wt += pw
-    if current:
-        crates.append(current)
-    return crates
-
-
-def _crate_weight(pieces: List[Dict[str, Any]], material: str, thickness: str, color: str = "") -> float:
-    return sum(piece_weight(p, material, thickness, color) for p in pieces)
-
-
-def _dominant_category(pieces: List[Dict[str, Any]]) -> str:
-    counts: Dict[str, int] = {}
-    for p in pieces:
-        cat = p.get("category") or "Other"
-        counts[cat] = counts.get(cat, 0) + 1
-    return max(counts, key=counts.get) if counts else "Other"
-
-
-# ─── Strategy 1: Category-Based ──────────────────────────────────────────────
-
-def strategy_category_based(
-    pieces: List[Dict[str, Any]],
-    user_max_weight: float,
-    material: str,
-    thickness: str,
-    color: str = "",
-) -> List[Dict[str, Any]]:
-    """Group by category, then sub-group by destination within each category."""
-    # Primary grouping: by category
-    by_category: Dict[str, List[Dict[str, Any]]] = {}
-    for p in pieces:
-        cat = p.get("category") or "Other"
-        by_category.setdefault(cat, []).append(p)
-
-    generated: List[Dict[str, Any]] = []
-    serial = 1
-
-    for category, cat_pieces in sorted(by_category.items()):
-        template = _get_template(category)
-        effective_max_weight = min(user_max_weight, template["max_weight"])
-        effective_max_pieces = template["max_pieces"]
-
-        # Secondary grouping: by destination within category
-        by_dest: Dict[str, List[Dict[str, Any]]] = {}
-        for p in cat_pieces:
-            dest = _piece_destination_key(p) or category
-            by_dest.setdefault(dest, []).append(p)
-
-        for dest_name, dest_pieces in sorted(by_dest.items()):
-            batches = _distribute_pieces(
-                dest_pieces, effective_max_weight, effective_max_pieces, material, thickness, color
-            )
-            for batch in batches:
-                total_wt = _crate_weight(batch, material, thickness, color)
-                crate_name = f"{category} — {dest_name}" if dest_name != category else category
-                generated.append({
-                    "serial": serial,
-                    "name": f"{crate_name}-{serial}",
-                    "pieces": batch,
-                    "max_weight": effective_max_weight,
-                    "crate_type": template["label"],
-                    "packing_mode": "category",
-                    "primary_flat": "",
-                    "secondary_flats": [],
-                    "weight_band_status": _weight_band_status(total_wt, template),
-                    "grouping_reason": f"Grouped by {category} category" + (
-                        f", destination {dest_name}" if dest_name != category else ""
-                    ),
-                })
-                serial += 1
-
-    return generated
-
-
-# ─── Strategy 2: Flat-Based ──────────────────────────────────────────────────
-
-def strategy_flat_based(
-    pieces: List[Dict[str, Any]],
-    user_max_weight: float,
-    material: str,
-    thickness: str,
-    color: str = "",
-) -> List[Dict[str, Any]]:
-    """Group by flat/apartment. Try single-crate-per-flat, split if needed, merge underfilled."""
-    # Step 1: Group by flat
-    by_flat: Dict[str, List[Dict[str, Any]]] = {}
-    for p in pieces:
-        key = _piece_flat_key(p)
-        by_flat.setdefault(key, []).append(p)
-
-    # Step 2+3: Try single crate per flat, split if exceeds
-    raw_crates: List[Dict[str, Any]] = []
-    for flat_key, flat_pieces in sorted(by_flat.items()):
-        total_wt = _crate_weight(flat_pieces, material, thickness, color)
-        if total_wt <= user_max_weight and len(flat_pieces) <= 30:
-            # Fits in one crate
-            dom_cat = _dominant_category(flat_pieces)
-            template = _get_template(dom_cat)
-            raw_crates.append({
-                "pieces": flat_pieces,
-                "primary_flat": flat_key,
-                "secondary_flats": [],
-                "crate_type": template["label"],
-                "weight": total_wt,
-                "max_weight": user_max_weight,
-                "grouping_reason": f"All parts for {flat_key}",
-                "floor_key": _piece_floor_key(flat_pieces[0]),
-                "building_key": _piece_building_key(flat_pieces[0]),
-                "weight_band_status": _weight_band_status(total_wt, template),
-            })
-        else:
-            # Split by category within flat
-            by_cat: Dict[str, List[Dict[str, Any]]] = {}
-            for p in flat_pieces:
-                cat = p.get("category") or "Other"
-                by_cat.setdefault(cat, []).append(p)
-
-            for cat, cat_pieces in sorted(by_cat.items()):
-                template = _get_template(cat)
-                eff_max = min(user_max_weight, template["max_weight"])
-                batches = _distribute_pieces(cat_pieces, eff_max, template["max_pieces"], material, thickness, color)
-                for batch in batches:
-                    wt = _crate_weight(batch, material, thickness, color)
-                    raw_crates.append({
-                        "pieces": batch,
-                        "primary_flat": flat_key,
-                        "secondary_flats": [],
-                        "crate_type": template["label"],
-                        "weight": wt,
-                        "max_weight": eff_max,
-                        "grouping_reason": f"{cat} parts for {flat_key} (split due to weight/size)",
-                        "floor_key": _piece_floor_key(batch[0]),
-                        "building_key": _piece_building_key(batch[0]),
-                        "weight_band_status": _weight_band_status(wt, template),
-                    })
-
-    # Step 4: Merge underfilled crates with nearby flats
-    underfill_threshold = user_max_weight * 0.40
-    merged_flags = [False] * len(raw_crates)
-
-    for i, crate in enumerate(raw_crates):
-        if merged_flags[i] or crate["weight"] >= underfill_threshold:
-            continue
-        # Try to merge with nearby crate
-        best_j = None
-        best_priority = 999
-        for j, other in enumerate(raw_crates):
-            if i == j or merged_flags[j]:
-                continue
-            combined_wt = crate["weight"] + other["weight"]
-            combined_count = len(crate["pieces"]) + len(other["pieces"])
-            if combined_wt > user_max_weight or combined_count > 30:
-                continue
-            # Priority: same floor > same building > different
-            if crate["floor_key"] == other["floor_key"] and crate["floor_key"] != "No Location":
-                priority = 1
-            elif crate["building_key"] == other["building_key"] and crate["building_key"] != "No Location":
-                priority = 2
-            else:
-                continue  # Don't merge across buildings
-            if priority < best_priority or (priority == best_priority and other["weight"] < crate["weight"]):
-                best_j = j
-                best_priority = priority
-
-        if best_j is not None:
-            other = raw_crates[best_j]
-            crate["pieces"] = crate["pieces"] + other["pieces"]
-            crate["weight"] = crate["weight"] + other["weight"]
-            if other["primary_flat"] and other["primary_flat"] != crate["primary_flat"]:
-                crate["secondary_flats"] = list(set(
-                    crate["secondary_flats"] + [other["primary_flat"]] + other["secondary_flats"]
-                ))
-            dom_cat = _dominant_category(crate["pieces"])
-            template = _get_template(dom_cat)
-            crate["crate_type"] = template["label"]
-            crate["weight_band_status"] = _weight_band_status(crate["weight"], template)
-            merge_label = f" + {other['primary_flat']}" if other["primary_flat"] != crate["primary_flat"] else ""
-            crate["grouping_reason"] = f"Merged: {crate['primary_flat']}{merge_label} (underfilled crates combined)"
-            merged_flags[best_j] = True
-
-    # Build final output
-    generated: List[Dict[str, Any]] = []
-    serial = 1
-    for i, crate in enumerate(raw_crates):
-        if merged_flags[i]:
-            continue
-        flat_label = crate["primary_flat"]
-        if crate["secondary_flats"]:
-            flat_label += " + " + ", ".join(crate["secondary_flats"][:2])
-            if len(crate["secondary_flats"]) > 2:
-                flat_label += f" +{len(crate['secondary_flats']) - 2} more"
-        generated.append({
-            "serial": serial,
-            "name": f"{flat_label}-{serial}",
-            "pieces": crate["pieces"],
-            "max_weight": crate["max_weight"],
-            "crate_type": crate["crate_type"],
-            "packing_mode": "flat",
-            "primary_flat": crate["primary_flat"],
-            "secondary_flats": crate["secondary_flats"],
-            "weight_band_status": crate["weight_band_status"],
-            "grouping_reason": crate["grouping_reason"],
-        })
-        serial += 1
-
-    return generated
-
-
-# ─── Strategy 3: Family-Based ─────────────────────────────────────────────────
-
-def strategy_family_based(
-    pieces: List[Dict[str, Any]],
-    dispatch_basis: str,
-    dispatch_values: List[str],
-    material: str,
-    thickness: str,
-    color: str = "",
-) -> List[Dict[str, Any]]:
-    """Group by dispatch unit (building/floor/flat), then by stone family within each unit.
-    Splash pieces are kept in the same crate as their parent family tops."""
-    # Filter to requested dispatch values when specified
-    if dispatch_values:
-        dispatch_set = set(dispatch_values)
-        pieces = [p for p in pieces if _dispatch_key(p, dispatch_basis) in dispatch_set]
-
-    by_dispatch: Dict[str, List[Dict[str, Any]]] = {}
-    for p in pieces:
-        key = _dispatch_key(p, dispatch_basis)
-        by_dispatch.setdefault(key, []).append(p)
-
-    generated: List[Dict[str, Any]] = []
-    serial = 1
-
-    for dk, group_pieces in sorted(by_dispatch.items()):
-        family_tops: Dict[str, List[Dict[str, Any]]] = {f: [] for f in FAMILY_WEIGHT_CONFIG}
-        splash_pieces: List[Dict[str, Any]] = []
-
-        for piece in group_pieces:
-            family, is_splash = _classify_family(piece)
-            if is_splash:
-                splash_pieces.append(piece)
-            elif family in family_tops:
-                family_tops[family].append(piece)
-            else:
-                family_tops.setdefault("misc", []).append(piece)
-
-        # Attach splash pieces to the highest-priority family that has tops
-        splash_assigned = False
-        for priority_family in SPLASH_PRIORITY:
-            if family_tops.get(priority_family):
-                family_tops[priority_family].extend(splash_pieces)
-                splash_assigned = True
-                break
-        if not splash_assigned and splash_pieces:
-            family_tops.setdefault("misc", []).extend(splash_pieces)
-
-        for family_key, family_pieces in family_tops.items():
-            if not family_pieces:
-                continue
-
-            config = FAMILY_WEIGHT_CONFIG[family_key]
-            batches = _distribute_pieces(
-                family_pieces, config["max_weight"], config["max_pieces"], material, thickness, color
-            )
-
-            for batch in batches:
-                total_wt = _crate_weight(batch, material, thickness, color)
-                has_splash = any(_classify_family(p)[1] for p in batch)
-                generated.append({
-                    "serial": serial,
-                    "name": f"{config['label']} — {dk}-{serial}",
-                    "pieces": batch,
-                    "max_weight": config["max_weight"],
-                    "crate_type": config["label"],
-                    "packing_mode": "family",
-                    "primary_flat": dk,
-                    "secondary_flats": [],
-                    "weight_band_status": _weight_band_status(total_wt, config),
-                    "grouping_reason": f"{config['label']} family for {dk}"
-                        + (" (includes splash pieces)" if has_splash else ""),
-                    "packing_family": family_key,
-                    "splash_layer": has_splash,
-                })
-                serial += 1
-
-    return generated
-
-
-# ─── Orchestrator ─────────────────────────────────────────────────────────────
-
-def auto_generate_crates(
-    pieces: List[Dict[str, Any]],
-    strategy: str,
-    max_pieces: Optional[int],
-    max_weight: Optional[float],
-    material: str,
-    thickness: str,
-    color: str = "",
-    dispatch_basis: str = "flat",
-    dispatch_values: Optional[List[str]] = None,
-) -> List[Dict[str, Any]]:
-    if not pieces:
-        return []
-
-    effective_max_weight = max_weight if max_weight and max_weight > 0 else 1000.0
-
-    if strategy == "family":
-        return strategy_family_based(
-            pieces, dispatch_basis, dispatch_values or [], material, thickness, color
-        )
-    elif strategy == "flat":
-        return strategy_flat_based(pieces, effective_max_weight, material, thickness, color)
-    else:
-        # "category", "smart", "type", or any other value → category-based
-        return strategy_category_based(pieces, effective_max_weight, material, thickness, color)
 
 
 def crate_group_name(crate_name: str) -> str:
@@ -1085,6 +691,11 @@ class ProjectUpdate(BaseModel):
     description_thickness_map: Dict[str, str] = {}
 
 
+class PlannerPayloadUpdate(BaseModel):
+    """Planner-only: 20ft payload cap (kg). Default 24,000; port unload commonly 28,000."""
+    delivery_payload_cap_kg: float = 24000.0
+
+
 app = FastAPI()
 
 app.add_middleware(
@@ -1096,6 +707,7 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Perf-Validation", "X-Perf-Mongo", "X-Perf-Backend-Total"],
 )
 
 
@@ -1139,6 +751,17 @@ def get_project(project_id: int):
     return project_response(project)
 
 
+@app.patch("/api/projects/{project_id}/planner-payload")
+def patch_planner_payload(project_id: int, data: PlannerPayloadUpdate):
+    """Does not clear container plan — safe for planner toolbar."""
+    cap = max(20000.0, min(32000.0, float(data.delivery_payload_cap_kg)))
+    projects_col.update_one(
+        {"id": project_id},
+        {"$set": {"delivery_payload_cap_kg": cap, "updated_at": utc_now()}},
+    )
+    return {"message": "ok", "delivery_payload_cap_kg": cap}
+
+
 @app.put("/api/projects/{project_id}")
 def update_project(project_id: int, data: ProjectUpdate):
     update = {
@@ -1162,7 +785,8 @@ def update_project(project_id: int, data: ProjectUpdate):
 
 
 VALID_PROJECT_STATUSES = {
-    "draft", "review_pending", "approved_for_packing", "crate_planned", "container_planned"
+    "draft", "review_pending", "approved_for_packing",
+    "crate_planned", "packing_approved", "container_planned"
 }
 
 
@@ -1554,6 +1178,7 @@ def create_crate(project_id: int, data: Dict[str, Any]):
         "external_height": external_height,
         "sqft": float(data.get("sqft", 0) or 0),
         "weight": float(data.get("weight", 0) or 0),
+        "packing_family": str(data.get("packing_family", "") or ""),
         "created_at": utc_now(),
     }
     crates_col.insert_one(crate)
@@ -1581,6 +1206,25 @@ def update_crate(project_id: int, crate_id: int, data: Dict[str, Any]):
     existing = crates_col.find_one({"project_id": project_id, "id": crate_id}, {"_id": 0})
     if not existing:
         return {"message": "ok"}
+
+    was_locked = bool(existing.get("locked"))
+    unlocking = was_locked and data.get("locked") is False
+
+    if was_locked and not unlocking:
+        if data.get("reset_dimensions"):
+            raise HTTPException(status_code=400, detail="Unlock the crate before resetting dimensions.")
+        dim_fields = [
+            "internal_length",
+            "internal_width",
+            "internal_height",
+            "external_length",
+            "external_width",
+            "external_height",
+        ]
+        if any(f in data for f in dim_fields):
+            raise HTTPException(status_code=400, detail="Unlock the crate before editing dimensions.")
+        if "dimension_mode" in data and (data.get("dimension_mode") or "") != (existing.get("dimension_mode") or ""):
+            raise HTTPException(status_code=400, detail="Unlock the crate before changing dimension mode.")
 
     update: Dict[str, Any] = {
         "name": data.get("name", existing.get("name", existing.get("crate_id", "Crate"))),
@@ -1648,6 +1292,12 @@ def merge_crates(project_id: int, data: Dict[str, Any]):
     if not target:
         return {"message": "target not found"}
 
+    involved = list(dict.fromkeys(crate_ids + [target_id]))
+    for cid in involved:
+        row = crates_col.find_one({"project_id": project_id, "id": cid}, {"locked": 1})
+        if row and row.get("locked"):
+            raise HTTPException(status_code=400, detail="Merge blocked — a selected crate is locked.")
+
     source_ids = [crate_id for crate_id in crate_ids if crate_id != target_id]
     assignments = list(assignments_col.find({"project_id": project_id, "crate_id": {"$in": source_ids}}, {"_id": 0}))
     for assignment in assignments:
@@ -1672,6 +1322,12 @@ def split_crate(project_id: int, data: Dict[str, Any]):
     piece_ids = [int(piece_id) for piece_id in data.get("piece_ids", []) if str(piece_id).strip()]
     if not piece_ids:
         return {"message": "no pieces selected"}
+
+    a0 = assignments_col.find_one({"project_id": project_id, "piece_id": piece_ids[0]})
+    if a0:
+        src_c = crates_col.find_one({"project_id": project_id, "id": a0["crate_id"]}, {"locked": 1})
+        if src_c and src_c.get("locked"):
+            raise HTTPException(status_code=400, detail="Cannot split a locked crate.")
 
     serial = crate_serial_for_project(project_id)
     crate_doc = {
@@ -1714,6 +1370,172 @@ def split_crate(project_id: int, data: Dict[str, Any]):
     return {"id": crate_doc["id"], "crate_id": crate_doc["crate_id"]}
 
 
+@app.get("/api/projects/{project_id}/dispatch-hierarchy")
+def get_dispatch_hierarchy(project_id: int):
+    """Returns building → floor → flat hierarchy discovered from project pieces."""
+    pieces = list(pieces_col.find({"project_id": project_id}, {"_id": 0}))
+    return discover_dispatch_hierarchy(pieces)
+
+
+def _family_split_reason(
+    piece_ids: List[int],
+    piece_to_crate: Dict[int, int],
+    crates_by_db_id: Dict[int, Dict[str, Any]],
+) -> Optional[str]:
+    """Explains real splits (geometry / planner exceptions); None when not split."""
+    cids = {piece_to_crate[pid] for pid in piece_ids if pid in piece_to_crate}
+    if len(cids) <= 1:
+        return None
+    snippets: List[str] = []
+    for cid in sorted(cids):
+        doc = crates_by_db_id.get(cid) or {}
+        for w in doc.get("packing_warnings") or []:
+            ws = str(w)
+            if "EXCEPTION family split" in ws:
+                return ws
+            if "EXCEPTION over-height" in ws or "over-height island" in ws:
+                return ws
+            if ws.startswith("EXCEPTION"):
+                snippets.append(ws)
+        notes = str(doc.get("planner_notes") or "")
+        for part in notes.split(";"):
+            p = part.strip()
+            if "EXCEPTION" in p:
+                snippets.append(p)
+    if snippets:
+        return snippets[0]
+    return "Split across crates — inspect packing_warnings / planner_notes on the listed crates for details."
+
+
+@app.get("/api/projects/{project_id}/families")
+def get_packing_families(project_id: int):
+    """
+    Returns computed packing families for the project, annotated with current
+    crate assignments so the family builder UI can show assigned/unassigned state.
+    """
+    from collections import Counter
+
+    pieces = list(pieces_col.find({"project_id": project_id}, {"_id": 0}))
+    if not pieces:
+        return []
+
+    project_doc = projects_col.find_one({"id": project_id}, {"_id": 0})
+    material = (project_doc or {}).get("material", "Granite")
+    thickness = (project_doc or {}).get("thickness", "3CM")
+    stone_color = str((project_doc or {}).get("stone_color", "") or "")
+
+    # piece_id → crate_id
+    raw_assignments = assignments_col.find({"project_id": project_id}, {"_id": 0, "piece_id": 1, "crate_id": 1})
+    piece_to_crate: Dict[int, int] = {a["piece_id"]: a["crate_id"] for a in raw_assignments}
+
+    # crate_id → crate_id string (for display)
+    crate_docs = {c["id"]: c.get("crate_id", "") for c in crates_col.find({"project_id": project_id}, {"_id": 0, "id": 1, "crate_id": 1})}
+    crates_by_db_id = {
+        c["id"]: c
+        for c in crates_col.find({"project_id": project_id}, {"_id": 0})
+    }
+
+    dispatch_units, _prefix_events = build_dispatch_units_from_pieces(pieces)
+    result = []
+    for fam in dispatch_units:
+        all_pieces = fam["all_pieces"]
+        piece_ids = [p["id"] for p in all_pieces]
+
+        # Determine primary crate assignment (most common)
+        assigned_crate_ids = [piece_to_crate[pid] for pid in piece_ids if pid in piece_to_crate]
+        if assigned_crate_ids:
+            crate_counts = Counter(assigned_crate_ids)
+            primary_db_id = crate_counts.most_common(1)[0][0]
+            is_split = len(crate_counts) > 1
+        else:
+            primary_db_id = None
+            is_split = False
+
+        total_weight = sum(planning_piece_weight(p, material, thickness, stone_color) for p in all_pieces)
+        cat_cfg = DET_CATEGORY_CONFIG.get(fam["category"], DET_CATEGORY_CONFIG["misc"])
+
+        # Extract location from first piece (all pieces in a unit share flat/floor/building)
+        ref = all_pieces[0] if all_pieces else {}
+        building = str(ref.get("building", "") or "").strip()
+        floor = str(ref.get("floor", "") or "").strip()
+        flat = str(ref.get("flat", "") or "").strip()
+
+        uid = str(fam.get("unit_id") or "")
+        display_family_id = str(fam.get("canonical_family_id") or fam.get("family_id") or "")
+
+        result.append({
+            "unit_id": uid,
+            "family_id": display_family_id,
+            "family_ui_key": uid or f"{fam.get('family_id')}@@{fam['flat_key']}@@{fam['category']}",
+            "flat_key": fam["flat_key"],
+            "building": building,
+            "floor": floor,
+            "flat": flat,
+            "category": fam["category"],
+            "category_label": cat_cfg["label"],
+            "unit_kind": fam.get("unit_kind"),
+            "splash_attach_route": fam.get("splash_attach_route"),
+            "detached_reason": fam.get("detached_reason"),
+            "prefix_normalization_events": fam.get("prefix_normalization_events") or [],
+            "main_piece_ids": [p["id"] for p in fam["main_pieces"]],
+            "splash_piece_ids": [p["id"] for p in fam["splash_pieces"]],
+            "all_piece_ids": piece_ids,
+            "main_part_nos": [str(p.get("part_no", "") or "") for p in fam["main_pieces"]],
+            "splash_part_nos": [str(p.get("part_no", "") or "") for p in fam["splash_pieces"]],
+            "main_count": len(fam["main_pieces"]),
+            "splash_count": len(fam["splash_pieces"]),
+            "total_pieces": len(all_pieces),
+            "total_weight_kg": round(total_weight, 1),
+            "current_crate_db_id": primary_db_id,
+            "current_crate_label": crate_docs.get(primary_db_id, "") if primary_db_id else None,
+            "is_split": is_split,
+            "split_reason": _family_split_reason(piece_ids, piece_to_crate, crates_by_db_id) if is_split else None,
+            "ideal_lo": cat_cfg["ideal_lo"],
+            "ideal_hi": cat_cfg["ideal_hi"],
+            "max_kg": cat_cfg["max_kg"],
+        })
+
+    return result
+
+
+@app.get("/api/projects/{project_id}/island-operational/options")
+def island_operational_location_options(project_id: int):
+    """Building / floor / flat pick lists for island operational scope (read-only)."""
+    pieces = list(pieces_col.find({"project_id": project_id}, {"_id": 0}))
+    from .services.planner_v3.island_operational_plan import location_options_from_pieces
+
+    return location_options_from_pieces(pieces)
+
+
+@app.post("/api/projects/{project_id}/island-operational/plan")
+def island_operational_plan_preview(project_id: int, body: Dict[str, Any] = Body(default_factory=dict)):
+    """
+    Preview-only island crate plan (no Mongo writes). Requires PLANNER_V3_OPERATIONAL=1 on the server.
+    body: optional buildings[], floors[], flats[], dispatch_selection{}, include_raw_specs (bool).
+    """
+    project = projects_col.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    status = project.get("status") or "draft"
+    if status not in {"approved_for_packing", "crate_planned", "container_planned"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Approve the project for packing before generating an island plan.",
+        )
+
+    pieces = list(pieces_col.find({"project_id": project_id}, {"_id": 0}))
+    if not pieces:
+        return {"message": "no pieces", "crates": [], "piece_count": 0, "scoped_piece_count": 0}
+
+    from .services.planner_v3.island_operational_plan import build_island_operational_review
+
+    try:
+        return build_island_operational_review(project, pieces, body or {})
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.post("/api/projects/{project_id}/crates/auto-generate")
 def auto_generate(project_id: int, data: Dict[str, Any]):
     pieces = list(pieces_col.find({"project_id": project_id}, {"_id": 0}))
@@ -1723,6 +1545,13 @@ def auto_generate(project_id: int, data: Dict[str, Any]):
     project = projects_col.find_one({"id": project_id}, {"_id": 0})
     if not project:
         return {"message": "project not found"}
+
+    status = project.get("status") or "draft"
+    if status not in {"approved_for_packing", "crate_planned", "container_planned"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Approve the project for packing before generating a crate plan.",
+        )
 
     existing_crates = list(crates_col.find({"project_id": project_id}, {"_id": 0}))
     locked_crates = [crate for crate in existing_crates if crate.get("locked")]
@@ -1737,147 +1566,189 @@ def auto_generate(project_id: int, data: Dict[str, Any]):
         assignments_col.delete_many({"project_id": project_id, "crate_id": {"$in": unlocked_crate_ids}})
         crates_col.delete_many({"project_id": project_id, "id": {"$in": unlocked_crate_ids}})
 
-    strategy = data.get("group_by", "type")
-    packing_strategy = data.get("packing_strategy", "")
-    dispatch_basis = data.get("dispatch_basis", "flat")
-    dispatch_values: List[str] = data.get("dispatch_values") or []
-
-    # packing_strategy overrides group_by when provided
-    if packing_strategy:
-        strategy = packing_strategy
-
-    max_pieces = data.get("max_pieces")
-    try:
-        max_pieces = int(max_pieces) if max_pieces not in (None, "") else None
-    except (TypeError, ValueError):
-        max_pieces = None
-
-    try:
-        max_weight = float(data.get("max_weight", 1000) or 1000)
-    except (TypeError, ValueError):
-        max_weight = 1000.0
-
-    # Optimization weights (1–10 scale from the frontend sliders)
-    opt_weights = data.get("weights") or {}
-    weight_balance = max(1, min(10, int(opt_weights.get("weight_balance", 6))))
-    apartment_grouping = max(1, min(10, int(opt_weights.get("apartment_grouping", 8))))
-    fragility_separation = max(1, min(10, int(opt_weights.get("fragility_separation", 4))))
-
-    # High weight_balance → tighten max_weight so crates stay more evenly loaded
-    balance_scale = 1.0 - (weight_balance - 1) * 0.025  # 1.0 at 1 → 0.775 at 10
-    effective_max_weight = max(300.0, max_weight * balance_scale)
-
-    # High apartment_grouping score auto-switches to flat strategy when no explicit choice
-    if strategy not in ("flat", "category", "family") and apartment_grouping >= 7:
-        strategy = "flat"
-
-    # Family strategy bypasses fragility separation (splashes stay with tops)
-    unlocked_pieces = [piece for piece in pieces if piece["id"] not in locked_piece_ids]
-    if strategy != "family" and fragility_separation >= 7:
-        fragile_cats = {"Window Sill", "Hearth", "Threshold"}
-        fragile_pieces = [p for p in unlocked_pieces if (p.get("category") or "") in fragile_cats]
-        non_fragile_pieces = [p for p in unlocked_pieces if (p.get("category") or "") not in fragile_cats]
-    else:
-        fragile_pieces = []
-        non_fragile_pieces = unlocked_pieces
-
     _stone_color = project.get("stone_color", "") or ""
     _mat = project.get("material", "Granite")
     _thick = project.get("thickness", "3CM")
+    unlocked_pieces = [p for p in pieces if p["id"] not in locked_piece_ids]
 
-    generated = auto_generate_crates(
-        pieces=non_fragile_pieces,
-        strategy=strategy,
-        max_pieces=max_pieces,
-        max_weight=effective_max_weight,
-        material=_mat,
-        thickness=_thick,
-        color=_stone_color,
-        dispatch_basis=dispatch_basis,
-        dispatch_values=dispatch_values,
-    )
-    if fragile_pieces:
-        fragile_generated = auto_generate_crates(
-            pieces=fragile_pieces,
-            strategy=strategy,
-            max_pieces=max_pieces,
-            max_weight=effective_max_weight,
-            material=_mat,
-            thickness=_thick,
-            color=_stone_color,
-            dispatch_basis=dispatch_basis,
-            dispatch_values=dispatch_values,
+    dispatch_selection = data.get("dispatch_selection") or project.get("dispatch_selection") or {}
+    if dispatch_selection:
+        projects_col.update_one(
+            {"id": project_id},
+            {"$set": {"dispatch_selection": dispatch_selection, "updated_at": utc_now()}},
         )
-        for crate in fragile_generated:
-            crate["name"] = f"FRAGILE-{crate['name']}"
-        generated = generated + fragile_generated
 
-    crate_docs = []
-    assignment_docs = []
+    v3 = run_v3_planner(unlocked_pieces, project, dispatch_selection)
+    specs = v3["crates"]
+    layout = v3.get("container_layout") or {}
+    container_plan_list = v3.get("containers") or ([layout] if layout.get("placements") is not None else [])
+
+    crate_docs: List[Dict[str, Any]] = []
+    assignment_docs: List[Dict[str, Any]] = []
     next_serial = crate_serial_for_project(project_id)
-    for crate in generated:
-        dims = estimate_auto_dimensions(
-            crate["pieces"],
-            project.get("material", "Granite"),
-            project.get("thickness", "3CM"),
-            crate["max_weight"],
-            preferred_wood_thickness=float(project.get("crate_wood_thickness", 0) or 0),
-            color=_stone_color,
+    _wood_thick = float(project.get("crate_wood_thickness", 1.5) or 1.5)
+
+    for dispatch_seq, spec in enumerate(specs, start=1):
+        dims = spec["dimensions"]
+        sqft = sum(
+            (float(p.get("length", 0) or 0) * float(p.get("width", 0) or 0) / 144.0)
+            * max(1, int(p.get("qty", 1) or 1))
+            for p in spec["pieces"]
         )
+        wt = float(spec["total_weight_kg"])
+
         crate_doc = {
             "id": next_sequence("crate"),
             "project_id": project_id,
             "crate_id": f"CR{next_serial:04d}",
-            "name": crate["name"],
-            "max_weight": crate["max_weight"],
+            "name": spec["name"],
+            "max_weight": spec["max_weight"],
             "locked": False,
             "custom": False,
             "reserved_space_pct": 0.0,
-            "planner_notes": "",
+            "planner_notes": "; ".join(spec.get("warnings") or []),
             "dimension_mode": "auto",
-            "stackable": None,
+            "stackable": spec.get("orientation") == "horizontal",
             "forklift_entry": None,
             "reinforcement": None,
             "wood_type": project.get("crate_wood_type", "Pine"),
-            "wood_thickness": dims.get("wood_thickness", 1.0),
+            "wood_thickness": dims.get("wood_thickness", _wood_thick),
             "internal_length": dims["internal_length"],
             "internal_width": dims["internal_width"],
             "internal_height": dims["internal_height"],
             "external_length": dims["external_length"],
             "external_width": dims["external_width"],
             "external_height": dims["external_height"],
-            "sqft": dims["sqft"],
-            "weight": dims["weight"],
-            "crate_type": crate.get("crate_type", "Mixed / Other"),
-            "packing_mode": crate.get("packing_mode", "category"),
-            "primary_flat": crate.get("primary_flat", ""),
-            "secondary_flats": crate.get("secondary_flats", []),
-            "weight_band_status": crate.get("weight_band_status", ""),
-            "grouping_reason": crate.get("grouping_reason", ""),
-            "packing_family": crate.get("packing_family", ""),
-            "splash_layer": crate.get("splash_layer", False),
+            "sqft": round(sqft, 2),
+            "weight": round(wt, 2),
+            "crate_type": spec["crate_type_label"],
+            "packing_mode": "v3",
+            "primary_flat": spec["dispatch_group"],
+            "secondary_flats": [],
+            "weight_band_status": spec.get("weight_band_status", ""),
+            "grouping_reason": spec.get("grouping_reason", ""),
+            "packing_family": spec.get("category", ""),
+            "splash_layer": bool(spec.get("splash_layer")),
+            "main_layer_piece_ids": spec.get("main_layer_piece_ids", []),
+            "splash_layer_piece_ids": spec.get("splash_layer_piece_ids", []),
+            "packing_warnings": spec.get("warnings", []),
+            "planner_v3_crate_class": spec.get("crate_class"),
+            "planner_v3_orientation": spec.get("orientation"),
+            "planner_v3_splash_layers": spec.get("splash_layers", []),
+            "planner_v3_pull_piece_ids": spec.get("pull_candidate_piece_ids") or [],
+            "planner_debug": spec.get("planner_debug") or {},
+            "dispatch_order": dispatch_seq,
             "created_at": utc_now(),
         }
         next_serial += 1
         crate_docs.append(crate_doc)
-        for piece in crate["pieces"]:
-            assignment_docs.append(
-                {
-                    "id": next_sequence("assignment"),
-                    "project_id": project_id,
-                    "piece_id": piece["id"],
-                    "crate_id": crate_doc["id"],
-                    "assigned_at": utc_now(),
-                }
-            )
+        for piece in spec["pieces"]:
+            assignment_docs.append({
+                "id": next_sequence("assignment"),
+                "project_id": project_id,
+                "piece_id": piece["id"],
+                "crate_id": crate_doc["id"],
+                "assigned_at": utc_now(),
+            })
 
     if crate_docs:
         crates_col.insert_many(crate_docs)
     if assignment_docs:
         assignments_col.insert_many(assignment_docs)
 
-    clear_manual_container_plan(project_id)
-    return {"message": f"Created {len(crate_docs)} crates", "locked_preserved": len(locked_crates)}
+    idx_to_crate_id = {i: doc["crate_id"] for i, doc in enumerate(crate_docs)}
+
+    manual_plan_containers: List[Dict[str, Any]] = []
+    enriched_layouts: List[Dict[str, Any]] = []
+    for ci, cont in enumerate(container_plan_list):
+        if not cont:
+            continue
+        pls = cont.get("placements") or []
+        manual_placements: List[Dict[str, Any]] = []
+        sorted_pls = linear_manual_sort_placements(pls, crate_docs)
+        for order_idx, pl in enumerate(sorted_pls, start=1):
+            try:
+                cidx = int(pl.get("crate_index"))
+            except (TypeError, ValueError):
+                cidx = None
+            cid = idx_to_crate_id.get(cidx) if cidx is not None else None
+            if not cid:
+                continue
+            manual_placements.append({
+                "crate_id": cid,
+                "x": float(pl.get("x", 0) or 0),
+                "y": float(pl.get("y", 0) or 0),
+                "rotated": bool(pl.get("rotated", False)),
+                "stack_level": int(pl.get("stack_level", 0) or 0),
+                "loading_order": order_idx,
+                "unload_order": max(1, len(sorted_pls) - order_idx + 1),
+            })
+        ctype = str(cont.get("type") or cont.get("container_type") or "20ft")
+        manual_plan_containers.append({
+            "id": f"V3-{ctype.upper()}-{project_id}-{ci + 1}",
+            "type": ctype,
+            "container_id": cont.get("container_id"),
+            "placements": manual_placements,
+        })
+        if crate_docs:
+            enriched_layouts.append(enrich_layout_with_crates(cont, crate_docs))
+        else:
+            enriched_layouts.append(cont)
+
+    manual_plan = {"containers": manual_plan_containers}
+
+    layout_persist = next(
+        (e for e in enriched_layouts if (e.get("placements") or [])),
+        enriched_layouts[0] if enriched_layouts else (enrich_layout_with_crates(layout, crate_docs) if crate_docs else layout),
+    )
+
+    unship = v3.get("rejected_manifest_specs") or []
+    projects_col.update_one(
+        {"id": project_id},
+        {
+            "$set": {
+                "manual_container_plan": manual_plan,
+                "planner_v3_layout": layout_persist,
+                "planner_v3_containers": enriched_layouts,
+                "planner_v3_summary": v3.get("summary") or {},
+                "planner_v3_container_optimization": v3.get("container_optimization") or {},
+                "planner_v3_debug_snapshot": v3.get("planner_debug_snapshot") or {},
+                "planner_v3_unshippable_crates": [
+                    {
+                        "serial": x.get("serial"),
+                        "name": x.get("name"),
+                        "unshippable_reason": x.get("unshippable_reason"),
+                        "piece_ids": [p["id"] for p in x.get("pieces") or []],
+                        "planner_debug": x.get("planner_debug"),
+                    }
+                    for x in unship
+                ],
+                "status": "crate_planned",
+                "updated_at": utc_now(),
+            }
+        },
+    )
+
+    rej_n = len(unship)
+    msg = f"Created {len(crate_docs)} manifest crate(s)"
+    if rej_n:
+        msg += f"; {rej_n} crate(s) excluded from manifest (geometry / gates — see planner_v3_unshippable_crates)."
+
+    return {
+        "message": msg,
+        "locked_preserved": len(locked_crates),
+        "manifest_crate_count": len(crate_docs),
+        "rejected_manifest_crate_count": rej_n,
+        "planner_v3": {
+            "container": layout_persist,
+            "containers": enriched_layouts,
+            "summary": v3.get("summary") or {},
+            "suggest_40ft": False,
+            "warnings": v3.get("warnings") or [],
+            "container_optimization": v3.get("container_optimization") or {},
+            "debug_snapshot": v3.get("planner_debug_snapshot") or {},
+        },
+    }
 
 
 @app.delete("/api/projects/{project_id}/crates/")
@@ -1893,9 +1764,11 @@ def delete_all_crates(project_id: int):
 
 @app.delete("/api/crates/{crate_id}")
 def delete_crate(crate_id: int):
-    crate = crates_col.find_one({"id": crate_id}, {"project_id": 1})
+    crate = crates_col.find_one({"id": crate_id}, {"project_id": 1, "locked": 1})
     if not crate:
         return {"message": "ok"}
+    if crate.get("locked"):
+        raise HTTPException(status_code=400, detail="Cannot delete a locked crate. Unlock first.")
     assignments_col.delete_many({"project_id": crate["project_id"], "crate_id": crate_id})
     crates_col.delete_one({"id": crate_id})
     clear_manual_container_plan(crate["project_id"])
@@ -1905,12 +1778,18 @@ def delete_crate(crate_id: int):
 @app.post("/api/crates/assign")
 def assign_piece(data: Dict[str, Any]):
     piece = pieces_col.find_one({"id": int(data["piece_id"])}, {"project_id": 1})
-    crate = crates_col.find_one({"id": int(data["crate_id"])}, {"project_id": 1})
+    crate = crates_col.find_one({"id": int(data["crate_id"])}, {"project_id": 1, "locked": 1})
     if not piece or not crate:
         return {"message": "ok"}
 
     project_id = piece["project_id"]
+    if crate.get("locked"):
+        raise HTTPException(status_code=400, detail="Target crate is locked — unlock before assigning parts.")
     existing = assignments_col.find_one({"project_id": project_id, "piece_id": piece["id"]})
+    if existing:
+        src = crates_col.find_one({"project_id": project_id, "id": existing["crate_id"]}, {"locked": 1})
+        if src and src.get("locked"):
+            raise HTTPException(status_code=400, detail="That part is in a locked crate — unlock before moving.")
     if existing:
         assignments_col.update_one(
             {"id": existing["id"]},
@@ -1935,9 +1814,105 @@ def unassign_piece(data: Dict[str, Any]):
     piece = pieces_col.find_one({"id": int(data["piece_id"])}, {"project_id": 1})
     if not piece:
         return {"message": "ok"}
+    ex = assignments_col.find_one({"project_id": piece["project_id"], "piece_id": piece["id"]})
+    if ex:
+        src = crates_col.find_one({"project_id": piece["project_id"], "id": ex["crate_id"]}, {"locked": 1})
+        if src and src.get("locked"):
+            raise HTTPException(status_code=400, detail="Unassign blocked — crate is locked.")
     assignments_col.delete_many({"project_id": piece["project_id"], "piece_id": piece["id"]})
     clear_manual_container_plan(piece["project_id"])
     return {"message": "ok"}
+
+
+@app.post("/api/projects/{project_id}/crates/assign-family")
+def assign_family(project_id: int, data: Dict[str, Any]):
+    """
+    Atomically reassign all pieces in a family to a target crate.
+    If crate_id is None / omitted the family is unassigned.
+    """
+    piece_ids: List[int] = [int(x) for x in (data.get("piece_ids") or [])]
+    crate_db_id = data.get("crate_id")  # DB integer id; None = unassign
+
+    if not piece_ids:
+        raise HTTPException(status_code=400, detail="piece_ids required")
+
+    for pid in piece_ids:
+        a = assignments_col.find_one({"project_id": project_id, "piece_id": pid})
+        if not a:
+            continue
+        src = crates_col.find_one({"project_id": project_id, "id": a["crate_id"]}, {"locked": 1})
+        if src and src.get("locked"):
+            raise HTTPException(
+                status_code=400,
+                detail="A selected part is in a locked crate — unlock before moving the bundle.",
+            )
+
+    # Remove existing assignments for these pieces
+    assignments_col.delete_many({"project_id": project_id, "piece_id": {"$in": piece_ids}})
+
+    if crate_db_id is not None:
+        crate_db_id = int(crate_db_id)
+        crate = crates_col.find_one({"id": crate_db_id, "project_id": project_id}, {"_id": 0, "id": 1, "locked": 1})
+        if not crate:
+            raise HTTPException(status_code=404, detail="Crate not found")
+        if crate.get("locked"):
+            raise HTTPException(status_code=400, detail="Target crate is locked.")
+        for pid in piece_ids:
+            assignments_col.insert_one({
+                "id": next_sequence("assignment"),
+                "project_id": project_id,
+                "piece_id": pid,
+                "crate_id": crate_db_id,
+                "assigned_at": utc_now(),
+            })
+
+    clear_manual_container_plan(project_id)
+    return {"ok": True, "assigned": len(piece_ids) if crate_db_id is not None else 0, "unassigned": len(piece_ids) if crate_db_id is None else 0}
+
+
+@app.post("/api/projects/{project_id}/crates/planner-recompute")
+def planner_recompute_endpoint(project_id: int):
+    """Recompute v3 crate dims/layers/weights and multi-container layout after manual moves."""
+    project = projects_col.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    status = project.get("status") or "draft"
+    if status not in {"approved_for_packing", "crate_planned", "container_planned"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Approve the project for packing before recalculating the planner.",
+        )
+
+    pieces = list(pieces_col.find({"project_id": project_id}, {"_id": 0}))
+    crates = list(crates_col.find({"project_id": project_id}, {"_id": 0}))
+    assignments = list(assignments_col.find({"project_id": project_id}, {"_id": 0}))
+    if not any(c.get("packing_mode") == "v3" for c in crates):
+        raise HTTPException(status_code=400, detail="No v3 crates in this project.")
+
+    from .services.planner_v3.recompute_layout import run_planner_recompute
+
+    result = run_planner_recompute(project_id, project, pieces, crates, assignments)
+    for cid, patch in result["crate_updates"]:
+        crates_col.update_one(
+            {"project_id": project_id, "id": cid},
+            {"$set": {**patch, "updated_at": utc_now()}},
+        )
+
+    projects_col.update_one(
+        {"id": project_id},
+        {
+            "$set": {
+                "manual_container_plan": result["manual_plan"],
+                "planner_v3_layout": result["layout_persist"],
+                "planner_v3_containers": result["enriched_layouts"],
+                "planner_v3_summary": result["summary"],
+                "planner_v3_container_optimization": result.get("container_optimization") or {},
+                "updated_at": utc_now(),
+            }
+        },
+    )
+    return result["response"]
 
 
 @app.get("/api/projects/{project_id}/crates/assignments")
@@ -1970,6 +1945,7 @@ def save_manual_container_plan(project_id: int, data: Dict[str, Any]):
                         "x": float(placement.get("x", 0) or 0),
                         "y": float(placement.get("y", 0) or 0),
                         "rotated": bool(placement.get("rotated", False)),
+                        "stack_level": int(placement.get("stack_level", 0) or 0),
                         "loading_order": int(placement.get("loading_order", placement_index + 1) or (placement_index + 1)),
                         "unload_order": int(placement.get("unload_order", placement_index + 1) or (placement_index + 1)),
                     }

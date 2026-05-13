@@ -68,6 +68,19 @@ HEADER_ALIASES: Dict[str, List[str]] = {
     "edge_area": ["edge area", "edge sides", "sides", "polished sides"],
     "radius":    ["radius", "r", "corner radius", "rad"],
     "notes":     ["notes", "note", "remarks", "comments", "special"],
+    "weight_override": [
+        "weight (kg)",
+        "weight(kg)",
+        "weight kg",
+        "wt (kg)",
+        "wt(kg)",
+        "wt/kg",
+        "wt / kg",
+        "mass (kg)",
+        "mass(kg)",
+        "stone weight (kg)",
+        "total weight (kg)",
+    ],
 }
 
 # Template A coordinate tolerances
@@ -186,6 +199,22 @@ def _clean_qty(val: Any) -> int:
         return 1
 
 
+def _clean_weight_kg(val: Any) -> float:
+    """Parse Weight (kg) / mass cells from CSV-style tables."""
+    if val is None:
+        return 0.0
+    s = str(val).strip().replace(",", "")
+    if not s or s in {"-", "--", "—", "n/a", "na"}:
+        return 0.0
+    m = re.search(r"(\d+(?:\.\d+)?)", s)
+    if not m:
+        return 0.0
+    try:
+        return max(0.0, float(m.group(1)))
+    except (ValueError, TypeError):
+        return 0.0
+
+
 def _infer_category(text: str) -> str:
     tl = text.lower()
     for cat, keywords in CATEGORY_KEYWORDS.items():
@@ -223,6 +252,8 @@ def _score_field(field: str, val: Any) -> float:
         return 0.95 if s in known else 0.6
     if field == "thickness":
         return 0.95 if s in ("2CM", "3CM", "Mixed") else 0.5
+    if field == "weight_override":
+        return 0.9 if _clean_weight_kg(s) > 0 else 0.2
     return 0.8
 
 
@@ -1761,10 +1792,22 @@ def _parse_template_a_page(page, project: Dict, debug: Optional[Dict[str, Any]] 
 # ── Table-based fallback (non-Template-A PDFs) ───────────────────────────────
 
 def _normalize_header(h: str) -> Optional[str]:
-    nh = str(h or "").strip().lower().replace("\n", " ").replace("  ", " ")
+    nh = str(h or "").strip().lower().replace("\n", " ")
+    nh = nh.replace("（", "(").replace("）", ")")
+    nh = re.sub(r"\s+", " ", nh).strip()
+    nh_ns = nh.replace(" ", "")
     for field, aliases in HEADER_ALIASES.items():
-        if nh in aliases or any(nh == a or nh.startswith(a) for a in aliases):
+        als_ns = {a.replace(" ", "") for a in aliases}
+        if nh in aliases or nh_ns in als_ns:
             return field
+        for a in aliases:
+            if nh == a:
+                return field
+            if len(a) >= 4 and (nh.startswith(a + " ") or nh.endswith(" " + a)):
+                return field
+    # BOM schedules: "Weight (kg)", "Wt KG", etc.
+    if ("weight" in nh or nh.startswith("wt")) and "kg" in nh:
+        return "weight_override"
     return None
 
 
@@ -1846,6 +1889,7 @@ def _build_row_from_raw(raw: Dict, row_id: int, project: Dict) -> Dict:
         "edge_area":   raw.get("edge_area", "") or "",
         "radius":      raw.get("radius", "") or "-",
         "notes":       raw.get("notes", "") or "",
+        "weight_override": _clean_weight_kg(raw.get("weight_override")),
     }
 
 

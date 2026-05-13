@@ -16,6 +16,7 @@ export const UPLOAD_COLUMNS = [
   { id: 'thickness', label: 'Thick.',     w: 54,  type: 'select',
     options: ['2CM','3CM','Mixed'] },
   { id: 'qty',       label: 'Qty',        w: 40,  type: 'number' },
+  { id: 'weight_kg', label: 'Wt (kg)',    w: 52,  type: 'number' },
   { id: '_sqft',     label: 'Sq Ft',      w: 52,  type: 'computed',
     fn: r => r.length && r.width ? (parseFloat(r.length)*parseFloat(r.width)/144*(parseInt(r.qty)||1)).toFixed(1) : '' },
   { id: 'sink_type', label: 'Sink',       w: 90,  type: 'select',
@@ -38,7 +39,7 @@ export const blankRow = () => ({
   _id: rowIdSeq++, _confidence: {}, _source: 'manual',
   drawing:'', unit:'', building:'', floor:'', flat:'',
   part_no:'', part:'', category:'Vanity',
-  length:'', width:'', thickness:'3CM', qty:'1',
+  length:'', width:'', thickness:'3CM', qty:'1', weight_kg:'',
   sink_type:'No Sink', sink_cut:'-', tap_holes:'-', grooves:'-',
   edge:'None', edge_area:'', radius:'-', notes:'',
 });

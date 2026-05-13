@@ -1,5 +1,14 @@
 export const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
+/** Set true to show SVG / canvas 2D planner views again. */
+export const PLANNER_2D_UI_ENABLED = false;
+
+/** Canonical row key for bundle/family picker — aligns with backend dispatch units. */
+export function bundleRowKey(fam) {
+  if (!fam || typeof fam !== 'object') return '';
+  return String(fam.unit_id || fam.family_ui_key || fam.family_id || '');
+}
+
 export const emptyProject = {
   id: null,
   name: '',
@@ -11,6 +20,7 @@ export const emptyProject = {
   customer: '',
   job_number: '',
   date: '',
+  delivery_payload_cap_kg: 24000,
 };
 
 export const DESTINATION_PALETTE = [
@@ -25,7 +35,7 @@ export const DESTINATION_PALETTE = [
 ];
 
 export const CONTAINER_SPECS = {
-  '20ft': { max_length: 233, max_width: 92, max_weight: 28130 },
+  '20ft': { max_length: 233, max_width: 92, max_weight: 24000 },
   '40ft': { max_length: 470, max_width: 92, max_weight: 28750 },
 };
 
@@ -115,6 +125,7 @@ export const buildEditableContainersFromPlan = (containers = []) =>
       x: Number(placement.x || 0),
       y: Number(placement.y || 0),
       rotated: Boolean(placement.rotated),
+      stack_level: Number(placement.stack_level ?? 0),
       loading_order: Number(placement.loading_order || placementIndex + 1),
       unload_order: Number(placement.unload_order || placementIndex + 1),
     })),
@@ -205,6 +216,7 @@ export const buildContainerPreview = (containerDraft, crateByCode) => {
       }
 
       const dims = placementDimensionsForDraft(crate, placement.rotated);
+      const stackLevel = Number(placement.stack_level ?? 0);
       const nextPlacement = {
         crate_id: crate.crate_id,
         name: crate.name,
@@ -222,6 +234,7 @@ export const buildContainerPreview = (containerDraft, crateByCode) => {
         unload_order: Number(placement.unload_order || index + 1),
         stackable: Boolean(crate.stackable),
         locked: Boolean(crate.locked),
+        stack_level: stackLevel,
       };
 
       if (
@@ -234,6 +247,7 @@ export const buildContainerPreview = (containerDraft, crateByCode) => {
       }
 
       placements.forEach((other) => {
+        if (nextPlacement.stack_level !== other.stack_level) return;
         if (placementsOverlap(nextPlacement, other)) {
           warnings.push(`${crate.crate_id} overlaps ${other.crate_id}`);
         }
