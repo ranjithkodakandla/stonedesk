@@ -32,7 +32,11 @@ const rowToPayload = (row) => ({
   orientation:   'Auto',
   delivery_priority: 'Standard',
   stack_preference:  'Auto',
-  weight_override:   0,
+  weight_override:
+    parseFloat(row.weight_kg) ||
+    parseFloat(row.weight_override) ||
+    parseFloat(row['Weight (kg)']) ||
+    0,
   edge:          row.edge      || 'None',
   edge_area:     row.edge_area || '',
   edge_polish_machine: 0,
@@ -233,7 +237,14 @@ const UploadWorkspace = ({ project, onDataChange }) => {
     }
 
     if (allRows.length > 0) {
-      setRows(allRows.map((r, i) => ({ ...blankRow(), ...r, _id: i + 1 })));
+      setRows(allRows.map((r, i) => {
+        const wo = r.weight_override ?? r.weight_kg ?? r['Weight (kg)'];
+        const weightKg =
+          wo !== undefined && wo !== null && wo !== ''
+            ? String(wo).trim()
+            : '';
+        return { ...blankRow(), ...r, weight_kg: weightKg || r.weight_kg || '', _id: i + 1 };
+      }));
       setStep('review');
     } else if (errs.length === 0) {
       errs.push('No rows could be extracted. The PDF format may not be supported — please review the file or add rows manually.');

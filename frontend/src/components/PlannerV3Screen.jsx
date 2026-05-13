@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import DispatchSelectionPanel from './DispatchSelectionPanel';
+import IslandOperationalReview from './IslandOperationalReview';
 import Container3DPreview from './planner3d/Container3DPreview';
 import CrateOperationalDiagram2D from './planner2d/CrateOperationalDiagram2D';
 import ContainerTopDown2D from './planner2d/ContainerTopDown2D';
@@ -11,13 +12,18 @@ import {
   computedCrateWeightKg,
   inferCrateClass,
   inferOrientation,
+  normalizeAllPlacementsFor3D,
   normalizePlacementsFor3D,
   splashLayerLabel,
 } from '../utils/plannerDisplay';
-import { buildPiecesByCrate, CONTAINER_SPECS, formatNumber, getPieceWeight } from '../utils/plannerUtils';
+import { buildPiecesByCrate, CONTAINER_SPECS, formatNumber, getPieceWeight, PLANNER_2D_UI_ENABLED } from '../utils/plannerUtils';
 import { printV3OperationalPackSheet } from '../utils/printUtils';
 
-const PlannerV3Screen = ({ projectId, onClose }) => {
+/**
+ * Smart Crate Planner v3 — dispatch selection, generate/regenerate, 3D preview, crate table.
+ * Renders inside Planning Workspace (not a separate full-page shell).
+ */
+const PlannerV3Screen = ({ projectId }) => {
   const project = usePlannerStore((s) => s.project);
   const pieces = usePlannerStore((s) => s.pieces);
   const crates = usePlannerStore((s) => s.crates);
@@ -41,12 +47,14 @@ const PlannerV3Screen = ({ projectId, onClose }) => {
       : containerOpt?.chosen_strategy === 'mixed_40_first'
         ? 'Mixed — 40′ first'
         : containerOpt?.chosen_strategy === 'twenty_only'
-          ? '20′ only'
+          ? '20′ seed (economic)'
           : containerOpt?.chosen_strategy === 'forty_only'
-            ? '40′ only'
+            ? '40′ fleet'
             : containerOpt?.chosen_strategy === 'frozen'
               ? 'Frozen (locked)'
               : null;
+
+  const fleetSelectionReason = project?.planner_v3_summary?.fleet_selection_reason;
 
   const { grouped } = useMemo(
     () => buildPiecesByCrate(pieces, crates, assignments),
@@ -59,11 +67,21 @@ const PlannerV3Screen = ({ projectId, onClose }) => {
   }, [project?.manual_container_plan]);
 
   const placements3d = useMemo(() => {
-    if (manualContainerDraft?.placements?.length && crates.length) {
-      return buildPlacements3DFromManual(manualContainerDraft, crates, project, layout);
+    if (!crates.length) return [];
+    const v3c = project?.planner_v3_containers;
+    if (Array.isArray(v3c) && v3c.length) {
+      const merged = normalizeAllPlacementsFor3D(v3c, crates);
+      if (merged.length) return merged;
     }
+    const mcontainers = project?.manual_container_plan?.containers || [];
+    const mergedManual = [];
+    for (const cont of mcontainers) {
+      if (!cont?.placements?.length) continue;
+      mergedManual.push(...buildPlacements3DFromManual(cont, crates, project, layout));
+    }
+    if (mergedManual.length) return mergedManual;
     return normalizePlacementsFor3D(layout, crates);
-  }, [manualContainerDraft, crates, project, layout]);
+  }, [project?.planner_v3_containers, project?.manual_container_plan, crates, project, layout]);
 
   const containerSpec = CONTAINER_SPECS[manualContainerDraft?.type || '20ft'] || CONTAINER_SPECS['20ft'];
   const interior = layout?.container_interior_in || { length: 233, width: 92, max_clear_height: 100 };
@@ -82,37 +100,39 @@ const PlannerV3Screen = ({ projectId, onClose }) => {
 
   const legacyPlan = crates.length > 0 && crates.some((c) => (c.packing_mode || '') !== 'v3');
 
+  const islandOpsUiEnabled = import.meta.env.VITE_PLANNER_V3_OPERATIONAL === 'true';
+  const projectStatus = project?.status || 'draft';
+  const canIslandPlan =
+    islandOpsUiEnabled &&
+    ['approved_for_packing', 'crate_planned', 'container_planned'].includes(projectStatus) &&
+    pieces.length > 0;
+
   return (
-    <div className="min-h-screen bg-[linear-gradient(180deg,_#f0f4ff,_#f8fafc)] text-[#0f172a]">
-      <div className="mx-auto max-w-[1200px] px-5 py-8 lg:px-8">
-        <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
-          <div>
-            <div className="text-xs uppercase tracking-[0.2em] text-[#64748b]">Smart Crate Planner v3</div>
-            <h1 className="mt-1 text-2xl font-semibold text-[#0f172a]">
-              {project.name || project.job_number || `Project #${projectId}`}
-            </h1>
-            <p className="mt-1 text-sm text-[#64748b]">
-              Dispatch → A/B/C/D crates → <strong>multi-container solve</strong> (compares 20′-only, 40′-only, and mixed
-              greedy fills, then picks the best logistics score). Manual bundle moves recalc weights and sizes;{' '}
-              <strong>locked crates</strong> freeze assignments, dimensions, and container slots until unlocked.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-full border border-[#cbd5e1] bg-white px-5 py-2.5 text-sm font-semibold text-[#334155] hover:bg-[#f8fafc]"
-          >
-            ← Back to project
-          </button>
-        </div>
+    <div className="space-y-6 text-[#0f172a]">
+      <div>
+        <div className="text-xs uppercase tracking-[0.2em] text-[#64748b]">Dispatch & build</div>
+        <h2 className="mt-1 text-xl font-semibold text-[#0f172a]">
+          {project.name || project.job_number || `Project #${projectId}`}
+        </h2>
+        <p className="mt-2 max-w-4xl text-sm text-[#64748b]">
+          Dispatch → A/B/C/D crates → <strong>multi-container solve</strong> (20′ seed, optional promotion to an all-40′
+          fleet when economic thresholds fail). Manual bundle moves recalc weights and sizes;{' '}
+          <strong>locked crates</strong> freeze assignments until unlocked. Part-level contents per crate are on the{' '}
+          <strong className="text-[#334155]">Crate contents</strong> tab. When operational mode is on, an{' '}
+          <strong className="text-[#334155]">island preview</strong> runs below dispatch (does not save until you
+          generate the full plan).
+        </p>
+      </div>
 
-        <DispatchSelectionPanel projectId={projectId} onGenerate={handleGenerate} isGenerating={isRefreshing} />
+      <DispatchSelectionPanel projectId={projectId} onGenerate={handleGenerate} isGenerating={isRefreshing} />
 
-        {crates.length > 0 && <PlannerManualMovePanel projectId={projectId} />}
+      {canIslandPlan && <IslandOperationalReview projectId={projectId} project={project} embedded />}
 
-        {crates.length > 0 && <UnderloadedCrateAssistant projectId={projectId} />}
+      {crates.length > 0 && <PlannerManualMovePanel projectId={projectId} />}
 
-        <div className="mt-6 flex flex-col gap-3 rounded-[24px] border border-[#dbe4f0] bg-white p-5 shadow-sm sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
+      {crates.length > 0 && <UnderloadedCrateAssistant projectId={projectId} />}
+
+      <div className="mt-6 flex flex-col gap-3 rounded-[24px] border border-[#dbe4f0] bg-white p-5 shadow-sm sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
           <div>
             <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[#64748b]">
               20ft payload cap (planning)
@@ -158,29 +178,30 @@ const PlannerV3Screen = ({ projectId, onClose }) => {
               </button>
             )}
           </div>
+      </div>
+
+      {lastMessage && (
+        <div
+          className={`mt-6 rounded-[24px] border px-5 py-4 text-sm ${
+            lastMessage.includes('fail') || lastMessage.includes('Approve')
+              ? 'border-amber-200 bg-amber-50 text-amber-900'
+              : 'border-emerald-200 bg-emerald-50 text-emerald-900'
+          }`}
+        >
+          {lastMessage}
         </div>
+      )}
 
-        {lastMessage && (
-          <div
-            className={`mt-6 rounded-[24px] border px-5 py-4 text-sm ${
-              lastMessage.includes('fail') || lastMessage.includes('Approve')
-                ? 'border-amber-200 bg-amber-50 text-amber-900'
-                : 'border-emerald-200 bg-emerald-50 text-emerald-900'
-            }`}
-          >
-            {lastMessage}
-          </div>
-        )}
+      {legacyPlan && (
+        <div className="mt-6 rounded-[24px] border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-950">
+          Some crates were built with an <strong>older planner</strong>. Class / splash metadata and weights may be
+          estimated below. Run <strong>Generate Crate Plan</strong> in the dispatch panel above to rebuild everything
+          with v3 (recommended).
+        </div>
+      )}
 
-        {legacyPlan && (
-          <div className="mt-6 rounded-[24px] border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-950">
-            Some crates were built with an <strong>older planner</strong>. Class / splash metadata and weights may be
-            estimated below. Click <strong>Generate Crate Plan</strong> above to rebuild everything with v3 (recommended).
-          </div>
-        )}
-
-        {/* 20ft vs 40ft explanation */}
-        <div className="mt-8 rounded-[32px] border border-[#dbe4f0] bg-white p-6 shadow-sm">
+      {/* 20ft vs 40ft explanation */}
+      <div className="mt-8 rounded-[32px] border border-[#dbe4f0] bg-white p-6 shadow-sm">
           <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[#64748b]">
             Container decision (how 20ft vs 40ft is chosen)
           </div>
@@ -193,9 +214,17 @@ const PlannerV3Screen = ({ projectId, onClose }) => {
                 </p>
               )}
               <p className="mt-2 leading-relaxed">
-                {decision?.rationale ||
-                  'The solver evaluates 20′-only, 40′-only, and mixed greedy packs (20′-first vs 40′-first), scoring unplaced crates, container count, and utilization. Inside each box: single-layer floor — B/C/D from the back wall (low X), islands (A) toward the door (high X); no crate stacking.'}
+                {fleetSelectionReason ||
+                  decision?.rationale ||
+                  'Planner seeds with 20′ boxes, then evaluates an all-40′ fleet when average stone per 20′ falls below the economic threshold or several boxes show weak payload utilization. Inside each container: islands (A) at the back wall (low X); B/C/D toward the doors (high X), with optional one-tier stacking for horizontals when clear height allows.'}
               </p>
+              {project?.planner_v3_summary?.twenty_ft_min_economic_fill_kg != null && (
+                <p className="mt-2 text-xs text-[#64748b]">
+                  Economic threshold (avg stone per 20′ before 40′ is considered):{' '}
+                  {formatNumber(project.planner_v3_summary.twenty_ft_min_economic_fill_kg, 0)} kg — adjustable via project
+                  field <span className="font-mono text-[11px]">twenty_ft_min_economic_fill_kg</span>.
+                </p>
+              )}
               <ul className="mt-3 list-disc space-y-1 pl-5 text-[#64748b]">
                 <li>
                   Payload guidance: {formatNumber(layout?.max_weight_kg ?? payloadCapKg, 0)} kg cap (regenerate after
@@ -255,16 +284,22 @@ const PlannerV3Screen = ({ projectId, onClose }) => {
           </div>
         )}
 
-        {(project?.planner_v3_containers?.length
-          ? project.planner_v3_containers
-          : layout
-            ? [layout]
-            : []
-        ).map((cont, idx) => (
-          <div key={cont.container_id || idx} className="mt-8 rounded-[32px] border border-[#dbe4f0] bg-white p-6 shadow-sm">
-            <ContainerTopDown2D layout={cont} title={`2D container plan — ${cont.container_id || idx + 1} (${cont.type || cont.container_type || '20ft'})`} />
+        {PLANNER_2D_UI_ENABLED &&
+          (project?.planner_v3_containers?.length
+            ? project.planner_v3_containers
+            : layout
+              ? [layout]
+              : []
+          ).map((cont, idx) => (
+            <div key={cont.container_id || idx} className="mt-8 rounded-[32px] border border-[#dbe4f0] bg-white p-6 shadow-sm">
+              <ContainerTopDown2D layout={cont} title={`2D container plan — ${cont.container_id || idx + 1} (${cont.type || cont.container_type || '20ft'})`} />
+            </div>
+          ))}
+        {!PLANNER_2D_UI_ENABLED && (project?.planner_v3_containers?.length || layout) && (
+          <div className="mt-8 rounded-[32px] border border-dashed border-[#cbd5e1] bg-[#f8fafc] px-5 py-4 text-sm text-[#64748b]">
+            2D container plan view is temporarily hidden while layout logic is refined.
           </div>
-        ))}
+        )}
 
         {/* 3D container */}
         {crates.length > 0 && (
@@ -273,8 +308,8 @@ const PlannerV3Screen = ({ projectId, onClose }) => {
               3D — crates inside 20ft container
             </div>
             <p className="mt-1 text-sm text-[#64748b]">
-              Single-layer floor plan: length → X (back wall = low X, door = high X), width → Z, all crates on the deck
-              (no stacking). Colors: A blue, B green, C amber, D violet.
+              Length → X (front wall = low X, doors = high X). Islands sit at the back wall; B/C/D toward the doors.
+              Horizontal crates may use one deck stack tier when height allows. Colors: A blue, B green, C amber, D violet.
             </p>
             <div className="mt-4">
               <Container3DPreview
@@ -312,7 +347,7 @@ const PlannerV3Screen = ({ projectId, onClose }) => {
                     <th className="py-2 pr-4">Orientation</th>
                     <th className="py-2 pr-4">Weight (kg)</th>
                     <th className="py-2 pr-4">Splash layers</th>
-                    <th className="py-2 pr-4">Diagram</th>
+                    {PLANNER_2D_UI_ENABLED && <th className="py-2 pr-4">Diagram</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -334,7 +369,9 @@ const PlannerV3Screen = ({ projectId, onClose }) => {
                         <td className="py-2 pr-4 capitalize">{ori}</td>
                         <td className="py-2 pr-4">{formatNumber(kg, 0)}</td>
                         <td className="py-2 pr-4 text-xs text-[#64748b]">{splashLayerLabel(c)}</td>
-                        <td className="py-2 pr-4 text-xs text-[#1d4ed8]">Row → diagram</td>
+                        {PLANNER_2D_UI_ENABLED && (
+                          <td className="py-2 pr-4 text-xs text-[#1d4ed8]">Row → diagram</td>
+                        )}
                       </tr>
                     );
                   })}
@@ -354,14 +391,20 @@ const PlannerV3Screen = ({ projectId, onClose }) => {
                     est. {formatNumber(computedCrateWeightKg(selectedCrate, grouped[selectedCrate.id] || [], project), 0)}{' '}
                     kg stone
                   </p>
-                  <div className="mt-3">
-                    <CrateOperationalDiagram2D
-                      crate={selectedCrate}
-                      piecesInCrate={grouped[selectedCrate.id] || []}
-                      crateClass={inferCrateClass(selectedCrate)}
-                      project={project}
-                    />
-                  </div>
+                  {PLANNER_2D_UI_ENABLED ? (
+                    <div className="mt-3">
+                      <CrateOperationalDiagram2D
+                        crate={selectedCrate}
+                        piecesInCrate={grouped[selectedCrate.id] || []}
+                        crateClass={inferCrateClass(selectedCrate)}
+                        project={project}
+                      />
+                    </div>
+                  ) : (
+                    <p className="mt-3 rounded-xl border border-dashed border-[#cbd5e1] bg-[#f8fafc] px-3 py-2 text-xs text-[#64748b]">
+                      2D crate diagram temporarily hidden while layout logic is refined.
+                    </p>
+                  )}
                 </div>
                 <div className="rounded-2xl border border-[#e2e8f0] bg-[#f8fafc] p-4 text-sm text-[#475569]">
                   <div className="font-semibold text-[#0f172a]">Placement in container</div>
@@ -410,23 +453,19 @@ const PlannerV3Screen = ({ projectId, onClose }) => {
                 <div className="text-lg font-semibold">{formatNumber(layout.used_length_in, 0)}″</div>
               </div>
               <div>
-                <div className="text-[#64748b]">
-                  {layout.linear_horiz_block_end_x_in != null ? 'B/C/D block ends @' : 'Island zone depth'}
-                </div>
+                <div className="text-[#64748b]">Island strip depth (back wall, low x)</div>
                 <div className="text-lg font-semibold">
-                  {layout.linear_horiz_block_end_x_in != null
-                    ? `${formatNumber(layout.linear_horiz_block_end_x_in, 0)}″`
-                    : formatNumber(layout.island_zone_depth_in, 0) + '″'}
+                  {formatNumber(layout.linear_island_strip_end_x_in ?? 0, 0)}″
                 </div>
               </div>
               <div>
-                <div className="text-[#64748b]">
-                  {layout.linear_island_strip_start_x_in != null ? 'Island strip starts @' : 'Horizontal zone starts @'}
-                </div>
+                <div className="text-[#64748b]">Horizontal zone starts @ (toward doors)</div>
                 <div className="text-lg font-semibold">
-                  {layout.linear_island_strip_start_x_in != null
-                    ? `${formatNumber(layout.linear_island_strip_start_x_in, 0)}″`
-                    : formatNumber(layout.horizontal_zone_start_x, 0) + '″'}
+                  {formatNumber(
+                    layout.horizontal_zone_start_x_in ?? layout.horizontal_zone_start_x ?? 0,
+                    0,
+                  )}
+                  ″
                 </div>
               </div>
             </div>
@@ -446,7 +485,6 @@ const PlannerV3Screen = ({ projectId, onClose }) => {
           material density, or <strong className="text-[#0f172a]">weight override</strong> on each part when you have
           scale weights).
         </div>
-      </div>
     </div>
   );
 };

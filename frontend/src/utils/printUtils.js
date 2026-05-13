@@ -296,7 +296,7 @@ export function printV3OperationalPlan({ project, crates, layout, groupedByCrate
 
   if (layout?.placements?.length) {
     html += `<h2>20ft container — floor placement (in)</h2>
-    <p style="font-size:10px;color:#475569;margin-bottom:8px;">Corner (x,y) along length × width. Single layer: B/C/D from back wall (low x); islands (A) toward door (high x).</p>
+    <p style="font-size:10px;color:#475569;margin-bottom:8px;">Corner (x,y) along length × width. Islands (A) at back wall (low x); B/C/D toward doors (high x). Stack column shows optional second tier.</p>
     <table><thead><tr>
       <th>Crate</th><th>x</th><th>y</th><th>Footprint L×W</th><th>Stack</th><th>Elev</th><th>Ht</th>
     </tr></thead><tbody>`;
@@ -333,10 +333,10 @@ export function printV3OperationalPlan({ project, crates, layout, groupedByCrate
 }
 
 const STRATEGY_LABEL = {
-  mixed_20_first: 'Mixed fleet — fill 20′ first',
-  mixed_40_first: 'Mixed fleet — fill 40′ first',
-  twenty_only: '20′ fleet only',
-  forty_only: '40′ fleet only',
+  mixed_20_first: 'Mixed — 20′ first (legacy)',
+  mixed_40_first: 'Mixed — 40′ first (legacy)',
+  twenty_only: '20′ economic seed — 24,000 kg payload cap per container',
+  forty_only: '40′ fleet — promoted when 20′ economics/utilization thresholds fail',
   frozen: 'Frozen (locked crates)',
 };
 

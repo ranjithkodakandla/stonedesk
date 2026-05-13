@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import { API_BASE, formatNumber } from '../utils/plannerUtils';
+import { API_BASE, bundleRowKey, formatNumber } from '../utils/plannerUtils';
 import { usePlannerStore } from '../store/plannerStore';
 
 /**
@@ -44,10 +44,13 @@ const PlannerManualMovePanel = ({ projectId }) => {
 
   const familyOptions = useMemo(() => {
     return families.map((f) => ({
-      key: `${f.family_id}@@${f.flat_key}`,
-      label: `${f.family_id} · ${f.category_label || f.category} · ${f.flat_key || '—'}`,
+      key: bundleRowKey(f),
+      label: `${f.family_id} · ${f.category_label || f.category} · ${f.flat_key || '—'}${
+        f.is_split && f.split_reason ? ` — ${f.split_reason.slice(0, 120)}` : ''
+      }`,
       ids: f.all_piece_ids || [],
       split: f.is_split,
+      splitReason: f.split_reason || null,
     }));
   }, [families]);
 
@@ -112,7 +115,7 @@ const PlannerManualMovePanel = ({ projectId }) => {
               {familyOptions.map((f) => (
                 <option key={f.key} value={f.key}>
                   {f.label}
-                  {f.split ? ' (split across crates)' : ''}
+                  {f.split ? (f.splitReason ? ' (split — see reason)' : ' (split across crates)') : ''}
                 </option>
               ))}
             </select>
@@ -130,7 +133,7 @@ const PlannerManualMovePanel = ({ projectId }) => {
                 .filter((c) => !c.locked)
                 .map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.crate_id} · {formatNumber(c.weight, 0)} kg
+                    {c.crate_id} · {formatNumber(Number(c.weight) || Number(c.total_weight) || 0, 0)} kg
                   </option>
                 ))}
             </select>
@@ -140,11 +143,11 @@ const PlannerManualMovePanel = ({ projectId }) => {
         <div className="mt-4 space-y-3">
           <div className="text-xs font-semibold text-[#64748b]">Pick pieces (split bundle)</div>
           <div className="max-h-48 overflow-y-auto rounded-xl border border-[#e2e8f0] bg-[#f8fafc] p-2 text-sm">
-            {families.flatMap((f) => (f.all_piece_ids || []).map((id) => ({ id, fam: f.family_id }))).length === 0 ? (
+            {families.flatMap((f) => (f.all_piece_ids || []).map((id) => ({ id, fam: bundleRowKey(f) }))).length === 0 ? (
               <div className="text-[#64748b]">No pieces.</div>
             ) : (
               families.map((f) => (
-                <div key={f.family_id + f.flat_key} className="mb-2">
+                <div key={bundleRowKey(f)} className="mb-2">
                   <div className="text-[11px] font-semibold text-[#475569]">{f.family_id}</div>
                   {(f.all_piece_ids || []).map((id) => (
                     <label key={id} className="flex cursor-pointer items-center gap-2 py-0.5 pl-2 font-mono text-xs">

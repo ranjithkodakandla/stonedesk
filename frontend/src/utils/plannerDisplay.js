@@ -27,6 +27,16 @@ export function splashLayerLabel(crate) {
 }
 
 /** Merge stored layout with live crate dimensions for 3D (handles pre-enrichment documents). */
+/** Concatenate enriched layouts from planner_v3_containers for crate-detail / 3D lookup. */
+export function normalizeAllPlacementsFor3D(containers, crates) {
+  if (!Array.isArray(containers) || !containers.length || !crates?.length) return [];
+  const merged = [];
+  for (const cont of containers) {
+    merged.push(...normalizePlacementsFor3D(cont, crates));
+  }
+  return merged;
+}
+
 export function normalizePlacementsFor3D(layout, crates) {
   if (!layout?.placements?.length || !crates?.length) return [];
   const byId = Object.fromEntries(crates.map((c) => [c.crate_id, c]));

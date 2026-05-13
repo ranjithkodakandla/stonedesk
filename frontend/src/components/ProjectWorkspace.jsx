@@ -15,8 +15,9 @@ const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
 const plannerSubTabs = [
   { id: 'summary', label: 'Summary / Insights', step: 'Step 1' },
-  { id: 'crate-plan', label: 'Crate Plan', step: 'Step 2' },
-  { id: 'container-loading', label: 'Container Loading', step: 'Step 3' },
+  { id: 'build-plan', label: 'Dispatch & build', step: 'Step 2' },
+  { id: 'crate-plan', label: 'Crate contents', step: 'Step 3' },
+  { id: 'container-loading', label: 'Container loading', step: 'Step 4' },
 ];
 
 const STATUS_CONFIG = {
@@ -53,7 +54,6 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
   const exportSourceData = usePlannerStore((state) => state.exportSourceData);
   const approveProject = usePlannerStore((state) => state.approveProject);
 
-  const [showPlannerV3, setShowPlannerV3] = useState(false);
   const [mainTab, setMainTab] = useState('source-data'); // 'source-data' | 'planning'
   const [entryMode, setEntryMode] = useState('manual');  // 'manual' | 'upload'
   const [loadedDrawing, setLoadedDrawing] = useState(null);
@@ -64,6 +64,23 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
 
   const hasPlan = crates.length > 0;
   const projectStatus = project.status || 'draft';
+
+  const planningUnlocked =
+    hasPlan ||
+    (pieces.length > 0 &&
+      ['approved_for_packing', 'crate_planned', 'container_planned'].includes(projectStatus));
+
+  const openPlanningBuild = () => {
+    setMainTab('planning');
+    setActiveTab('build-plan');
+  };
+
+  useEffect(() => {
+    if (mainTab !== 'planning' || !planningUnlocked || hasPlan) return;
+    if (activeTab === 'crate-plan' || activeTab === 'container-loading') {
+      setActiveTab('build-plan');
+    }
+  }, [mainTab, planningUnlocked, hasPlan, activeTab, setActiveTab]);
 
   const totalWeight = pieces.reduce((sum, piece) => sum + getPieceWeight(piece, project), 0);
   const totalSqFt = pieces.reduce((sum, piece) => sum + ((Number(piece.length || 0) * Number(piece.width || 0)) / 144) * (Number(piece.qty) || 1), 0);
@@ -219,18 +236,6 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
     }
   }, [hasPlan]);
 
-  if (showPlannerV3) {
-    return (
-      <PlannerV3Screen
-        projectId={projectId}
-        onClose={() => {
-          setShowPlannerV3(false);
-          if (crates.length > 0) setMainTab('planning');
-        }}
-      />
-    );
-  }
-
   if (isWorkspaceLoading) {
     return (
       <div className="min-h-screen bg-[linear-gradient(180deg,_#f6f8fc,_#f8fafc)] text-[#1e293b] flex items-center justify-center">
@@ -327,18 +332,27 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
               </button>
               <button
                 type="button"
-                disabled={!hasPlan}
-                onClick={() => hasPlan && setMainTab('planning')}
+                disabled={!planningUnlocked}
+                onClick={() => {
+                  if (!planningUnlocked) return;
+                  setMainTab('planning');
+                  if (!hasPlan) setActiveTab('build-plan');
+                }}
                 className={`rounded-full px-5 py-2.5 text-sm font-semibold transition-all ${
                   mainTab === 'planning'
                     ? 'bg-[#1d4ed8] text-white shadow-sm'
-                    : !hasPlan
+                    : !planningUnlocked
                     ? 'bg-[#f1f5f9] text-[#94a3b8] cursor-not-allowed'
                     : 'bg-[#f1f5f9] text-[#334155] hover:bg-[#e2e8f0]'
                 }`}
               >
                 Planning Workspace
-                {!hasPlan && <span className="ml-2 text-[10px] text-[#94a3b8]">(Generate plan first)</span>}
+                {!planningUnlocked && (
+                  <span className="ml-2 text-[10px] text-[#94a3b8]">(Approve for packing with parts)</span>
+                )}
+                {planningUnlocked && !hasPlan && (
+                  <span className="ml-2 text-[10px] text-[#64748b]">(Dispatch & build)</span>
+                )}
               </button>
             </div>
           </div>
@@ -442,14 +456,14 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
                       <button
                         type="button"
                         disabled={pieces.length === 0}
-                        onClick={() => setShowPlannerV3(true)}
+                        onClick={() => pieces.length > 0 && openPlanningBuild()}
                         className={`inline-flex items-center gap-2 rounded-full px-8 py-3 text-sm font-semibold text-white shadow-sm transition-all ${
                           pieces.length === 0
                             ? 'bg-[#94a3b8] cursor-not-allowed'
                             : 'bg-[#1d4ed8] hover:bg-[#1e40af] hover:shadow-md'
                         }`}
                       >
-                        {hasPlan ? 'Open Smart Crate Planner' : 'Generate Crate Plan →'}
+                        {hasPlan ? 'Planning: dispatch & build' : 'Planning: generate crate plan →'}
                       </button>
                     )}
                   </div>
@@ -459,7 +473,7 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
           )}
 
           {/* ▸ Tab 2: Planning Workspace */}
-          {mainTab === 'planning' && hasPlan && (
+          {mainTab === 'planning' && planningUnlocked && (
             <>
               <div className="border-b border-[#edf2f7] px-6 py-4">
                 <div className="flex flex-wrap gap-3">
@@ -483,6 +497,7 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
 
               <div className="px-6 py-6">
                 {activeTab === 'summary' && <PlannerSummaryTab />}
+                {activeTab === 'build-plan' && <PlannerV3Screen projectId={projectId} />}
                 {activeTab === 'crate-plan' && <PlannerCrateTab />}
                 {activeTab === 'container-loading' && <PlannerContainerTab />}
               </div>

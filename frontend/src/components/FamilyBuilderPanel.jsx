@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { usePlannerStore } from '../store/plannerStore';
-import { API_BASE } from '../utils/plannerUtils';
+import { API_BASE, bundleRowKey } from '../utils/plannerUtils';
 
 // ── Category metadata ─────────────────────────────────────────────────────────
 const CATEGORY_META = {
@@ -137,7 +137,7 @@ const BatchSummaryPanel = ({ families, crateRows }) => {
 // ── FIX 2: Pinned Group Card ──────────────────────────────────────────────────
 const PinnedGroupCard = ({ group, families, selected, onToggleGroup, onUnpin }) => {
   const [expanded, setExpanded] = useState(false);
-  const groupFamilies = families.filter(f => group.familyIds.includes(f.family_id));
+  const groupFamilies = families.filter(f => group.familyIds.includes(bundleRowKey(f)));
   const allSelected   = group.familyIds.every(fid => selected.has(fid));
   const anySelected   = group.familyIds.some(fid => selected.has(fid));
   const totalWeight   = groupFamilies.reduce((s, f) => s + f.total_weight_kg, 0);
@@ -189,7 +189,7 @@ const PinnedGroupCard = ({ group, families, selected, onToggleGroup, onUnpin }) 
       {expanded && (
         <div className="px-4 pb-3 border-t border-orange-100 space-y-1 pt-2">
           {groupFamilies.map(f => (
-            <div key={f.family_id} className="flex items-center justify-between text-[11px]">
+            <div key={bundleRowKey(f)} className="flex items-center justify-between text-[11px]">
               <span className="font-medium text-[#0f172a]">{locLabel(f)}</span>
               <span className="text-[#64748b]">{f.family_id}</span>
               <span className="text-[#64748b]">{f.total_weight_kg} kg</span>
@@ -226,8 +226,8 @@ const FamilyCard = ({ family, selected, onToggle, onDragStart, onDragEnd, isPinn
           : 'border-dashed border-[#cbd5e1] bg-white hover:border-blue-300'
       }`}
     >
-      <div className="flex items-start gap-2 px-3 pt-2.5 pb-2 cursor-pointer" onClick={() => onToggle(family.family_id)}>
-        <input type="checkbox" checked={selected} onChange={() => onToggle(family.family_id)}
+      <div className="flex items-start gap-2 px-3 pt-2.5 pb-2 cursor-pointer" onClick={() => onToggle(bundleRowKey(family))}>
+        <input type="checkbox" checked={selected} onChange={() => onToggle(bundleRowKey(family))}
           onClick={e => e.stopPropagation()} className="mt-0.5 accent-blue-600 shrink-0" />
         <div className="min-w-0 flex-1">
           {/* Location — primary, large */}
@@ -364,7 +364,24 @@ const CreateCrateModal = ({ onClose, onCreated }) => {
 // ── Main component ────────────────────────────────────────────────────────────
 const FamilyBuilderPanel = () => {
   const projectId    = usePlannerStore(s => s.projectId);
-  const crateRows    = usePlannerStore(s => s.insights?.crates || []);
+  const crateRows = usePlannerStore((s) => {
+    const ic = s.insights?.crates;
+    if (Array.isArray(ic) && ic.length > 0) return ic;
+    const raw = s.crates || [];
+    return raw.map((c) => {
+      const stone = Number(c.weight) || 0;
+      const gw = Number(c.gross_weight);
+      const tw = Number(c.tare_weight) || 0;
+      const gross = stone > 0 ? stone + tw : (Number.isFinite(gw) && gw > 0 ? gw : stone);
+      const mx = Number(c.max_weight) || 0;
+      const fill = mx > 0 && stone > 0 ? Math.min(100, (stone / mx) * 100) : Number(c.fill_percent) || 0;
+      return {
+        ...c,
+        gross_weight: gross,
+        fill_percent: fill,
+      };
+    });
+  });
   const isRefreshing = usePlannerStore(s => s.isRefreshing);
   const assignFamily = usePlannerStore(s => s.assignFamily);
 
@@ -383,7 +400,7 @@ const FamilyBuilderPanel = () => {
   // ── FIX 2: Pin groups — client-side only ──
   const [pinGroups, setPinGroups] = useState([]);
 
-  // family_id → pin group id
+  // bundle row key (unit_id / family_ui_key) → pin group id
   const familyToPinGroup = useMemo(() => {
     const map = {};
     pinGroups.forEach(pg => pg.familyIds.forEach(fid => { map[fid] = pg.id; }));
@@ -418,19 +435,20 @@ const FamilyBuilderPanel = () => {
   const filtered = useMemo(() => {
     const q = flatSearch.trim().toLowerCase();
     return families.filter(f => {
-      if (pinnedFamilyIds.has(f.family_id)) return false; // pinned shown separately
+      if (pinnedFamilyIds.has(bundleRowKey(f))) return false; // pinned shown separately
       if (filterStatus === 'unassigned' && f.current_crate_db_id) return false;
       if (filterStatus === 'assigned'   && !f.current_crate_db_id) return false;
       if (filterCategory !== 'all' && f.category !== filterCategory) return false;
       if (q) {
         const loc = [f.building, f.floor, f.flat].filter(Boolean).join(' ').toLowerCase();
-        if (!loc.includes(q) && !f.family_id.toLowerCase().includes(q)) return false;
+        const idHay = `${f.family_id || ''} ${f.unit_id || ''} ${f.family_ui_key || ''}`.toLowerCase();
+        if (!loc.includes(q) && !idHay.includes(q)) return false;
       }
       return true;
     });
   }, [families, filterStatus, filterCategory, flatSearch, pinnedFamilyIds]);
 
-  const selectedFamilies = useMemo(() => families.filter(f => selected.has(f.family_id)), [families, selected]);
+  const selectedFamilies = useMemo(() => families.filter(f => selected.has(bundleRowKey(f))), [families, selected]);
 
   // ── Target crate ──
   const targetCrate      = crateRows.find(c => c.id === targetCrateId) || null;
@@ -454,7 +472,7 @@ const FamilyBuilderPanel = () => {
   // ── Pin operations ──
   const pinSelected = () => {
     if (selected.size < 2) return;
-    const familyIds = [...selected].filter(fid => families.some(f => f.family_id === fid));
+    const familyIds = [...selected].filter(fid => families.some(f => bundleRowKey(f) === fid));
     // Remove these family IDs from any existing pin groups (clean up)
     const cleaned = pinGroups
       .map(pg => ({ ...pg, familyIds: pg.familyIds.filter(fid => !familyIds.includes(fid)) }))
@@ -484,15 +502,15 @@ const FamilyBuilderPanel = () => {
 
   // Expand selected with their pin-group companions
   const expandWithPins = (baseFamilies) => {
-    const expanded = new Set(baseFamilies.map(f => f.family_id));
+    const expanded = new Set(baseFamilies.map(f => bundleRowKey(f)));
     baseFamilies.forEach(f => {
-      const pgId = familyToPinGroup[f.family_id];
+      const pgId = familyToPinGroup[bundleRowKey(f)];
       if (pgId) {
         const pg = pinGroups.find(p => p.id === pgId);
         if (pg) pg.familyIds.forEach(fid => expanded.add(fid));
       }
     });
-    return families.filter(f => expanded.has(f.family_id));
+    return families.filter(f => expanded.has(bundleRowKey(f)));
   };
 
   // ── Validation helper ──
@@ -515,7 +533,7 @@ const FamilyBuilderPanel = () => {
 
   const toggleAll = () => {
     setBlockError(null);
-    setSelected(selected.size === filtered.length ? new Set() : new Set(filtered.map(f => f.family_id)));
+    setSelected(selected.size === filtered.length ? new Set() : new Set(filtered.map(f => bundleRowKey(f))));
   };
 
   const doAssign = async (crateId) => {
@@ -674,14 +692,14 @@ const FamilyBuilderPanel = () => {
             )}
             {!loading && filtered.map(fam => (
               <FamilyCard
-                key={`${fam.flat_key}__${fam.family_id}`}
+                key={`${fam.flat_key}__${bundleRowKey(fam)}`}
                 family={fam}
-                selected={selected.has(fam.family_id)}
+                selected={selected.has(bundleRowKey(fam))}
                 onToggle={toggleFamily}
                 onDragStart={setDragFamily}
                 onDragEnd={() => {}}
-                isPinned={!!familyToPinGroup[fam.family_id]}
-                pinLabel={pinGroups.find(pg => pg.familyIds.includes(fam.family_id))?.label || ''}
+                isPinned={!!familyToPinGroup[bundleRowKey(fam)]}
+                pinLabel={pinGroups.find(pg => pg.familyIds.includes(bundleRowKey(fam)))?.label || ''}
               />
             ))}
           </div>
@@ -770,7 +788,7 @@ const FamilyBuilderPanel = () => {
                       No families assigned yet
                     </div>
                   ) : familiesInTarget.map(fam => (
-                    <div key={`${fam.flat_key}__${fam.family_id}`}
+                    <div key={`${fam.flat_key}__${bundleRowKey(fam)}`}
                       className="flex items-center justify-between rounded-xl border border-[#e2e8f0] bg-[#f8fafc] px-3 py-2">
                       <div className="flex items-center gap-2 min-w-0">
                         <CategoryBadge category={fam.category} />

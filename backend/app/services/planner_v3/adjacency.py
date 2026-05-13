@@ -35,6 +35,17 @@ def _floor_rank_token(floor: str) -> Tuple:
     return (1, sortable_token(floor))
 
 
+ADJACENCY_TIER_LABELS = {
+    0: "same_flat",
+    1: "adjacent_flat_same_floor",
+    2: "same_floor_other_flat",
+    3: "adjacent_floor",
+    4: "same_building_other_floor",
+    6: "other_building",
+    9: "unknown_location",
+}
+
+
 def adjacency_tier(ref: Dict[str, Any], cand: Dict[str, Any]) -> Tuple[int, Tuple, str]:
     """
     Sort key for ranking candidates relative to ref (lower is better).

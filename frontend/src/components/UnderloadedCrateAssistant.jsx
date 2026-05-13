@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import { API_BASE } from '../utils/plannerUtils';
+import { API_BASE, bundleRowKey } from '../utils/plannerUtils';
 import { usePlannerStore } from '../store/plannerStore';
 
 const IGNORE_PREFIX = 'stonedesk-underload-dismiss-';
@@ -98,7 +98,7 @@ const UnderloadedCrateAssistant = ({ projectId }) => {
 
   const runChoosePull = async () => {
     if (!chooseCrate) return;
-    const fam = families.find((f) => f.family_id === chooseFamilyId);
+    const fam = families.find((f) => bundleRowKey(f) === chooseFamilyId);
     if (!fam?.all_piece_ids?.length) return;
     setBusyCrateId(chooseCrate.id);
     try {
@@ -154,7 +154,7 @@ const UnderloadedCrateAssistant = ({ projectId }) => {
                   disabled={busy || !opts.length}
                   onClick={() => {
                     setChooseCrate(c);
-                    setChooseFamilyId(opts[0]?.family_id || '');
+                    setChooseFamilyId(bundleRowKey(opts[0]) || '');
                   }}
                   className="rounded-full border border-amber-500 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 disabled:opacity-40"
                 >
@@ -173,7 +173,7 @@ const UnderloadedCrateAssistant = ({ projectId }) => {
             {opts.length > 0 && (
               <ul className="mt-2 list-disc space-y-0.5 pl-5 text-xs text-[#475569]">
                 {opts.slice(0, 5).map((f) => (
-                  <li key={f.family_id}>
+                  <li key={bundleRowKey(f)}>
                     {f.family_id} · {f.category_label || f.category} · {f.total_weight_kg} kg · from{' '}
                     {f.current_crate_label || (f.current_crate_db_id ? '—' : 'unassigned')}
                   </li>
@@ -196,7 +196,7 @@ const UnderloadedCrateAssistant = ({ projectId }) => {
               onChange={(e) => setChooseFamilyId(e.target.value)}
             >
               {bundlesFor(chooseCrate).map((f) => (
-                <option key={f.family_id} value={f.family_id}>
+                <option key={bundleRowKey(f)} value={bundleRowKey(f)}>
                   {f.family_id} · {f.total_weight_kg} kg · from{' '}
                   {f.current_crate_label || (f.current_crate_db_id ? '—' : 'unassigned')}
                 </option>

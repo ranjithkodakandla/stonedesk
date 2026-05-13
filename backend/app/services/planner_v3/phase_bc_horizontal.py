@@ -11,6 +11,17 @@ _IDEAL_RANGE_KG = 1300.0
 _IDEAL_VANITY_KG = 1150.0
 
 
+def _unit_anchor_piece(u: Dict[str, Any]) -> Dict[str, Any]:
+    """Location / sort reference — first main, else first splash (splash-only units)."""
+    mains = u.get("mains") or []
+    if mains:
+        return mains[0]
+    for lay in u.get("splash_layers") or []:
+        for p in lay:
+            return p
+    return {}
+
+
 def pack_phase_b_kitchen_range_operational(
     families: List[Dict[str, Any]],
     dispatch_group: str,
@@ -24,12 +35,13 @@ def pack_phase_b_kitchen_range_operational(
     from ..planning_engine import sortable_token
 
     from .adjacency import adjacency_tier
-    from .bundles import build_horizontal_bundles_from_families, horizontal_bundle_to_units
+    from .bundles import build_horizontal_bundles_from_families, horizontal_bundle_whole_units
     from .geometry_compat import range_into_kitchen_geometry_ok
     from .classify import flat_key
     from .packing import (
+        OPERATIONAL_HORIZONTAL_MAIN_PIECES_CAP,
         TYPE_SPECS,
-        _emit_horizontal_crate,
+        _emit_horizontal_crates,
         _merge_units_batch,
         _unit_weight,
     )
@@ -43,19 +55,14 @@ def pack_phase_b_kitchen_range_operational(
 
     p_units: List[Dict[str, Any]] = []
     for b in p_bundles:
-        p_units.extend(
-            horizontal_bundle_to_units(b, "perimeter", material, thickness, color, b_spec["max_kg"])
-        )
+        p_units.extend(horizontal_bundle_whole_units(b, "perimeter", material, thickness, color))
 
     r_units: List[Dict[str, Any]] = []
     for b in r_bundles:
-        r_units.extend(
-            horizontal_bundle_to_units(b, "range", material, thickness, color, c_spec["max_kg"])
-        )
+        r_units.extend(horizontal_bundle_whole_units(b, "range", material, thickness, color))
 
     def enrich_unit(u: Dict[str, Any]) -> Dict[str, Any]:
-        mains = u["mains"]
-        ref = mains[0]
+        ref = _unit_anchor_piece(u)
         fk = flat_key(ref)
         mb = str(ref.get("stone_color") or "").strip() or color
         tw = _unit_weight(u, material, thickness, color)
@@ -72,7 +79,7 @@ def pack_phase_b_kitchen_range_operational(
     r_units = [enrich_unit(u) for u in r_units]
 
     def unit_fifo_sort_key(u: Dict[str, Any]):
-        ref = u["mains"][0]
+        ref = _unit_anchor_piece(u)
         ids = [p["id"] for p in u["mains"]] + [p["id"] for lay in u["splash_layers"] for p in lay]
         return (
             sortable_token(ref.get("building")),
@@ -88,7 +95,7 @@ def pack_phase_b_kitchen_range_operational(
     r_available = list(r_units)
 
     def unit_adj_ref(u: Dict[str, Any]) -> Dict[str, Any]:
-        m = u["mains"][0]
+        m = _unit_anchor_piece(u)
         return {
             "building": m.get("building"),
             "floor": m.get("floor"),
@@ -96,6 +103,8 @@ def pack_phase_b_kitchen_range_operational(
             "flat_key": u.get("flat_key"),
             "bundle_id": str(u.get("bundle_id") or ""),
         }
+
+    _main_slots = lambda u: len(u.get("mains") or [])
 
     p_batches = sequential_ideal_batches(
         p_units,
@@ -105,6 +114,8 @@ def pack_phase_b_kitchen_range_operational(
         ideal_kg=_IDEAL_PERIMETER_KG,
         same_flat_key_fn=lambda u: u.get("flat_key") or "",
         material_key_fn=lambda u: u.get("material_batch_key") or "",
+        main_sum_fn=_main_slots,
+        main_cap=OPERATIONAL_HORIZONTAL_MAIN_PIECES_CAP,
     )
 
     crates: List[Dict[str, Any]] = []
@@ -165,12 +176,12 @@ def pack_phase_b_kitchen_range_operational(
 
         mains, splash_layers = _merge_units_batch(batch_list)
         bids = list({u.get("bundle_id") for u in batch_list if u.get("bundle_id")})
-        cr = _emit_horizontal_crate(
+        emitted, serial = _emit_horizontal_crates(
             letter=b_spec["letter"],
             label=b_spec["label"],
             category="perimeter",
             dispatch_group=dispatch_group,
-            serial=serial,
+            serial_start=serial,
             main_pieces=mains,
             splash_layers=splash_layers,
             material=material,
@@ -179,10 +190,11 @@ def pack_phase_b_kitchen_range_operational(
             wood_thickness=wood_thickness,
             warnings=warnings,
         )
-        cr["phase_lock"] = "B"
-        cr["part_bundles"] = [{"bundle_id": bid} for bid in bids]
-        crates.append(cr)
-        serial += 1
+        for cr in emitted:
+            cr["phase_lock"] = "B"
+            cr["part_bundles"] = [{"bundle_id": bid} for bid in bids]
+            cr.setdefault("planner_debug", {})["source_bundle_ids"] = [str(x) for x in bids if x]
+        crates.extend(emitted)
 
     if r_available:
         r_ordered = sorted(r_available, key=unit_fifo_sort_key)
@@ -194,16 +206,18 @@ def pack_phase_b_kitchen_range_operational(
             ideal_kg=_IDEAL_RANGE_KG,
             same_flat_key_fn=lambda u: u.get("flat_key") or "",
             material_key_fn=lambda u: u.get("material_batch_key") or "",
+            main_sum_fn=_main_slots,
+            main_cap=OPERATIONAL_HORIZONTAL_MAIN_PIECES_CAP,
         )
         for rb in r_batches:
             mains, splash_layers = _merge_units_batch(rb)
             bids = list({u.get("bundle_id") for u in rb if u.get("bundle_id")})
-            cr = _emit_horizontal_crate(
+            emitted, serial = _emit_horizontal_crates(
                 letter=c_spec["letter"],
                 label=c_spec["label"],
                 category="range",
                 dispatch_group=dispatch_group,
-                serial=serial,
+                serial_start=serial,
                 main_pieces=mains,
                 splash_layers=splash_layers,
                 material=material,
@@ -212,10 +226,11 @@ def pack_phase_b_kitchen_range_operational(
                 wood_thickness=wood_thickness,
                 warnings=[],
             )
-            cr["phase_lock"] = "B"
-            cr["part_bundles"] = [{"bundle_id": bid} for bid in bids]
-            crates.append(cr)
-            serial += 1
+            for cr in emitted:
+                cr["phase_lock"] = "B"
+                cr["part_bundles"] = [{"bundle_id": bid} for bid in bids]
+                cr.setdefault("planner_debug", {})["source_bundle_ids"] = [str(x) for x in bids if x]
+            crates.extend(emitted)
 
     return crates, serial
 
@@ -232,9 +247,15 @@ def pack_phase_c_vanity_operational(
 ) -> Tuple[List[Dict[str, Any]], int]:
     from ..planning_engine import sortable_token
 
-    from .bundles import build_horizontal_bundles_from_families, horizontal_bundle_to_units
+    from .bundles import build_horizontal_bundles_from_families, horizontal_bundle_whole_units
     from .classify import flat_key
-    from .packing import TYPE_SPECS, _emit_horizontal_crate, _merge_units_batch, _unit_weight
+    from .packing import (
+        OPERATIONAL_HORIZONTAL_MAIN_PIECES_CAP,
+        TYPE_SPECS,
+        _emit_horizontal_crates,
+        _merge_units_batch,
+        _unit_weight,
+    )
     from .scored_packing import sequential_ideal_batches
 
     v_spec = TYPE_SPECS["vanity"]
@@ -243,13 +264,10 @@ def pack_phase_c_vanity_operational(
 
     v_units: List[Dict[str, Any]] = []
     for b in v_bundles:
-        v_units.extend(
-            horizontal_bundle_to_units(b, "vanity", material, thickness, color, v_spec["max_kg"])
-        )
+        v_units.extend(horizontal_bundle_whole_units(b, "vanity", material, thickness, color))
 
     def enrich_unit(u: Dict[str, Any]) -> Dict[str, Any]:
-        mains = u["mains"]
-        ref = mains[0]
+        ref = _unit_anchor_piece(u)
         fk = flat_key(ref)
         mb = str(ref.get("stone_color") or "").strip() or color
         tw = _unit_weight(u, material, thickness, color)
@@ -262,7 +280,7 @@ def pack_phase_c_vanity_operational(
     v_units = [enrich_unit(u) for u in v_units]
 
     def unit_fifo_sort_key(u: Dict[str, Any]):
-        ref = u["mains"][0]
+        ref = _unit_anchor_piece(u)
         ids = [p["id"] for p in u["mains"]] + [p["id"] for lay in u["splash_layers"] for p in lay]
         return (
             sortable_token(ref.get("building")),
@@ -274,6 +292,8 @@ def pack_phase_c_vanity_operational(
 
     v_units.sort(key=unit_fifo_sort_key)
 
+    _v_main_slots = lambda u: len(u.get("mains") or [])
+
     v_batches = sequential_ideal_batches(
         v_units,
         weight_fn=lambda u: float(u["total_weight_kg"]),
@@ -282,6 +302,8 @@ def pack_phase_c_vanity_operational(
         ideal_kg=_IDEAL_VANITY_KG,
         same_flat_key_fn=lambda u: u.get("flat_key") or "",
         material_key_fn=lambda u: u.get("material_batch_key") or "",
+        main_sum_fn=_v_main_slots,
+        main_cap=OPERATIONAL_HORIZONTAL_MAIN_PIECES_CAP,
     )
 
     crates: List[Dict[str, Any]] = []
@@ -293,12 +315,12 @@ def pack_phase_c_vanity_operational(
         warn: List[str] = []
         if len(vb) > 1:
             warn.append("Multiple vanity runs merged toward ideal D-type weight.")
-        cr = _emit_horizontal_crate(
+        emitted, serial = _emit_horizontal_crates(
             letter=v_spec["letter"],
             label=v_spec["label"],
             category="vanity",
             dispatch_group=dispatch_group,
-            serial=serial,
+            serial_start=serial,
             main_pieces=mains,
             splash_layers=splash_layers,
             material=material,
@@ -307,9 +329,10 @@ def pack_phase_c_vanity_operational(
             wood_thickness=wood_thickness,
             warnings=warn,
         )
-        cr["phase_lock"] = "C"
-        cr["part_bundles"] = [{"bundle_id": bid} for bid in bids]
-        crates.append(cr)
-        serial += 1
+        for cr in emitted:
+            cr["phase_lock"] = "C"
+            cr["part_bundles"] = [{"bundle_id": bid} for bid in bids]
+            cr.setdefault("planner_debug", {})["source_bundle_ids"] = [str(x) for x in bids if x]
+        crates.extend(emitted)
 
     return crates, serial

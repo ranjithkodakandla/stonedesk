@@ -7,6 +7,7 @@ import {
   formatNumber,
   getDestinationColorMap,
   placementDimensionsForDraft,
+  PLANNER_2D_UI_ENABLED,
   summarizeDraftContainers,
 } from '../utils/plannerUtils';
 import { buildPlacements3DFromManual, normalizePlacementsFor3D } from '../utils/plannerDisplay';
@@ -177,7 +178,10 @@ const PlannerContainerTab = () => {
         <div className="rounded-[32px] border border-[#dbe4f0] bg-white p-6 shadow-sm">
           <div className="text-xs uppercase tracking-[0.18em] text-[#64748b]">Container 3D — live plan</div>
           <p className="mt-1 text-sm text-[#64748b]">
-            Cutaway view with zones, crate IDs, and weights. Drag crates on the 2D canvas below — this updates in real time.
+            Cutaway view with zones, crate IDs, and weights.
+            {PLANNER_2D_UI_ENABLED
+              ? ' Drag crates on the 2D canvas below — this updates in real time.'
+              : ' Use the crate picker under “Selected Container” or numeric fields to adjust positions while the 2D canvas is off.'}{' '}
             Click a box here to highlight it on the plan.
           </p>
           <div className="mt-4">
@@ -298,47 +302,72 @@ const PlannerContainerTab = () => {
             </button>
           </div>
 
-          <div
-            ref={canvasRef}
-            className="relative mt-5 overflow-hidden rounded-[28px] border border-[#cbd5e1] bg-[linear-gradient(180deg,_#f8fafc,_#eef2f7)]"
-            style={{ aspectRatio: `${selectedContainer.max_length} / ${selectedContainer.max_width}` }}
-          >
-            <div className="absolute inset-0 border-[10px] border-[#0f172a]/10" />
-            <div className="absolute right-0 top-0 h-full w-[12%] bg-amber-100/70" />
-            <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 border-l border-dashed border-[#94a3b8]" />
-
-            {selectedContainer.placements.map((placement) => {
-              const left = `${(placement.x / selectedContainer.max_length) * 100}%`;
-              const top = `${(placement.y / selectedContainer.max_width) * 100}%`;
-              const width = `${(placement.length / selectedContainer.max_length) * 100}%`;
-              const height = `${(placement.width / selectedContainer.max_width) * 100}%`;
-              const color = destinationColorMap[placement.destination_group] || '#1d4ed8';
-              const selected = selectedPlacement?.crate_id === placement.crate_id;
-              return (
-                <button
-                  key={`${selectedContainer.id}-${placement.crate_id}`}
-                  type="button"
-                  onMouseDown={(event) => startPlacementDrag(event, placement)}
-                  onClick={() => setSelectedPlacementCrateId(placement.crate_id)}
-                  className={`absolute overflow-hidden rounded-xl border text-left shadow-md transition-all ${
-                    selected ? 'border-[#0f172a] ring-2 ring-[#0f172a]/20' : 'border-white/70'
-                  }`}
-                  style={{ left, top, width, height, backgroundColor: color }}
-                >
-                  <div className="flex h-full flex-col justify-between px-2 py-1 text-white">
-                    <div className="text-[11px] font-semibold">{placement.crate_id}</div>
-                    <div className="text-[10px]">{Math.round(placement.weight)}kg</div>
-                  </div>
-                </button>
-              );
-            })}
-
-            {selectedContainer.warnings.length > 0 && (
-              <div className="absolute left-4 top-4 rounded-2xl border border-amber-300 bg-white/90 px-4 py-3 text-xs text-amber-950 shadow-sm">
-                {selectedContainer.warnings.join(' · ')}
+          {!PLANNER_2D_UI_ENABLED ? (
+            <div className="mt-5 space-y-3">
+              <div className="rounded-xl border border-dashed border-[#cbd5e1] bg-[#f8fafc] px-4 py-3 text-sm text-[#64748b]">
+                2D floor canvas is temporarily hidden while layout logic is refined. Edit positions with the fields at
+                right, or pick a crate here.
               </div>
-            )}
-          </div>
+              {selectedContainer.placements.length > 0 && (
+                <div>
+                  <label className="label-text">Crate to edit</label>
+                  <select
+                    className="input-field mt-1 max-w-md"
+                    value={selectedPlacementCrateId || selectedContainer.placements[0]?.crate_id || ''}
+                    onChange={(e) => setSelectedPlacementCrateId(e.target.value || null)}
+                  >
+                    {selectedContainer.placements.map((p) => (
+                      <option key={p.crate_id} value={p.crate_id}>
+                        {p.crate_id} @ ({formatNumber(p.x, 1)}, {formatNumber(p.y, 1)})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div
+              ref={canvasRef}
+              className="relative mt-5 overflow-hidden rounded-[28px] border border-[#cbd5e1] bg-[linear-gradient(180deg,_#f8fafc,_#eef2f7)]"
+              style={{ aspectRatio: `${selectedContainer.max_length} / ${selectedContainer.max_width}` }}
+            >
+              <div className="absolute inset-0 border-[10px] border-[#0f172a]/10" />
+              <div className="absolute right-0 top-0 h-full w-[12%] bg-amber-100/70" />
+              <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 border-l border-dashed border-[#94a3b8]" />
+
+              {selectedContainer.placements.map((placement) => {
+                const left = `${(placement.x / selectedContainer.max_length) * 100}%`;
+                const top = `${(placement.y / selectedContainer.max_width) * 100}%`;
+                const width = `${(placement.length / selectedContainer.max_length) * 100}%`;
+                const height = `${(placement.width / selectedContainer.max_width) * 100}%`;
+                const color = destinationColorMap[placement.destination_group] || '#1d4ed8';
+                const selected = selectedPlacement?.crate_id === placement.crate_id;
+                return (
+                  <button
+                    key={`${selectedContainer.id}-${placement.crate_id}`}
+                    type="button"
+                    onMouseDown={(event) => startPlacementDrag(event, placement)}
+                    onClick={() => setSelectedPlacementCrateId(placement.crate_id)}
+                    className={`absolute overflow-hidden rounded-xl border text-left shadow-md transition-all ${
+                      selected ? 'border-[#0f172a] ring-2 ring-[#0f172a]/20' : 'border-white/70'
+                    }`}
+                    style={{ left, top, width, height, backgroundColor: color }}
+                  >
+                    <div className="flex h-full flex-col justify-between px-2 py-1 text-white">
+                      <div className="text-[11px] font-semibold">{placement.crate_id}</div>
+                      <div className="text-[10px]">{Math.round(placement.weight)}kg</div>
+                    </div>
+                  </button>
+                );
+              })}
+
+              {selectedContainer.warnings.length > 0 && (
+                <div className="absolute left-4 top-4 rounded-2xl border border-amber-300 bg-white/90 px-4 py-3 text-xs text-amber-950 shadow-sm">
+                  {selectedContainer.warnings.join(' · ')}
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="mt-5 rounded-[24px] border border-[#e2e8f0] bg-[#f8fafc] p-4">
             <div className="text-xs uppercase tracking-[0.18em] text-[#64748b]">Optimization Suggestions</div>
@@ -424,7 +453,11 @@ const PlannerContainerTab = () => {
                 </button>
               </div>
             ) : (
-              <div className="mt-4 text-sm text-[#64748b]">Select a crate on the canvas to edit its position.</div>
+              <div className="mt-4 text-sm text-[#64748b]">
+                {PLANNER_2D_UI_ENABLED
+                  ? 'Select a crate on the canvas to edit its position.'
+                  : 'Select a crate in the dropdown above or in the 3D view to edit its position.'}
+              </div>
             )}
           </div>
 

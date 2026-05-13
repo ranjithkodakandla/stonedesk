@@ -91,6 +91,30 @@ def build_horizontal_bundles_from_families(
         mains: List[Dict[str, Any]] = list(fam.get("main_pieces") or [])
         splashes: List[Dict[str, Any]] = list(fam.get("splash_pieces") or [])
         if not mains:
+            if not splashes:
+                continue
+            parent = splashes[0]
+            children = splashes[1:]
+            all_pieces = list(splashes)
+            wt = sum(piece_weight(p, material, thickness, color) for p in all_pieces)
+            loc = _ref_location(parent)
+            bundles.append({
+                "bundle_id": f"{category}-{fam.get('family_id', 'x')}-splash-{parent.get('id')}",
+                "category": category,
+                "parent": parent,
+                "children": children,
+                "main_pieces": [],
+                "splash_pieces": splashes,
+                "all_pieces": all_pieces,
+                "all_piece_ids": [p["id"] for p in all_pieces],
+                "flat_key": flat_key(parent),
+                "building": loc["building"],
+                "floor": loc["floor"],
+                "flat": loc["flat"],
+                "family_id": fam.get("family_id"),
+                "material_batch_key": _material_batch_key(parent, color),
+                "total_weight_kg": round(wt, 1),
+            })
             continue
         parent = mains[0]
         children = mains[1:] + splashes
@@ -115,6 +139,30 @@ def build_horizontal_bundles_from_families(
             "total_weight_kg": round(wt, 1),
         })
     return bundles
+
+
+def horizontal_bundle_whole_units(
+    bundle: Dict[str, Any],
+    category: str,
+    material: str,
+    thickness: str,
+    color: str,
+) -> List[Dict[str, Any]]:
+    """
+    One operational packing unit per PartBundle — preserves family integrity (no weight-driven splitting).
+    Over-max-weight bundles are still emitted as a single crate downstream with an overweight warning.
+    """
+    mains = list(bundle.get("main_pieces") or [])
+    splashes = list(bundle.get("splash_pieces") or [])
+    splash_layers = _chunk_splashes(splashes)
+    return [
+        {
+            "mains": mains,
+            "splash_layers": splash_layers,
+            "family_category": category,
+            "bundle_id": bundle.get("bundle_id"),
+        }
+    ]
 
 
 def horizontal_bundle_to_units(
@@ -143,6 +191,27 @@ def horizontal_bundle_to_units(
             "family_category": category,
             "bundle_id": bundle.get("bundle_id"),
         })
+        return units
+
+    if not mains:
+        remaining_sp = list(splashes)
+        while remaining_sp:
+            chunk_sp: List[Dict[str, Any]] = []
+            chunk_wt = 0.0
+            while remaining_sp:
+                p = remaining_sp[0]
+                pw = piece_weight(p, material, thickness, color)
+                if chunk_sp and chunk_wt + pw > max_unit_kg:
+                    break
+                chunk_sp.append(remaining_sp.pop(0))
+                chunk_wt += pw
+            chunk_layers = _chunk_splashes(chunk_sp)
+            units.append({
+                "mains": [],
+                "splash_layers": chunk_layers,
+                "family_category": category,
+                "bundle_id": bundle.get("bundle_id"),
+            })
         return units
 
     remaining = list(mains)

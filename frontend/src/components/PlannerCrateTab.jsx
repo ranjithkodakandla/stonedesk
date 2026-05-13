@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { usePlannerStore } from '../store/plannerStore';
+import { computedCrateWeightKg } from '../utils/plannerDisplay';
 import { buildPiecesByCrate, formatNumber, getPieceWeight } from '../utils/plannerUtils';
 
 const PlannerCrateTab = () => {
@@ -7,6 +8,7 @@ const PlannerCrateTab = () => {
   const pieces = usePlannerStore((s) => s.pieces);
   const crates = usePlannerStore((s) => s.crates);
   const assignments = usePlannerStore((s) => s.assignments);
+  const setActiveTab = usePlannerStore((s) => s.setActiveTab);
 
   const { grouped } = useMemo(
     () => buildPiecesByCrate(pieces, crates, assignments),
@@ -16,11 +18,22 @@ const PlannerCrateTab = () => {
   return (
     <div className="space-y-6">
       <div className="rounded-[32px] border border-[#dbe4f0] bg-white p-6 shadow-sm">
-        <div className="text-xs uppercase tracking-[0.2em] text-[#64748b]">Crate plan (v3)</div>
-        <p className="mt-2 text-sm text-[#64748b]">
-          Crates are built with SmartCratePlanner v3 (A island vertical, B/C/D horizontal with multi-layer
-          splashes). Regenerate from <strong>Smart Crate Planner</strong> in the project footer.
-        </p>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="text-xs uppercase tracking-[0.2em] text-[#64748b]">Crate contents (v3)</div>
+            <p className="mt-2 max-w-3xl text-sm text-[#64748b]">
+              Part lists per crate from SmartCratePlanner v3 (A island vertical, B/C/D horizontal with multi-layer
+              splashes). To regenerate or adjust loads, use <strong className="text-[#334155]">Dispatch & build</strong>.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActiveTab('build-plan')}
+            className="shrink-0 rounded-full border border-[#1d4ed8] bg-[#eff6ff] px-4 py-2 text-sm font-semibold text-[#1d4ed8] hover:bg-[#dbeafe]"
+          >
+            Dispatch & build
+          </button>
+        </div>
       </div>
 
       <div className="space-y-4">
@@ -46,7 +59,7 @@ const PlannerCrateTab = () => {
                         {crate.planner_v3_orientation}
                       </span>
                     )}
-                    <span>{formatNumber(crate.weight, 0)} kg</span>
+                    <span>{formatNumber(computedCrateWeightKg(crate, cratePieces, project), 0)} kg</span>
                   </div>
                 </div>
                 <div className="text-right text-xs text-[#64748b]">
@@ -57,17 +70,22 @@ const PlannerCrateTab = () => {
                 </div>
               </div>
 
-              {Array.isArray(crate.planner_v3_splash_layers) && crate.planner_v3_splash_layers.length > 0 && (
+              {(Array.isArray(crate.planner_v3_splash_layers) &&
+                crate.planner_v3_splash_layers.some((L) => Array.isArray(L) && L.length > 0)) ||
+              (Array.isArray(crate.splash_layer_piece_ids) && crate.splash_layer_piece_ids.length > 0) ? (
                 <div className="mt-3 rounded-2xl bg-[#f8fafc] px-3 py-2 text-xs text-[#475569]">
                   <span className="font-semibold text-[#0f172a]">Splash layers:</span>{' '}
-                  {crate.planner_v3_splash_layers.map((layer, i) => (
-                    <span key={i}>
-                      L{i + 1}: {layer.length} pc
-                      {i < crate.planner_v3_splash_layers.length - 1 ? ' · ' : ''}
-                    </span>
-                  ))}
+                  {Array.isArray(crate.planner_v3_splash_layers) &&
+                  crate.planner_v3_splash_layers.some((L) => Array.isArray(L) && L.length > 0)
+                    ? crate.planner_v3_splash_layers.map((layer, i) => (
+                        <span key={i}>
+                          L{i + 1}: {(layer || []).length} pc
+                          {i < crate.planner_v3_splash_layers.length - 1 ? ' · ' : ''}
+                        </span>
+                      ))
+                    : `${crate.splash_layer_piece_ids.length} splash pc (vertical / consolidated tier)`}
                 </div>
-              )}
+              ) : null}
 
               <div className="mt-4 overflow-x-auto">
                 <table className="min-w-full text-left text-xs">

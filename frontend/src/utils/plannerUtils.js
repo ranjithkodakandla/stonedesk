@@ -1,5 +1,14 @@
 export const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
+/** Set true to show SVG / canvas 2D planner views again. */
+export const PLANNER_2D_UI_ENABLED = false;
+
+/** Canonical row key for bundle/family picker — aligns with backend dispatch units. */
+export function bundleRowKey(fam) {
+  if (!fam || typeof fam !== 'object') return '';
+  return String(fam.unit_id || fam.family_ui_key || fam.family_id || '');
+}
+
 export const emptyProject = {
   id: null,
   name: '',

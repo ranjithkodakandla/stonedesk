@@ -20,6 +20,7 @@ from .dimensions import (
 from .engine import _payload_cap_kg
 from .packing import TYPE_SPECS, _merge_splash_tiers_for_two_layer_cap
 from .persist import enrich_layout_with_crates
+from .geometry_gate import count_placed_a_crates
 from .phase_a_island import operational_planner_enabled
 from .summary_metrics import build_planner_summary
 
@@ -224,7 +225,7 @@ def run_planner_recompute(
             },
         }
     else:
-        load_plan = optimize_container_load(crate_specs, max_payload_kg=cap)
+        load_plan = optimize_container_load(crate_specs, max_payload_kg=cap, project=project)
 
     containers = load_plan.get("containers") or []
 
@@ -239,7 +240,11 @@ def run_planner_recompute(
         manual_placements: List[Dict[str, Any]] = []
         sorted_pls = linear_manual_sort_placements(pls, merged)
         for order_idx, pl in enumerate(sorted_pls, start=1):
-            cid_code = idx_to_crate_id.get(pl.get("crate_index"))
+            try:
+                cidx = int(pl.get("crate_index"))
+            except (TypeError, ValueError):
+                cidx = None
+            cid_code = idx_to_crate_id.get(cidx) if cidx is not None else None
             if not cid_code:
                 continue
             manual_placements.append({
@@ -260,7 +265,10 @@ def run_planner_recompute(
         })
         enriched_layouts.append(enrich_layout_with_crates(cont, merged))
 
-    layout_persist = enriched_layouts[0] if enriched_layouts else {}
+    layout_persist = next(
+        (e for e in enriched_layouts if (e.get("placements") or [])),
+        enriched_layouts[0] if enriched_layouts else {},
+    )
     manual_plan = {"containers": manual_plan_containers}
 
     material = project.get("material", "Granite")
@@ -272,6 +280,8 @@ def run_planner_recompute(
         cat = _category_for_crate(m)
         summary_crates.append({
             "category": cat,
+            "crate_class": str(m.get("planner_v3_crate_class") or ""),
+            "name": str(m.get("crate_id") or m.get("name") or ""),
             "total_weight_kg": float(m.get("weight") or 0),
             "max_weight": float(m.get("max_weight") or TYPE_SPECS.get(cat, TYPE_SPECS["misc"])["max_kg"]),
             "dimensions": {
@@ -281,6 +291,20 @@ def run_planner_recompute(
             },
         })
 
+    indexed_for_islands = [{"crate_class": str(m.get("planner_v3_crate_class") or "")} for m in merged]
+    placed_islands = count_placed_a_crates(load_plan, indexed_for_islands)
+    first_layout0: Dict[str, Any] = containers[0] if containers else {}
+    island_strip_x = None
+    if placed_islands > 0 and first_layout0:
+        island_strip_x = float(first_layout0.get("linear_island_strip_end_x_in") or 0.0)
+
+    manifest_notes = {
+        "placed_island_crate_count": placed_islands,
+        "layout_island_strip_end_x_in": island_strip_x,
+        "manifest_eligible_crate_count": len(merged),
+        "rejected_manifest_crate_count": 0,
+    }
+
     summary = build_planner_summary(
         pieces,
         summary_crates,
@@ -288,6 +312,8 @@ def run_planner_recompute(
         material=material,
         thickness=thickness,
         color=color,
+        rejected_crates=[],
+        manifest_notes=manifest_notes,
     )
 
     top_warnings: List[str] = list(load_plan.get("warnings") or [])
@@ -310,8 +336,7 @@ def run_planner_recompute(
                 "container": layout_persist,
                 "containers": enriched_layouts,
                 "summary": summary,
-                "suggest_40ft": any(c.get("type") == "40ft" for c in containers)
-                or bool(layout_persist.get("suggest_40ft", False)),
+                "suggest_40ft": False,
                 "warnings": top_warnings,
                 "container_optimization": load_plan.get("optimization"),
             },

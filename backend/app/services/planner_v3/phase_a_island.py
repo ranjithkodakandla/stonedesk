@@ -5,18 +5,19 @@ Gated by PLANNER_V3_OPERATIONAL=1 — legacy path remains default.
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .adjacency import ordered_pull_piece_ids
 from .bundles import build_island_bundles_from_families, island_bundle_adjacency_sort_key
 from .classify import build_families
 from .dimensions import island_cassette_dimensions_operational, total_piece_weight
 from .dispatch import dispatch_group_label
+from .container_layout import CONTAINER_20FT
 from .scored_packing import greedy_ideal_batches
 
-# kg targets (ideal center inside acceptable band)
-_ISLAND_MIN = 1400.0
-_ISLAND_MAX = 2200.0
+# kg targets — acceptable band 1400–2200; ideal 1800–2000 (spec §8–9)
+_ISLAND_ACCEPTABLE_LO = 1400.0
+_ISLAND_ACCEPTABLE_HI = 2200.0
 _ISLAND_IDEAL_CENTER = 1900.0
 _ISLAND_IDEAL_LO = 1800.0
 _ISLAND_IDEAL_HI = 2000.0
@@ -41,6 +42,29 @@ def _bundles_to_pieces(batch: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
+def _batching_summary_lines(
+    batch: List[Dict[str, Any]],
+    decisions: Optional[List[Dict[str, Any]]],
+    actual_kg: float,
+) -> List[str]:
+    lines = [
+        f"Greedy batching: minimize (weight−{_ISLAND_IDEAL_CENTER:g})² minus same-flat ({1200:g}) and material ({800:g}) cost bonuses when merging.",
+        f"Actual crate weight: {actual_kg:.1f} kg · Target ideal band: {_ISLAND_IDEAL_LO:.0f}–{_ISLAND_IDEAL_HI:.0f} kg · Acceptable: {_ISLAND_ACCEPTABLE_LO:.0f}–{_ISLAND_ACCEPTABLE_HI:.0f} kg.",
+        f"Bundles in crate: {len(batch)} — flat grouping is a soft preference (merge bonuses), not a hard partition.",
+    ]
+    if not decisions:
+        return lines
+    merges = [d for d in decisions if d.get("type") == "merge_vs_flush"]
+    forced = [d for d in decisions if d.get("type") == "merge_under_min_kg"]
+    if forced:
+        lines.append(f"Forced merges (under {_ISLAND_ACCEPTABLE_LO:.0f} kg floor): {len(forced)} step(s).")
+    if merges:
+        n_m = sum(1 for d in merges if d.get("choice") == "merge")
+        n_f = sum(1 for d in merges if d.get("choice") == "flush_then_new_batch")
+        lines.append(f"Merge vs flush decisions: {n_m} merge(s), {n_f} close-and-new-batch choice(s).")
+    return lines
+
+
 def _emit_island_crate_from_bundles(
     *,
     batch: List[Dict[str, Any]],
@@ -51,26 +75,49 @@ def _emit_island_crate_from_bundles(
     color: str,
     wood_thickness: float,
     pull_candidate_ids: List[int],
+    batching_decision_trace: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     pieces = _bundles_to_pieces(batch)
     mains = [b["parent"] for b in batch]
     spl = []
+    splash_only: List[Any] = []
     for b in batch:
         spl.extend(b.get("children") or [])
+        splash_only.extend(b.get("splash_pieces") or [])
 
     wt = total_piece_weight(pieces, material, thickness, color)
     warnings: List[str] = []
-    if wt > _ISLAND_MAX:
-        warnings.append(f"Island crate exceeds {_ISLAND_MAX:.0f} kg ({round(wt)} kg).")
-    if wt < _ISLAND_MIN and pieces:
+    if wt > _ISLAND_ACCEPTABLE_HI:
+        warnings.append(f"Island crate exceeds {_ISLAND_ACCEPTABLE_HI:.0f} kg ({round(wt)} kg).")
+    if wt < _ISLAND_ACCEPTABLE_LO and pieces:
         warnings.append(
-            f"Island crate under {_ISLAND_MIN:.0f} kg ({round(wt)} kg) — underloaded; consider pull candidates."
+            f"UNDERLOADED — crate under {_ISLAND_ACCEPTABLE_LO:.0f} kg ({round(wt)} kg). See suggested pulls."
         )
-    band = "ideal" if _ISLAND_MIN <= wt <= _ISLAND_MAX else ("below_ideal" if wt < _ISLAND_MIN else "above_ideal")
+    band = (
+        "ideal"
+        if _ISLAND_ACCEPTABLE_LO <= wt <= _ISLAND_ACCEPTABLE_HI
+        else ("below_ideal" if wt < _ISLAND_ACCEPTABLE_LO else "above_ideal")
+    )
     if _ISLAND_IDEAL_LO <= wt <= _ISLAND_IDEAL_HI:
         band = "ideal"
 
+    if wt > _ISLAND_ACCEPTABLE_HI:
+        operational_status = "OVERWEIGHT"
+    elif wt < _ISLAND_ACCEPTABLE_LO:
+        operational_status = "UNDERLOADED"
+    elif _ISLAND_IDEAL_LO <= wt <= _ISLAND_IDEAL_HI:
+        operational_status = "OPTIMAL"
+    else:
+        operational_status = "ACCEPTABLE"
+
     dims = island_cassette_dimensions_operational(pieces, thickness, wood_thickness)
+    eh = float(dims.get("external_height") or 0)
+    h_clear = float(CONTAINER_20FT["max_clear_height"])
+    if eh > h_clear + 0.01:
+        warnings.append(
+            f"Tall island cassette (external max axis {eh:.1f} in vs nominal {h_clear:.1f} in clear) — "
+            "manifest eligibility uses 3D rotated fit vs 20′ envelope; verify loading orientation on site."
+        )
     spec_letter = "A"
     label = "Island (vertical cassette)"
 
@@ -78,6 +125,9 @@ def _emit_island_crate_from_bundles(
         warnings.append(
             f"Pull nearby parts (optional): {len(pull_candidate_ids)} candidate piece(s) ordered by adjacency — auto pull not implemented."
         )
+
+    # Layer IDs for UI / pack sheets (vertical cassette still lists splash qty per tier)
+    splash_layers_model = [[p["id"] for p in splash_only]] if splash_only else []
 
     return {
         "crate_class": spec_letter,
@@ -90,16 +140,17 @@ def _emit_island_crate_from_bundles(
         "pieces": pieces,
         "main_pieces": mains,
         "splash_pieces": spl,
-        "splash_layers": [],
-        "max_weight": float(_ISLAND_MAX),
+        "splash_layers": splash_layers_model,
+        "max_weight": float(_ISLAND_ACCEPTABLE_HI),
         "total_weight_kg": round(wt, 1),
         "weight_band_status": band,
+        "operational_status": operational_status,
         "packing_mode": "v3",
         "grouping_reason": f"Operational Phase A — {len(batch)} bundle(s), adjacent slabs, no spacing",
         "warnings": warnings,
         "main_layer_piece_ids": [p["id"] for p in mains],
-        "splash_layer_piece_ids": [p["id"] for p in spl],
-        "splash_layer": len(spl) > 0,
+        "splash_layer_piece_ids": [p["id"] for p in splash_only],
+        "splash_layer": len(splash_only) > 0,
         "dimensions": dims,
         "part_bundles": [
             {
@@ -111,6 +162,27 @@ def _emit_island_crate_from_bundles(
         ],
         "pull_candidate_piece_ids": pull_candidate_ids[:80],
         "phase_lock": "A",
+        "planner_debug": {
+            "source_bundle_ids": [str(b.get("bundle_id") or "") for b in batch if b.get("bundle_id")],
+            "source_family_ids": sorted({str(b.get("family_id")) for b in batch if b.get("family_id")}),
+            "source_unit_ids": [],
+            "unit_kind": "island_unit",
+            "absorption_history": [],
+            "emit_gate_verdict": None,
+            "geometry_validation": None,
+            "container_placement": None,
+            "emit_reason": "island_phase_a_emit",
+            "batching_transparency": {
+                "model": "greedy_ideal_batches on all scoped island bundles (single global pass; dispatch label is informational)",
+                "ideal_center_kg": _ISLAND_IDEAL_CENTER,
+                "ideal_band_kg": [_ISLAND_IDEAL_LO, _ISLAND_IDEAL_HI],
+                "acceptable_band_kg": [_ISLAND_ACCEPTABLE_LO, _ISLAND_ACCEPTABLE_HI],
+                "flat_bonus_cost_units": 1200.0,
+                "material_bonus_cost_units": 800.0,
+                "decisions": batching_decision_trace or [],
+                "summary_lines": _batching_summary_lines(batch, batching_decision_trace, wt),
+            },
+        },
     }
 
 
@@ -136,30 +208,39 @@ def pack_phase_a_islands(
     wood_thickness: float,
     serial_start: int,
     all_island_bundles: List[Dict[str, Any]],
+    *,
+    collect_batching_trace: bool = False,
 ) -> Tuple[List[Dict[str, Any]], int]:
     """
     Batch island bundles toward ideal center weight without splitting bundles.
+
+    Batching is **global** over ``island_bundles`` (caller passes all bundles in scope in one list).
+    ``dispatch_group`` is used for crate naming / traceability only — not a partition for optimization.
     """
     if not island_bundles:
         return [], serial_start
+
+    batch_traces: Optional[List[List[Dict[str, Any]]]] = [] if collect_batching_trace else None
 
     batches = greedy_ideal_batches(
         island_bundles,
         sort_key=island_bundle_adjacency_sort_key,
         weight_fn=lambda b: float(b.get("total_weight_kg") or 0),
-        min_kg=_ISLAND_MIN,
-        max_kg=_ISLAND_MAX,
+        min_kg=_ISLAND_ACCEPTABLE_LO,
+        max_kg=_ISLAND_ACCEPTABLE_HI,
         ideal_kg=_ISLAND_IDEAL_CENTER,
         same_flat_key_fn=lambda b: b.get("flat_key") or "",
         material_key_fn=lambda b: b.get("material_batch_key") or "",
+        batching_trace=batch_traces,
     )
 
     crates: List[Dict[str, Any]] = []
     serial = serial_start
 
-    for batch in batches:
+    for bi, batch in enumerate(batches):
+        trace_row = batch_traces[bi] if batch_traces is not None and bi < len(batch_traces) else None
         bw0 = float(batch[0].get("total_weight_kg") or 0)
-        if len(batch) == 1 and bw0 > _ISLAND_MAX:
+        if len(batch) == 1 and bw0 > _ISLAND_ACCEPTABLE_HI:
             one = _emit_island_crate_from_bundles(
                 batch=batch,
                 dispatch_group=dispatch_group,
@@ -169,6 +250,7 @@ def pack_phase_a_islands(
                 color=color,
                 wood_thickness=wood_thickness,
                 pull_candidate_ids=[],
+                batching_decision_trace=trace_row,
             )
             one["warnings"].append(
                 "Single island bundle exceeds max weight — split parts manually or reduce bundle size."
@@ -193,6 +275,7 @@ def pack_phase_a_islands(
                 color=color,
                 wood_thickness=wood_thickness,
                 pull_candidate_ids=pulls,
+                batching_decision_trace=trace_row,
             )
         )
         serial += 1

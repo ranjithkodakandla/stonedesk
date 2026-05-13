@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import certifi
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Response, UploadFile, File
+from fastapi import FastAPI, HTTPException, Response, UploadFile, File, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pymongo import MongoClient, ReturnDocument
@@ -16,11 +16,10 @@ from .pdf_parser import parse_pdf
 from .services.container_planner import build_container_plan
 from .services.deterministic_packing import (
     CATEGORY_CONFIG as DET_CATEGORY_CONFIG,
-    _piece_weight as det_piece_weight,
-    build_packing_families,
     discover_dispatch_hierarchy,
 )
 from .services.planner_v3 import enrich_layout_with_crates, run_v3_planner
+from .services.planner_v3.dispatch_units import build_dispatch_units_from_pieces
 from .services.planner_v3.container_layout import linear_manual_sort_placements
 from .services.planning_engine import (
     COLOR_DENSITIES,
@@ -196,6 +195,21 @@ def as_iso(value: Any) -> Any:
     return value
 
 
+def _json_safe_floats(obj: Any) -> Any:
+    """Replace NaN/inf floats so FastAPI/Starlette JSON encoding never raises."""
+    import math
+
+    if isinstance(obj, dict):
+        return {k: _json_safe_floats(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe_floats(v) for v in obj]
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    return obj
+
+
 def project_response(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not doc:
         return None
@@ -215,10 +229,12 @@ def project_response(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         "description_thickness_map": doc.get("description_thickness_map", {}),
         "status": doc.get("status", "draft"),
         "dispatch_selection": doc.get("dispatch_selection", {}),
-        "planner_v3_layout": doc.get("planner_v3_layout"),
-        "planner_v3_containers": doc.get("planner_v3_containers") or [],
-        "planner_v3_summary": doc.get("planner_v3_summary"),
-        "planner_v3_container_optimization": doc.get("planner_v3_container_optimization"),
+        "planner_v3_layout": _json_safe_floats(doc.get("planner_v3_layout")),
+        "planner_v3_containers": _json_safe_floats(doc.get("planner_v3_containers") or []),
+        "planner_v3_summary": _json_safe_floats(doc.get("planner_v3_summary")),
+        "planner_v3_debug_snapshot": _json_safe_floats(doc.get("planner_v3_debug_snapshot")),
+        "planner_v3_unshippable_crates": _json_safe_floats(doc.get("planner_v3_unshippable_crates") or []),
+        "planner_v3_container_optimization": _json_safe_floats(doc.get("planner_v3_container_optimization")),
         "delivery_payload_cap_kg": float(doc.get("delivery_payload_cap_kg") or 24000),
         "created_at": as_iso(doc.get("created_at")),
         "updated_at": as_iso(doc.get("updated_at")),
@@ -294,6 +310,7 @@ def crate_response(doc: Dict[str, Any]) -> Dict[str, Any]:
         "planner_v3_splash_layers": doc.get("planner_v3_splash_layers"),
         "weight_band_status": doc.get("weight_band_status"),
         "planner_v3_pull_piece_ids": doc.get("planner_v3_pull_piece_ids") or [],
+        "planner_debug": doc.get("planner_debug"),
         "created_at": as_iso(doc.get("created_at")),
     }
 
@@ -1360,6 +1377,36 @@ def get_dispatch_hierarchy(project_id: int):
     return discover_dispatch_hierarchy(pieces)
 
 
+def _family_split_reason(
+    piece_ids: List[int],
+    piece_to_crate: Dict[int, int],
+    crates_by_db_id: Dict[int, Dict[str, Any]],
+) -> Optional[str]:
+    """Explains real splits (geometry / planner exceptions); None when not split."""
+    cids = {piece_to_crate[pid] for pid in piece_ids if pid in piece_to_crate}
+    if len(cids) <= 1:
+        return None
+    snippets: List[str] = []
+    for cid in sorted(cids):
+        doc = crates_by_db_id.get(cid) or {}
+        for w in doc.get("packing_warnings") or []:
+            ws = str(w)
+            if "EXCEPTION family split" in ws:
+                return ws
+            if "EXCEPTION over-height" in ws or "over-height island" in ws:
+                return ws
+            if ws.startswith("EXCEPTION"):
+                snippets.append(ws)
+        notes = str(doc.get("planner_notes") or "")
+        for part in notes.split(";"):
+            p = part.strip()
+            if "EXCEPTION" in p:
+                snippets.append(p)
+    if snippets:
+        return snippets[0]
+    return "Split across crates — inspect packing_warnings / planner_notes on the listed crates for details."
+
+
 @app.get("/api/projects/{project_id}/families")
 def get_packing_families(project_id: int):
     """
@@ -1375,6 +1422,7 @@ def get_packing_families(project_id: int):
     project_doc = projects_col.find_one({"id": project_id}, {"_id": 0})
     material = (project_doc or {}).get("material", "Granite")
     thickness = (project_doc or {}).get("thickness", "3CM")
+    stone_color = str((project_doc or {}).get("stone_color", "") or "")
 
     # piece_id → crate_id
     raw_assignments = assignments_col.find({"project_id": project_id}, {"_id": 0, "piece_id": 1, "crate_id": 1})
@@ -1382,10 +1430,14 @@ def get_packing_families(project_id: int):
 
     # crate_id → crate_id string (for display)
     crate_docs = {c["id"]: c.get("crate_id", "") for c in crates_col.find({"project_id": project_id}, {"_id": 0, "id": 1, "crate_id": 1})}
+    crates_by_db_id = {
+        c["id"]: c
+        for c in crates_col.find({"project_id": project_id}, {"_id": 0})
+    }
 
-    families = build_packing_families(pieces)
+    dispatch_units, _prefix_events = build_dispatch_units_from_pieces(pieces)
     result = []
-    for fam in families:
+    for fam in dispatch_units:
         all_pieces = fam["all_pieces"]
         piece_ids = [p["id"] for p in all_pieces]
 
@@ -1399,23 +1451,32 @@ def get_packing_families(project_id: int):
             primary_db_id = None
             is_split = False
 
-        total_weight = sum(det_piece_weight(p, material, thickness) for p in all_pieces)
+        total_weight = sum(planning_piece_weight(p, material, thickness, stone_color) for p in all_pieces)
         cat_cfg = DET_CATEGORY_CONFIG.get(fam["category"], DET_CATEGORY_CONFIG["misc"])
 
-        # Extract location from first piece (all pieces in a family share flat/floor/building)
+        # Extract location from first piece (all pieces in a unit share flat/floor/building)
         ref = all_pieces[0] if all_pieces else {}
         building = str(ref.get("building", "") or "").strip()
         floor = str(ref.get("floor", "") or "").strip()
         flat = str(ref.get("flat", "") or "").strip()
 
+        uid = str(fam.get("unit_id") or "")
+        display_family_id = str(fam.get("canonical_family_id") or fam.get("family_id") or "")
+
         result.append({
-            "family_id": fam["family_id"],
+            "unit_id": uid,
+            "family_id": display_family_id,
+            "family_ui_key": uid or f"{fam.get('family_id')}@@{fam['flat_key']}@@{fam['category']}",
             "flat_key": fam["flat_key"],
             "building": building,
             "floor": floor,
             "flat": flat,
             "category": fam["category"],
             "category_label": cat_cfg["label"],
+            "unit_kind": fam.get("unit_kind"),
+            "splash_attach_route": fam.get("splash_attach_route"),
+            "detached_reason": fam.get("detached_reason"),
+            "prefix_normalization_events": fam.get("prefix_normalization_events") or [],
             "main_piece_ids": [p["id"] for p in fam["main_pieces"]],
             "splash_piece_ids": [p["id"] for p in fam["splash_pieces"]],
             "all_piece_ids": piece_ids,
@@ -1428,12 +1489,51 @@ def get_packing_families(project_id: int):
             "current_crate_db_id": primary_db_id,
             "current_crate_label": crate_docs.get(primary_db_id, "") if primary_db_id else None,
             "is_split": is_split,
+            "split_reason": _family_split_reason(piece_ids, piece_to_crate, crates_by_db_id) if is_split else None,
             "ideal_lo": cat_cfg["ideal_lo"],
             "ideal_hi": cat_cfg["ideal_hi"],
             "max_kg": cat_cfg["max_kg"],
         })
 
     return result
+
+
+@app.get("/api/projects/{project_id}/island-operational/options")
+def island_operational_location_options(project_id: int):
+    """Building / floor / flat pick lists for island operational scope (read-only)."""
+    pieces = list(pieces_col.find({"project_id": project_id}, {"_id": 0}))
+    from .services.planner_v3.island_operational_plan import location_options_from_pieces
+
+    return location_options_from_pieces(pieces)
+
+
+@app.post("/api/projects/{project_id}/island-operational/plan")
+def island_operational_plan_preview(project_id: int, body: Dict[str, Any] = Body(default_factory=dict)):
+    """
+    Preview-only island crate plan (no Mongo writes). Requires PLANNER_V3_OPERATIONAL=1 on the server.
+    body: optional buildings[], floors[], flats[], dispatch_selection{}, include_raw_specs (bool).
+    """
+    project = projects_col.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    status = project.get("status") or "draft"
+    if status not in {"approved_for_packing", "crate_planned", "container_planned"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Approve the project for packing before generating an island plan.",
+        )
+
+    pieces = list(pieces_col.find({"project_id": project_id}, {"_id": 0}))
+    if not pieces:
+        return {"message": "no pieces", "crates": [], "piece_count": 0, "scoped_piece_count": 0}
+
+    from .services.planner_v3.island_operational_plan import build_island_operational_review
+
+    try:
+        return build_island_operational_review(project, pieces, body or {})
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.post("/api/projects/{project_id}/crates/auto-generate")
@@ -1536,6 +1636,7 @@ def auto_generate(project_id: int, data: Dict[str, Any]):
             "planner_v3_orientation": spec.get("orientation"),
             "planner_v3_splash_layers": spec.get("splash_layers", []),
             "planner_v3_pull_piece_ids": spec.get("pull_candidate_piece_ids") or [],
+            "planner_debug": spec.get("planner_debug") or {},
             "dispatch_order": dispatch_seq,
             "created_at": utc_now(),
         }
@@ -1566,7 +1667,11 @@ def auto_generate(project_id: int, data: Dict[str, Any]):
         manual_placements: List[Dict[str, Any]] = []
         sorted_pls = linear_manual_sort_placements(pls, crate_docs)
         for order_idx, pl in enumerate(sorted_pls, start=1):
-            cid = idx_to_crate_id.get(pl.get("crate_index"))
+            try:
+                cidx = int(pl.get("crate_index"))
+            except (TypeError, ValueError):
+                cidx = None
+            cid = idx_to_crate_id.get(cidx) if cidx is not None else None
             if not cid:
                 continue
             manual_placements.append({
@@ -1592,8 +1697,12 @@ def auto_generate(project_id: int, data: Dict[str, Any]):
 
     manual_plan = {"containers": manual_plan_containers}
 
-    layout_persist = enriched_layouts[0] if enriched_layouts else (enrich_layout_with_crates(layout, crate_docs) if crate_docs else layout)
+    layout_persist = next(
+        (e for e in enriched_layouts if (e.get("placements") or [])),
+        enriched_layouts[0] if enriched_layouts else (enrich_layout_with_crates(layout, crate_docs) if crate_docs else layout),
+    )
 
+    unship = v3.get("rejected_manifest_specs") or []
     projects_col.update_one(
         {"id": project_id},
         {
@@ -1603,23 +1712,41 @@ def auto_generate(project_id: int, data: Dict[str, Any]):
                 "planner_v3_containers": enriched_layouts,
                 "planner_v3_summary": v3.get("summary") or {},
                 "planner_v3_container_optimization": v3.get("container_optimization") or {},
+                "planner_v3_debug_snapshot": v3.get("planner_debug_snapshot") or {},
+                "planner_v3_unshippable_crates": [
+                    {
+                        "serial": x.get("serial"),
+                        "name": x.get("name"),
+                        "unshippable_reason": x.get("unshippable_reason"),
+                        "piece_ids": [p["id"] for p in x.get("pieces") or []],
+                        "planner_debug": x.get("planner_debug"),
+                    }
+                    for x in unship
+                ],
                 "status": "crate_planned",
                 "updated_at": utc_now(),
             }
         },
     )
 
+    rej_n = len(unship)
+    msg = f"Created {len(crate_docs)} manifest crate(s)"
+    if rej_n:
+        msg += f"; {rej_n} crate(s) excluded from manifest (geometry / gates — see planner_v3_unshippable_crates)."
+
     return {
-        "message": f"Created {len(crate_docs)} crates",
+        "message": msg,
         "locked_preserved": len(locked_crates),
+        "manifest_crate_count": len(crate_docs),
+        "rejected_manifest_crate_count": rej_n,
         "planner_v3": {
             "container": layout_persist,
             "containers": enriched_layouts,
             "summary": v3.get("summary") or {},
-            "suggest_40ft": any(c.get("type") == "40ft" for c in container_plan_list)
-            or bool(layout_persist.get("suggest_40ft", False)),
+            "suggest_40ft": False,
             "warnings": v3.get("warnings") or [],
             "container_optimization": v3.get("container_optimization") or {},
+            "debug_snapshot": v3.get("planner_debug_snapshot") or {},
         },
     }
 

@@ -106,6 +106,7 @@ const StatusFlowStrip = ({ currentStatus, onApprove, isRefreshing }) => {
 const PlannerSummaryTab = () => {
   const project    = usePlannerStore((s) => s.project);
   const insights   = usePlannerStore((s) => s.insights);
+  const crates       = usePlannerStore((s) => s.crates);
   const isWorkspaceLoading  = usePlannerStore((s) => s.isWorkspaceLoading);
   const isRefreshing        = usePlannerStore((s) => s.isRefreshing);
   const setActiveTab        = usePlannerStore((s) => s.setActiveTab);
@@ -123,7 +124,8 @@ const PlannerSummaryTab = () => {
 
   const projectStatus = project?.status || 'draft';
   const projectId     = project?.id;
-  const hasCratePlan  = Boolean(insights?.crate_count > 0);
+  const hasCratePlan =
+    Boolean(insights?.crate_count > 0) || (Array.isArray(crates) && crates.length > 0);
 
   if (isWorkspaceLoading) {
     return (
@@ -165,7 +167,7 @@ const PlannerSummaryTab = () => {
               </div>
               <div className="mt-6 flex flex-wrap gap-3">
                 <button type="button" className="btn-primary" onClick={() => setActiveTab('crate-plan')}>
-                  Review Crate Plan
+                  Review crate contents
                 </button>
                 <button type="button" className="btn-primary" onClick={() => setActiveTab('container-loading')}>
                   Review Container Plan
@@ -268,8 +270,25 @@ const PlannerSummaryTab = () => {
           <div className="mt-2 text-sm text-[#64748b]">
             {projectStatus === 'draft' || projectStatus === 'review_pending'
               ? 'Approve the project for packing to unlock crate generation.'
-              : 'Open Smart Crate Planner from the project footer to build the v3 crate and container layout.'}
+              : 'Open Planning Workspace → Dispatch & build to generate the v3 crate and container layout.'}
           </div>
+        </div>
+      )}
+
+      {projectStatus === 'approved_for_packing' && !hasCratePlan && (
+        <div className="rounded-[32px] border border-[#bfdbfe] bg-[#f8fafc] px-6 py-8 text-center shadow-sm">
+          <div className="text-lg font-semibold text-[#0f172a]">Ready to generate</div>
+          <p className="mt-2 text-sm text-[#64748b]">
+            Open <strong className="text-[#334155]">Planning Workspace</strong>, then the{' '}
+            <strong className="text-[#334155]">Dispatch & build</strong> tab to run the planner.
+          </p>
+          <button
+            type="button"
+            className="btn-primary mt-5"
+            onClick={() => setActiveTab('build-plan')}
+          >
+            Go to Dispatch & build
+          </button>
         </div>
       )}
     </div>

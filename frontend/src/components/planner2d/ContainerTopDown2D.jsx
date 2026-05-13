@@ -30,8 +30,8 @@ export default function ContainerTopDown2D({ layout, title }) {
         {title || 'Container top-down (floor plan)'}
       </div>
       <p className="mt-1 text-xs text-[#64748b]">
-        Single-layer floor: B/C/D from the back wall (low X); class A islands load after, toward the door (high X). No
-        stacking. Sequence follows load order.
+        Islands (A) toward the back wall (low X); B/C/D pack toward the doors (high X). Horizontal crates may use one
+        stack tier when clear height allows. Sequence follows load order.
       </p>
       <svg viewBox={`0 0 ${vbW} ${vbH}`} className="mt-2 w-full bg-[#f8fafc]" role="img" aria-label="Container top down">
         <rect x={pad} y={pad} width={L * sx} height={W * sy} fill="#ffffff" stroke="#64748b" strokeWidth="2" rx="4" />

@@ -5,6 +5,7 @@ from ..planning_engine import parse_float, thickness_inches
 _WALL = 3.0
 _HEIGHT_TOP = 6.0
 _FOAM_LAYER = 0.75
+_HONEYCOMB_SEP_IN = 1.25
 
 
 def _max_piece_length(pieces: List[Dict[str, Any]]) -> float:
@@ -46,14 +47,14 @@ def horizontal_crate_dimensions(
         main_h = thickness_inches(default_thickness)
 
     splash_h = 0.0
-    for layer in splash_layers:
-        if not layer:
-            continue
+    active_layers = [layer for layer in splash_layers if layer]
+    for li, layer in enumerate(active_layers):
         layer_t = max(thickness_inches(str(p.get("thickness") or default_thickness)) for p in layer)
         splash_h += layer_t + _FOAM_LAYER
+        if li + 1 < len(active_layers):
+            splash_h += _HONEYCOMB_SEP_IN
 
     internal_height = max(18.0, main_h + splash_h + 8.0)
-    internal_height = min(internal_height, 72.0)
 
     return {
         "internal_length": round(internal_length, 1),

@@ -3,7 +3,7 @@ Aggregate planner summary for management view (Checkpoint 3).
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from ..planning_engine import piece_weight
 from .packing import TYPE_SPECS
@@ -33,8 +33,14 @@ def build_planner_summary(
     material: str,
     thickness: str,
     color: str,
+    rejected_crates: Optional[List[Dict[str, Any]]] = None,
+    manifest_notes: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """High-level KPIs for API / UI."""
+    manifest_notes = manifest_notes or {}
+    rejected_crates = rejected_crates or []
+    rej_piece_ids = sorted({p["id"] for r in rejected_crates for p in (r.get("pieces") or []) if p.get("id") is not None})
+
     total_wt = sum(float(c.get("total_weight_kg") or c.get("weight") or 0) for c in crates)
     n = len(crates)
     island_n = sum(1 for c in crates if c.get("category") == "island")
@@ -84,10 +90,19 @@ def build_planner_summary(
             if w not in warnings:
                 warnings.append(w)
 
+    fleet_strategy = str((containers_result.get("optimization") or {}).get("chosen_strategy") or "")
+    fleet_reason = str((containers_result.get("optimization") or {}).get("selection_reason") or "")
+    econ_floor = (containers_result.get("optimization") or {}).get("twenty_ft_min_economic_fill_kg")
+
     return {
         "total_selected_parts": len(pieces),
         "total_selected_weight_kg": round(piece_wt, 1),
         "total_crates": n,
+        "manifest_eligible_crate_count": int(manifest_notes.get("manifest_eligible_crate_count", n)),
+        "rejected_manifest_crate_count": int(manifest_notes.get("rejected_manifest_crate_count", len(rejected_crates))),
+        "unshippable_manifest_piece_count": len(rej_piece_ids),
+        "placed_island_crate_count": manifest_notes.get("placed_island_crate_count"),
+        "layout_island_strip_end_x_in": manifest_notes.get("layout_island_strip_end_x_in"),
         "island_crates": island_n,
         "kitchen_crates": kitchen_n,
         "vanity_crates": vanity_n,
@@ -112,4 +127,7 @@ def build_planner_summary(
         "total_remaining_payload_kg": round(rem_payload, 1),
         "total_remaining_floor_area_sq_in_approx": round(rem_floor, 1),
         "warnings": warnings,
+        "fleet_strategy": fleet_strategy,
+        "fleet_selection_reason": fleet_reason,
+        "twenty_ft_min_economic_fill_kg": econ_floor,
     }
