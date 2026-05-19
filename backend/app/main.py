@@ -1377,6 +1377,188 @@ def get_dispatch_hierarchy(project_id: int):
     return discover_dispatch_hierarchy(pieces)
 
 
+_INVENTORY_CATEGORY_LABELS = {
+    "island": "Islands",
+    "perimeter": "Kitchens",
+    "range": "Range Tops",
+    "vanity": "Vanity",
+    "misc": "Misc",
+}
+_INVENTORY_CATEGORY_ORDER = ["island", "perimeter", "range", "vanity", "misc"]
+
+
+@app.post("/api/projects/{project_id}/dispatch-inventory")
+def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_factory=dict)):
+    """
+    Returns inventory grouped Floor → Category → Flat → Bundle with metrics.
+    Body is a dispatch_selection payload (buildings, floors, flats, ordering).
+    """
+    from collections import defaultdict
+    from .services.planner_v3.dispatch import sort_pieces_by_dispatch
+    from .services.planner_v3.dispatch_units import build_dispatch_units_from_pieces
+    from .services.planning_engine import piece_weight as pw, parse_float
+
+    empty = {"floors": [], "totals": {"part_count": 0, "total_weight_kg": 0.0, "total_sqft": 0.0, "bundle_count": 0}}
+
+    pieces = list(pieces_col.find({"project_id": project_id}, {"_id": 0}))
+    if not pieces:
+        return empty
+
+    project_doc = projects_col.find_one({"id": project_id}, {"_id": 0})
+    material = (project_doc or {}).get("material", "Granite")
+    thickness = (project_doc or {}).get("thickness", "3CM")
+    stone_color = str((project_doc or {}).get("stone_color", "") or "")
+
+    filtered = sort_pieces_by_dispatch(pieces, body or {})
+    if not filtered:
+        return empty
+
+    units, _ = build_dispatch_units_from_pieces(filtered)
+
+    def piece_sqft(p: Dict[str, Any]) -> float:
+        L = parse_float(p.get("length"))
+        W = parse_float(p.get("width"))
+        return (L * W) / 144.0 if L > 0 and W > 0 else 0.0
+
+    def flat_sort_key(f: str):
+        try:
+            return (0, int(f))
+        except (ValueError, TypeError):
+            return (1, str(f))
+
+    floor_cat_flat: Dict[str, Dict[str, Dict[str, List[Dict[str, Any]]]]] = defaultdict(
+        lambda: defaultdict(lambda: defaultdict(list))
+    )
+
+    for unit in units:
+        all_p = unit.get("all_pieces") or []
+        if not all_p:
+            continue
+        ref = all_p[0]
+        floor_str = str(ref.get("floor", "") or "").strip() or "Unassigned"
+        flat_str = str(ref.get("flat", "") or "").strip() or "Unassigned"
+        building_str = str(ref.get("building", "") or "").strip()
+        cat = str(unit.get("category") or "misc")
+
+        total_w = round(sum(pw(p, material, thickness, stone_color) for p in all_p), 1)
+        total_sq = round(sum(piece_sqft(p) for p in all_p), 1)
+
+        def _piece_detail(p: Dict[str, Any], role: str) -> Dict[str, Any]:
+            return {
+                "id": p.get("id"),
+                "part_no": str(p.get("part_no", "") or ""),
+                "part": str(p.get("part", "") or ""),
+                "length": round(parse_float(p.get("length")), 1),
+                "width": round(parse_float(p.get("width")), 1),
+                "thickness": str(p.get("thickness", "") or thickness),
+                "weight_kg": round(pw(p, material, thickness, stone_color), 1),
+                "sqft": round(piece_sqft(p), 1),
+                "role": role,
+            }
+
+        pieces_detail = (
+            [_piece_detail(p, "main") for p in (unit.get("main_pieces") or [])] +
+            [_piece_detail(p, "splash") for p in (unit.get("splash_pieces") or [])]
+        )
+
+        bundle_row = {
+            "unit_id": str(unit.get("unit_id") or ""),
+            "family_id": str(unit.get("canonical_family_id") or unit.get("family_id") or ""),
+            "category": cat,
+            "unit_kind": unit.get("unit_kind"),
+            "part_count": len(all_p),
+            "main_count": len(unit.get("main_pieces") or []),
+            "splash_count": len(unit.get("splash_pieces") or []),
+            "total_weight_kg": total_w,
+            "total_sqft": total_sq,
+            "main_part_nos": [str(p.get("part_no", "") or "") for p in unit.get("main_pieces") or []],
+            "splash_part_nos": [str(p.get("part_no", "") or "") for p in unit.get("splash_pieces") or []],
+            "flat": flat_str,
+            "building": building_str,
+            "floor": floor_str,
+            "pieces": pieces_detail,
+        }
+        floor_cat_flat[floor_str][cat][flat_str].append(bundle_row)
+
+    floors_out = []
+    total_parts = 0
+    total_weight = 0.0
+    total_sqft_all = 0.0
+    total_bundles = 0
+
+    for floor_str in sorted(floor_cat_flat.keys(), key=flat_sort_key):
+        floor_data = floor_cat_flat[floor_str]
+        floor_parts = 0
+        floor_weight = 0.0
+        floor_sqft = 0.0
+        floor_bundles = 0
+        cats_out = []
+
+        for cat in _INVENTORY_CATEGORY_ORDER:
+            if cat not in floor_data:
+                continue
+            flat_data = floor_data[cat]
+            cat_parts = 0
+            cat_weight = 0.0
+            cat_sqft = 0.0
+            flats_out = []
+
+            for flat_str in sorted(flat_data.keys(), key=flat_sort_key):
+                bundles = flat_data[flat_str]
+                fp = sum(b["part_count"] for b in bundles)
+                fw = sum(b["total_weight_kg"] for b in bundles)
+                fsq = sum(b["total_sqft"] for b in bundles)
+                flats_out.append({
+                    "flat": flat_str,
+                    "part_count": fp,
+                    "total_weight_kg": round(fw, 1),
+                    "total_sqft": round(fsq, 1),
+                    "bundle_count": len(bundles),
+                    "bundles": bundles,
+                })
+                cat_parts += fp
+                cat_weight += fw
+                cat_sqft += fsq
+
+            bundle_count_cat = sum(len(flat_data[f]) for f in flat_data)
+            cats_out.append({
+                "category": cat,
+                "category_label": _INVENTORY_CATEGORY_LABELS.get(cat, cat.capitalize()),
+                "part_count": cat_parts,
+                "total_weight_kg": round(cat_weight, 1),
+                "total_sqft": round(cat_sqft, 1),
+                "bundle_count": bundle_count_cat,
+                "flats": flats_out,
+            })
+            floor_parts += cat_parts
+            floor_weight += cat_weight
+            floor_sqft += cat_sqft
+            floor_bundles += bundle_count_cat
+
+        floors_out.append({
+            "floor": floor_str,
+            "part_count": floor_parts,
+            "total_weight_kg": round(floor_weight, 1),
+            "total_sqft": round(floor_sqft, 1),
+            "bundle_count": floor_bundles,
+            "categories": cats_out,
+        })
+        total_parts += floor_parts
+        total_weight += floor_weight
+        total_sqft_all += floor_sqft
+        total_bundles += floor_bundles
+
+    return _json_safe_floats({
+        "floors": floors_out,
+        "totals": {
+            "part_count": total_parts,
+            "total_weight_kg": round(total_weight, 1),
+            "total_sqft": round(total_sqft_all, 1),
+            "bundle_count": total_bundles,
+        },
+    })
+
+
 def _family_split_reason(
     piece_ids: List[int],
     piece_to_crate: Dict[int, int],
@@ -1532,6 +1714,44 @@ def island_operational_plan_preview(project_id: int, body: Dict[str, Any] = Body
 
     try:
         return build_island_operational_review(project, pieces, body or {})
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/projects/{project_id}/kitchen-operational/options")
+def kitchen_operational_location_options(project_id: int):
+    """Building / floor / flat pick lists scoped to kitchen (perimeter) pieces (read-only)."""
+    pieces = list(pieces_col.find({"project_id": project_id}, {"_id": 0}))
+    from .services.planner_v3.kitchen_operational_plan import location_options_from_pieces
+
+    return location_options_from_pieces(pieces)
+
+
+@app.post("/api/projects/{project_id}/kitchen-operational/plan")
+def kitchen_operational_plan_preview(project_id: int, body: Dict[str, Any] = Body(default_factory=dict)):
+    """
+    Preview-only kitchen (B-type perimeter) vertical-cassette crate plan — no Mongo writes.
+    body: optional buildings[], floors[], flats[].
+    """
+    project = projects_col.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    status = project.get("status") or "draft"
+    if status not in {"approved_for_packing", "crate_planned", "container_planned"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Approve the project for packing before generating a kitchen plan.",
+        )
+
+    pieces = list(pieces_col.find({"project_id": project_id}, {"_id": 0}))
+    if not pieces:
+        return {"message": "no pieces", "crates": [], "piece_count": 0, "scoped_piece_count": 0}
+
+    from .services.planner_v3.kitchen_operational_plan import build_kitchen_operational_review
+
+    try:
+        return build_kitchen_operational_review(project, pieces, body or {})
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { API_BASE } from '../utils/plannerUtils';
 
@@ -31,7 +31,7 @@ const ToggleChip = ({ label, selected, onClick }) => (
   </button>
 );
 
-const DispatchSelectionPanel = ({ projectId, onGenerate, isGenerating }) => {
+const DispatchSelectionPanel = ({ projectId, onGenerate, isGenerating, onSelectionChange, onApplySelection, showGenerate = true }) => {
   const [hierarchy, setHierarchy] = useState(null);
   const [loading, setLoading] = useState(false);
   const [basis, setBasis] = useState('building');
@@ -125,9 +125,32 @@ const DispatchSelectionPanel = ({ projectId, onGenerate, isGenerating }) => {
     },
   });
 
+  const onSelectionChangeRef = useRef(onSelectionChange);
+  onSelectionChangeRef.current = onSelectionChange;
+
+  // Debounced live sync — fires 400ms after the last change so rapid chip toggling
+  // doesn't saturate the inventory endpoint on every click.
+  const debounceRef = useRef(null);
+  useEffect(() => {
+    if (!hierarchy || !onSelectionChangeRef.current) return;
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      onSelectionChangeRef.current(buildSelectionPayload());
+    }, 400);
+    return () => clearTimeout(debounceRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [basis, selectedBuildings, selectedFloors, selectedFlats, buildingOrder, floorOrder, flatOrder, hierarchy]);
+
   const handleGenerate = () => {
     onGenerate(buildSelectionPayload());
   };
+
+  const handleApplySelection = useCallback(() => {
+    const payload = buildSelectionPayload();
+    if (onApplySelection) onApplySelection(payload);
+    else if (onSelectionChangeRef.current) onSelectionChangeRef.current(payload);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [basis, selectedBuildings, selectedFloors, selectedFlats, buildingOrder, floorOrder, flatOrder, onApplySelection]);
 
   if (loading) {
     return (
@@ -258,23 +281,34 @@ const DispatchSelectionPanel = ({ projectId, onGenerate, isGenerating }) => {
         </span>
       </div>
 
+      {/* Always-visible apply button — loads inventory with current scope */}
       <button
         type="button"
-        disabled={isGenerating}
-        onClick={handleGenerate}
-        className={`w-full rounded-full bg-[#1d4ed8] px-6 py-3 text-sm font-semibold text-white shadow-sm transition-all hover:bg-[#1e40af] ${
-          isGenerating ? 'opacity-60 cursor-not-allowed' : ''
-        }`}
+        onClick={handleApplySelection}
+        className="w-full rounded-full bg-[#0f172a] px-6 py-3 text-sm font-semibold text-white shadow-sm transition-all hover:bg-[#1e293b] active:scale-[0.98]"
       >
-        {isGenerating ? (
-          <span className="flex items-center justify-center gap-2">
-            <span className="inline-block h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
-            Generating crate plan…
-          </span>
-        ) : (
-          'Generate Crate Plan'
-        )}
+        Load Inventory
       </button>
+
+      {showGenerate && (
+        <button
+          type="button"
+          disabled={isGenerating}
+          onClick={handleGenerate}
+          className={`w-full rounded-full bg-[#1d4ed8] px-6 py-3 text-sm font-semibold text-white shadow-sm transition-all hover:bg-[#1e40af] ${
+            isGenerating ? 'opacity-60 cursor-not-allowed' : ''
+          }`}
+        >
+          {isGenerating ? (
+            <span className="flex items-center justify-center gap-2">
+              <span className="inline-block h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
+              Generating crate plan…
+            </span>
+          ) : (
+            'Generate Crate Plan'
+          )}
+        </button>
+      )}
     </div>
   );
 };
