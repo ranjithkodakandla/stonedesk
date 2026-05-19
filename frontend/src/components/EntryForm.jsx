@@ -669,15 +669,25 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
       setShowSpinner(false);
       spinnerTimerRef.current = setTimeout(() => setShowSpinner(true), 2000);
       const isEditingExisting = loadedPieceIdsRef.current.length > 0;
-      let updateCount = 0;
       if (isEditingExisting) {
         const existingIds = [...loadedPieceIdsRef.current];
-        updateCount = Math.min(existingIds.length, piecesToCreate.length);
-        for (let i = 0; i < updateCount; i++) {
+        const matchCount = Math.min(existingIds.length, piecesToCreate.length);
+        // Update 1:1 by position
+        for (let i = 0; i < matchCount; i++) {
           await axios.put(`${API_BASE}/pieces/${existingIds[i]}`, piecesToCreate[i]);
         }
-        if (piecesToCreate.length !== existingIds.length) {
-          console.warn(`Loaded drawing ${drawingCtx.drawing} saved with ${updateCount} updates from ${piecesToCreate.length} prepared piece rows and ${existingIds.length} existing records.`);
+        // Flats were added — create the extra pieces
+        if (piecesToCreate.length > existingIds.length) {
+          await axios.post(
+            `${API_BASE}/projects/${project.id}/pieces/batch`,
+            piecesToCreate.slice(existingIds.length),
+          );
+        }
+        // Flats were removed — delete orphaned pieces
+        if (existingIds.length > piecesToCreate.length) {
+          await Promise.all(
+            existingIds.slice(piecesToCreate.length).map((id) => axios.delete(`${API_BASE}/pieces/${id}`)),
+          );
         }
       } else {
         await axios.post(`${API_BASE}/projects/${project.id}/pieces/batch`, piecesToCreate);
@@ -690,7 +700,7 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
       }], drawingCtx.drawing);
       setPieceRows([freshRow]);
       if (isEditingExisting) {
-        alert(`${updateCount || piecesToCreate.length} existing pieces updated successfully!`);
+        alert(`${piecesToCreate.length} pieces updated successfully!`);
         onLoadedDrawingClear?.();
         loadedPieceIdsRef.current = [];
         loadedDrawingNoRef.current = '';
