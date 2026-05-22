@@ -7,6 +7,16 @@ _HEIGHT_TOP = 6.0
 _FOAM_LAYER = 0.75
 _HONEYCOMB_SEP_IN = 1.25
 
+# ─── Leaned cassette constants (mirrors crateEstimator.js) ───────────────────
+_LEAN_FACTOR      = 0.966   # cos(15°) — 15° operational lean from vertical
+_SEPARATOR_IN     = 0.75    # foam separator per slab gap
+_DEPTH_FRAME      = 4.0     # framing allowance on depth axis
+_LENGTH_CLEARANCE = 2.0     # internal end clearance (1" each end)
+_END_FRAME        = 2.0     # external end-board thickness (1" each end)
+_PALLET_BASE      = 6.0     # pallet / sled base height
+_LEAN_HEADROOM    = 4.0     # head clearance above leaned slabs
+_FORKLIFT_CLEARANCE_IN = 7.0
+
 
 def _max_piece_length(pieces: List[Dict[str, Any]]) -> float:
     if not pieces:
@@ -67,20 +77,27 @@ def horizontal_crate_dimensions(
     }
 
 
-_FORKLIFT_CLEARANCE_IN = 7.0
-_BASE_SUPPORT_IN = 2.0
-
-
 def island_cassette_dimensions_operational(
     pieces: List[Dict[str, Any]],
     default_thickness: str,
     wood_thickness: float,
 ) -> Dict[str, float]:
     """
-    Operational island cassette: slabs adjacent (no intentional gap; film ignored).
-    Depth along container length = sum of slab thicknesses + light framing.
-    Height = longest slab edge + base support + normal top clearance.
-    Forklift clearance added on external height (operational handling).
+    Leaned cassette model — mirrors estimateLeanedCassetteDimensions() in crateEstimator.js.
+
+    Slabs lean backward at 15° from vertical in transport. Three axes:
+
+      L (internal_length) — PRIMARY, fixed by slab footprint:
+          max_slab_long_edge + end clearance
+
+      D (internal_width) — DEPTH, grows with slab count:
+          Σ thicknesses + foam separators + framing
+
+      H (internal_height) — LEAN-CORRECTED, from slab short edge:
+          max_slab_short_edge × cos(15°) + pallet + headroom
+
+    Old model used height = max_long_edge which produced 106"–131" external heights.
+    Realistic leaned cassette heights are 50–65" for standard island tops.
     """
     if not pieces:
         return {
@@ -93,36 +110,44 @@ def island_cassette_dimensions_operational(
             "wood_thickness": wood_thickness,
         }
 
+    # Height derives from main pieces only; splash pieces are shallow and don't dictate H
+    main_pieces = [p for p in pieces if str(p.get("role", "main")) != "splash"]
+    ref_pieces = main_pieces if main_pieces else pieces
+
     stack_depth = 0.0
     max_long = 0.0
     max_short = 0.0
+    n = len(pieces)
+
     for p in pieces:
-        t = thickness_inches(str(p.get("thickness") or default_thickness))
+        stack_depth += thickness_inches(str(p.get("thickness") or default_thickness))
+
+    for p in ref_pieces:
         L = parse_float(p.get("length"))
         W = parse_float(p.get("width"))
         long_e = max(L, W)
         short_e = min(L, W) if L > 0 and W > 0 else max(L, W)
-        stack_depth += t
         max_long = max(max_long, long_e)
         max_short = max(max_short, short_e)
 
-    framing_depth = 4.0
-    internal_length = min(92.0, stack_depth + framing_depth)
-    internal_width = max_short + 6.0
-    internal_height = max_long + _BASE_SUPPORT_IN + 6.0
+    # L — primary length (fixed by slab footprint)
+    internal_length = max_long + _LENGTH_CLEARANCE
 
-    external_length = round(internal_length + _WALL, 1)
-    external_width = round(internal_width + _WALL, 1)
-    external_height = round(internal_height + _HEIGHT_TOP + _FORKLIFT_CLEARANCE_IN, 1)
+    # D — cassette depth (grows with slab count + separators)
+    separators = max(0, n - 1) * _SEPARATOR_IN
+    internal_width = stack_depth + separators + _DEPTH_FRAME
+
+    # H — height from lean geometry
+    internal_height = max_short * _LEAN_FACTOR + _PALLET_BASE + _LEAN_HEADROOM
 
     return {
         "internal_length": round(internal_length, 1),
-        "internal_width": round(internal_width, 1),
+        "internal_width":  round(internal_width, 1),
         "internal_height": round(internal_height, 1),
-        "external_length": external_length,
-        "external_width": external_width,
-        "external_height": external_height,
-        "wood_thickness": wood_thickness,
+        "external_length": round(internal_length + _END_FRAME, 1),          # + end boards
+        "external_width":  round(internal_width  + _WALL * 2, 1),           # + side walls
+        "external_height": round(internal_height + _HEIGHT_TOP + _FORKLIFT_CLEARANCE_IN, 1),
+        "wood_thickness":  wood_thickness,
     }
 
 
