@@ -212,7 +212,7 @@ function DraftCrateCard({ crate, onRemoveBundle, onDeleteCrate }) {
       {dims && (dims.internal_length > 0 || dims.external_length > 0) && (
         <div className="mx-5 mb-3 rounded-2xl border border-[#e8edf3] bg-[#f8fafc] px-4 py-3 space-y-1.5">
           <div className="text-[10px] uppercase tracking-[0.18em] text-[#94a3b8] mb-2">
-            Estimated dimensions (D × W × H, inches)
+            Estimated dimensions — L × D × H (inches)
           </div>
           <DimBlock label="Internal" dims={dims} prefix="internal_" />
           <DimBlock label="External" dims={dims} prefix="external_" />

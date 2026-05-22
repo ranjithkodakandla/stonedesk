@@ -31,6 +31,29 @@ export function getCrateClass(bundle) {
   return 'misc';
 }
 
+// ─── Island splash stripping ──────────────────────────────────────────────────
+// Island crates must contain ONLY island tops. If a bundle has splash pieces
+// (role === 'splash') they are removed before the bundle enters an island crate.
+// Stripped weight is subtracted so the weight-batching target stays accurate.
+
+function stripSplashFromBundle(bundle) {
+  const pieces = bundle.pieces || [];
+  const splashPieces = pieces.filter((p) => p.role === 'splash');
+  if (splashPieces.length === 0) return bundle;
+
+  const mainPieces    = pieces.filter((p) => p.role !== 'splash');
+  const splashWeight  = splashPieces.reduce((s, p) => s + (p.weight_kg || 0), 0);
+
+  return {
+    ...bundle,
+    pieces:          mainPieces,
+    splash_count:    0,
+    part_count:      mainPieces.length,
+    total_weight_kg: r1(Math.max(0, (bundle.total_weight_kg || 0) - splashWeight)),
+    splash_stripped: splashPieces.length,
+  };
+}
+
 // ─── Weight batching ──────────────────────────────────────────────────────────
 // Greedy: accumulate bundles until next one would breach targetWeightKg, then start a new batch.
 
@@ -72,7 +95,12 @@ export function batchBundlesIntoCrates(selectedBundles, targetWeightKg = 1900) {
 
   const groups = [];
   for (const cls of CLASS_ORDER) {
-    const batches = weightBatchBundles(buckets[cls], targetWeightKg);
+    // Strip splash before weight-batching so island crate weights are accurate
+    const bundles = cls === 'island_vertical'
+      ? buckets[cls].map(stripSplashFromBundle)
+      : buckets[cls];
+
+    const batches = weightBatchBundles(bundles, targetWeightKg);
     for (const batch of batches) {
       groups.push({ crateClass: cls, bundles: batch });
     }
@@ -91,16 +119,31 @@ function parseThicknessIn(t) {
 
 const r1 = (n) => Math.round(n * 10) / 10;
 
-// ─── Vertical cassette dimensions ────────────────────────────────────────────
-// Mirrors island_cassette_dimensions_operational() in Python.
-// Used for both Island (A-type) and Kitchen (B-type vertical cassette).
+// ─── Leaned cassette geometry ─────────────────────────────────────────────────
+// Mirrors island_cassette_dimensions_operational() in Python (dimensions.py).
 //
-// Geometry:
-//   Depth  = accumulated slab thicknesses + framing
-//   Width  = widest short-edge + allowance
-//   Height = tallest long-edge + base support + head clearance
+// Real operational model: slabs lean backward at ~15° from vertical inside an
+// A-frame cassette. This changes which slab dimension drives each crate axis:
+//
+//   L (primary, fixed): max slab LONG edge  + end clearance
+//   D (depth, dynamic): Σ thicknesses + foam separators + framing
+//   H (lean-corrected): slab SHORT edge × cos(15°) + pallet + headroom
+//
+// The old "height = slab long edge" model produced 106"+–131"+ external heights —
+// operationally impossible. The leaned model gives realistic 50–65" heights.
 
-export function estimateVerticalCassetteDimensions(pieces) {
+const LEAN_FACTOR      = 0.966;  // cos(15°) — 15° lean from vertical
+const SEPARATOR_IN     = 0.75;   // foam separator per slab gap
+const DEPTH_FRAME      = 4.0;    // total framing allowance on depth axis
+const LENGTH_CLEARANCE = 2.0;    // internal end clearance (1" each end)
+const END_FRAME        = 2.0;    // external end-board thickness (1" each end)
+const PALLET_BASE      = 6.0;    // pallet / sled base height
+const LEAN_HEADROOM    = 4.0;    // head clearance above leaned slabs
+const WALL_TIMBER      = 3.0;    // structural timber wall each side (depth axis)
+const HEIGHT_CAP_TBR   = 6.0;    // top cap timber
+const FORKLIFT_TINE    = 7.0;    // forklift tine clearance
+
+export function estimateLeanedCassetteDimensions(pieces) {
   if (!pieces || pieces.length === 0) {
     return {
       internal_length: 0, internal_width: 0, internal_height: 0,
@@ -108,50 +151,59 @@ export function estimateVerticalCassetteDimensions(pieces) {
     };
   }
 
-  let stackDepth = 0;
-  let maxLongEdge = 0;
+  // Height derives from main piece short edges; splash pieces are shallow and don't dictate height
+  const mainPieces = pieces.filter((p) => (p.role || 'main') !== 'splash');
+  const refPieces  = mainPieces.length > 0 ? mainPieces : pieces;
+
+  let stackDepth   = 0;
+  let maxLongEdge  = 0;
   let maxShortEdge = 0;
 
   for (const p of pieces) {
-    const t = parseThicknessIn(p.thickness);
+    stackDepth += parseThicknessIn(p.thickness);
+  }
+  for (const p of refPieces) {
     const L = parseFloat(p.length) || 0;
-    const W = parseFloat(p.width) || 0;
-    const longE  = Math.max(L, W);
-    const shortE = L > 0 && W > 0 ? Math.min(L, W) : Math.max(L, W);
-    stackDepth  += t;
-    maxLongEdge  = Math.max(maxLongEdge,  longE);
-    maxShortEdge = Math.max(maxShortEdge, shortE);
+    const W = parseFloat(p.width)  || 0;
+    maxLongEdge  = Math.max(maxLongEdge,  Math.max(L, W));
+    maxShortEdge = Math.max(maxShortEdge, L > 0 && W > 0 ? Math.min(L, W) : Math.max(L, W));
   }
 
-  const FRAMING       = 4.0;  // light internal framing depth
-  const BASE_SUPPORT  = 2.0;  // pallet / sled base
-  const TOP_CLEARANCE = 6.0;  // internal head clearance
-  const WALL          = 3.0;  // structural timber wall (each side)
-  const HEIGHT_TOP    = 6.0;  // top cap timber
-  const FORKLIFT      = 7.0;  // forklift tine clearance on external height
+  // L — primary length: fixed by slab footprint, not by slab count
+  const intL = r1(maxLongEdge + LENGTH_CLEARANCE);
 
-  const intL = r1(Math.min(92.0, stackDepth + FRAMING));
-  const intW = r1(maxShortEdge + 6.0);
-  const intH = r1(maxLongEdge  + BASE_SUPPORT + TOP_CLEARANCE);
+  // D — cassette depth: grows with slab count and foam separators
+  const intD = r1(stackDepth + Math.max(0, pieces.length - 1) * SEPARATOR_IN + DEPTH_FRAME);
+
+  // H — height from leaned geometry: short edge projected at lean angle
+  const intH = r1(maxShortEdge * LEAN_FACTOR + PALLET_BASE + LEAN_HEADROOM);
 
   return {
-    internal_length: intL,
-    internal_width:  intW,
-    internal_height: intH,
-    external_length: r1(intL + WALL),
-    external_width:  r1(intW + WALL),
-    external_height: r1(intH + HEIGHT_TOP + FORKLIFT),
+    internal_length: intL,                           // primary cassette length (L)
+    internal_width:  intD,                           // cassette depth          (D)
+    internal_height: intH,                           // operational height      (H)
+    external_length: r1(intL + END_FRAME),            // + end boards
+    external_width:  r1(intD + WALL_TIMBER * 2),      // + side walls
+    external_height: r1(intH + HEIGHT_CAP_TBR + FORKLIFT_TINE),
   };
+}
+
+// Kept for any legacy callers; delegates to the leaned model.
+export function estimateVerticalCassetteDimensions(pieces) {
+  return estimateLeanedCassetteDimensions(pieces);
 }
 
 // ─── Operational warnings ────────────────────────────────────────────────────
 
-export function generateCrateWarnings({ totalWeightKg, dimensions, categoryMix, bundleCount, islandSplashViolation = false }) {
+export function generateCrateWarnings({ totalWeightKg, dimensions, categoryMix, bundleCount, islandSplashViolation = false, hadSplashStripped = false }) {
   const warnings = [];
   if (!bundleCount || totalWeightKg === 0) return warnings;
 
   if (islandSplashViolation) {
     warnings.push('Island crate contains splash pieces — island crates must contain only island tops.');
+  }
+  if (hadSplashStripped) {
+    warnings.push('Splash pieces excluded from island crate — they remain unassigned in inventory.');
   }
 
   if (totalWeightKg < 300) {
@@ -170,10 +222,14 @@ export function generateCrateWarnings({ totalWeightKg, dimensions, categoryMix, 
     }
   }
 
-  if ((dimensions?.internal_length || 0) > 24) {
+  // Cassette depth check (internal_width is the depth axis in the leaned model)
+  if ((dimensions?.internal_width || 0) > 24) {
     warnings.push('Deep cassette — check slot clearance and load stability.');
   }
-  if ((dimensions?.external_height || 0) > 88) {
+
+  // Island crates use a dedicated operational envelope — skip generic 90" height check
+  const isIslandOnly = cats.length === 1 && cats[0] === 'island';
+  if (!isIslandOnly && (dimensions?.external_height || 0) > 88) {
     warnings.push('Tall crate — verify container interior clearance (target < 90″).');
   }
 
@@ -192,18 +248,20 @@ export function buildDraftCrate(id, selectedBundles) {
     return acc;
   }, {});
 
-  // Island isolation: island crates must never contain splash pieces
+  // Island isolation: detect any residual splash (can occur via manual "Add to…")
   const cats = Object.keys(categoryMix).filter((k) => (categoryMix[k] || 0) > 0);
   const isIslandOnly = cats.length === 1 && cats[0] === 'island';
   const islandSplashViolation = isIslandOnly && selectedBundles.some((b) => (b.splash_count || 0) > 0);
+  const hadSplashStripped     = selectedBundles.some((b) => (b.splash_stripped || 0) > 0);
 
-  const dimensions = estimateVerticalCassetteDimensions(allPieces);
+  const dimensions = estimateLeanedCassetteDimensions(allPieces);
   const warnings   = generateCrateWarnings({
     totalWeightKg,
     dimensions,
     categoryMix,
     bundleCount:          selectedBundles.length,
     islandSplashViolation,
+    hadSplashStripped,
   });
 
   return {
