@@ -17,6 +17,69 @@ const THICKNESS_INCH = {
   'Mixed': 0.98,
 };
 
+// ─── Crate class determination ────────────────────────────────────────────────
+// island_vertical: island tops only — never mixed with splashes or other categories
+// kitchen_vertical: perimeter tops, range tops, their associated splashes
+// vanity_vertical: vanity tops and their associated splashes
+// misc: everything else
+
+export function getCrateClass(bundle) {
+  const cat = (bundle.category || '').toLowerCase();
+  if (cat === 'island') return 'island_vertical';
+  if (cat === 'perimeter' || cat === 'range') return 'kitchen_vertical';
+  if (cat === 'vanity') return 'vanity_vertical';
+  return 'misc';
+}
+
+// ─── Weight batching ──────────────────────────────────────────────────────────
+// Greedy: accumulate bundles until next one would breach targetWeightKg, then start a new batch.
+
+function weightBatchBundles(bundles, targetWeightKg) {
+  if (!bundles.length) return [];
+  const batches = [];
+  let current = [];
+  let currentWeight = 0;
+
+  for (const bundle of bundles) {
+    const w = bundle.total_weight_kg || 0;
+    if (currentWeight + w > targetWeightKg && current.length > 0) {
+      batches.push(current);
+      current = [bundle];
+      currentWeight = w;
+    } else {
+      current.push(bundle);
+      currentWeight += w;
+    }
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
+
+const CLASS_ORDER = ['island_vertical', 'kitchen_vertical', 'vanity_vertical', 'misc'];
+
+// ─── Multi-crate batch builder ────────────────────────────────────────────────
+// Phase 1: partition by crate class (island stays isolated from all other categories).
+// Phase 2: weight-batch within each class at targetWeightKg.
+// Returns array of bundle groups — caller assigns IDs and calls buildDraftCrate().
+
+export function batchBundlesIntoCrates(selectedBundles, targetWeightKg = 1900) {
+  if (!selectedBundles?.length) return [];
+
+  const buckets = Object.fromEntries(CLASS_ORDER.map((cls) => [cls, []]));
+  for (const bundle of selectedBundles) {
+    buckets[getCrateClass(bundle)].push(bundle);
+  }
+
+  const groups = [];
+  for (const cls of CLASS_ORDER) {
+    const batches = weightBatchBundles(buckets[cls], targetWeightKg);
+    for (const batch of batches) {
+      groups.push({ crateClass: cls, bundles: batch });
+    }
+  }
+  return groups;
+}
+
 function parseThicknessIn(t) {
   if (!t) return 1.18; // default 3CM
   const key = String(t).trim().toUpperCase().replace(' ', '');
@@ -83,9 +146,13 @@ export function estimateVerticalCassetteDimensions(pieces) {
 
 // ─── Operational warnings ────────────────────────────────────────────────────
 
-export function generateCrateWarnings({ totalWeightKg, dimensions, categoryMix, bundleCount }) {
+export function generateCrateWarnings({ totalWeightKg, dimensions, categoryMix, bundleCount, islandSplashViolation = false }) {
   const warnings = [];
   if (!bundleCount || totalWeightKg === 0) return warnings;
+
+  if (islandSplashViolation) {
+    warnings.push('Island crate contains splash pieces — island crates must contain only island tops.');
+  }
 
   if (totalWeightKg < 300) {
     warnings.push('Underloaded — consider adding more bundles before shipping.');
@@ -96,7 +163,11 @@ export function generateCrateWarnings({ totalWeightKg, dimensions, categoryMix, 
 
   const cats = Object.keys(categoryMix || {}).filter((k) => (categoryMix[k] || 0) > 0);
   if (cats.length > 1) {
-    warnings.push('Mixed-category crate — confirm operational grouping with site team.');
+    // perimeter + range together is a valid kitchen crate — no warning
+    const isKitchenMix = cats.length === 2 && cats.includes('perimeter') && cats.includes('range');
+    if (!isKitchenMix) {
+      warnings.push('Mixed-category crate — confirm operational grouping with site team.');
+    }
   }
 
   if ((dimensions?.internal_length || 0) > 24) {
@@ -121,25 +192,32 @@ export function buildDraftCrate(id, selectedBundles) {
     return acc;
   }, {});
 
+  // Island isolation: island crates must never contain splash pieces
+  const cats = Object.keys(categoryMix).filter((k) => (categoryMix[k] || 0) > 0);
+  const isIslandOnly = cats.length === 1 && cats[0] === 'island';
+  const islandSplashViolation = isIslandOnly && selectedBundles.some((b) => (b.splash_count || 0) > 0);
+
   const dimensions = estimateVerticalCassetteDimensions(allPieces);
   const warnings   = generateCrateWarnings({
     totalWeightKg,
     dimensions,
     categoryMix,
-    bundleCount: selectedBundles.length,
+    bundleCount:          selectedBundles.length,
+    islandSplashViolation,
   });
 
   return {
     id,
-    bundles:          [...selectedBundles],
-    bundle_count:     selectedBundles.length,
-    part_count:       partCount,
-    total_weight_kg:  totalWeightKg,
-    total_sqft:       totalSqft,
-    category_mix:     categoryMix,
+    bundles:                 [...selectedBundles],
+    bundle_count:            selectedBundles.length,
+    part_count:              partCount,
+    total_weight_kg:         totalWeightKg,
+    total_sqft:              totalSqft,
+    category_mix:            categoryMix,
+    island_splash_violation: islandSplashViolation,
     dimensions,
     warnings,
-    created_at:       Date.now(),
+    created_at:              Date.now(),
   };
 }
 
@@ -152,13 +230,16 @@ export function recomputeCrate(crate) {
 
 /**
  * Operational status for a draft crate.
- * Priority: OVERWEIGHT > REVIEW > UNDERLOADED > READY
+ * Priority: ERROR > OVERWEIGHT > REVIEW > UNDERLOADED > READY
  */
 export function getCrateOperationalStatus(crate) {
+  if (crate.island_splash_violation) return 'ERROR';
   const w = crate.total_weight_kg || 0;
   const cats = Object.keys(crate.category_mix || {}).filter((k) => (crate.category_mix[k] || 0) > 0);
   if (w > 2200) return 'OVERWEIGHT';
-  if (cats.length > 1) return 'REVIEW';
+  // perimeter + range together is a valid kitchen crate — not a review flag
+  const isKitchenMix = cats.length === 2 && cats.includes('perimeter') && cats.includes('range');
+  if (cats.length > 1 && !isKitchenMix) return 'REVIEW';
   if (w < 1400) return 'UNDERLOADED';
   return 'READY';
 }
