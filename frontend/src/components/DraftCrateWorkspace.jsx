@@ -8,6 +8,7 @@ const STATUS_STYLE = {
   UNDERLOADED: { label: 'Underloaded', cls: 'border-amber-200  bg-amber-50  text-amber-700'    },
   OVERWEIGHT:  { label: 'Overweight',  cls: 'border-red-200    bg-red-50    text-red-600'       },
   REVIEW:      { label: 'Review',      cls: 'border-violet-200 bg-violet-50 text-violet-700'    },
+  ERROR:       { label: 'Invalid',     cls: 'border-red-300    bg-red-100   text-red-700'       },
 };
 
 // ─── Category styles (shared subset) ─────────────────────────────────────────

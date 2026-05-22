@@ -2,7 +2,7 @@ import React, { useMemo, useState, useCallback } from 'react';
 import DispatchSelectionPanel from './DispatchSelectionPanel';
 import DispatchInventoryExplorer from './DispatchInventoryExplorer';
 import DraftCrateWorkspace from './DraftCrateWorkspace';
-import { buildDraftCrate, recomputeCrate, getNextDraftCrateId } from '../utils/crateEstimator';
+import { buildDraftCrate, recomputeCrate, getNextDraftCrateId, batchBundlesIntoCrates } from '../utils/crateEstimator';
 import IslandOperationalReview from './IslandOperationalReview';
 import KitchenOperationalReview from './KitchenOperationalReview';
 import Container3DPreview from './planner3d/Container3DPreview';
@@ -47,6 +47,7 @@ const PlannerV3Screen = ({ projectId, onClose = () => {} }) => {
 
   // ── Draft crate state (Step 3A) ──────────────────────────────────────────
   const [draftCrates, setDraftCrates] = useState([]);
+  const [targetWeightKg, setTargetWeightKg] = useState(1900);
 
   // Map of unit_id → crateId for all bundles currently in a draft crate (Step 3F)
   const assignedBundleIds = useMemo(() => {
@@ -120,19 +121,34 @@ const PlannerV3Screen = ({ projectId, onClose = () => {} }) => {
     }
   };
 
-  // Step 3B / 4A — Create draft crate from selected bundles (reuses lowest available ID)
+  // Step 3B / 4A — Create draft crates from selected bundles.
+  // Applies category-aware partitioning + weight batching before building each crate.
   const handleCreateDraftCrate = useCallback((selectedBundles) => {
     if (!selectedBundles?.length) return;
+    const groups = batchBundlesIntoCrates(selectedBundles, targetWeightKg);
+    if (!groups.length) return;
     setDraftCrates((prev) => {
-      const id = getNextDraftCrateId(prev);
-      const newCrate = buildDraftCrate(id, selectedBundles);
-      setLastMessage(
-        `${id} created — ${selectedBundles.length} bundle${selectedBundles.length !== 1 ? 's' : ''}, ` +
-        `${Math.round(newCrate.total_weight_kg).toLocaleString()} kg.`,
-      );
-      return [...prev, newCrate];
+      const newCrates = [];
+      let all = [...prev];
+      for (const group of groups) {
+        const id = getNextDraftCrateId(all);
+        const crate = buildDraftCrate(id, group.bundles);
+        newCrates.push(crate);
+        all = [...all, crate];
+      }
+      if (newCrates.length === 1) {
+        const c = newCrates[0];
+        setLastMessage(
+          `${c.id} created — ${c.bundle_count} bundle${c.bundle_count !== 1 ? 's' : ''}, ` +
+          `${Math.round(c.total_weight_kg).toLocaleString()} kg.`,
+        );
+      } else {
+        const lines = newCrates.map((c) => `${c.id} — ${Math.round(c.total_weight_kg).toLocaleString()} kg`).join(' · ');
+        setLastMessage(`Created ${newCrates.length} draft crates: ${lines}`);
+      }
+      return all;
     });
-  }, []);
+  }, [targetWeightKg]);
 
   // Step 3E — Remove a single bundle from a draft crate (returns to inventory)
   const handleRemoveBundleFromCrate = useCallback((crateId, bundleUnitId) => {
@@ -217,6 +233,8 @@ const PlannerV3Screen = ({ projectId, onClose = () => {} }) => {
         assignedBundleIds={assignedBundleIds}
         draftCrates={draftCrates}
         onAddToCrate={handleAddBundlesToCrate}
+        targetWeightKg={targetWeightKg}
+        onTargetWeightChange={setTargetWeightKg}
       />
 
       {/* Step 3 — Draft crate lifecycle */}
