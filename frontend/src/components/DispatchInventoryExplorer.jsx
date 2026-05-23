@@ -60,6 +60,7 @@ function fmt(n, d = 0) {
 
 // ─── Aggregate response → 4 operational buckets (scope-level) ────────────────
 // Collapses floor/category/flat hierarchy into 4 display rows keyed by bucket.
+// Metrics are computed directly from individual pieces — never from bundle totals.
 
 function aggregateByBucket(data) {
   if (!data?.floors?.length) return [];
@@ -82,9 +83,21 @@ function aggregateByBucket(data) {
           }
           const entry = bucketMap.get(bk);
           entry.bundles.push(bundle);
-          entry.total_weight_kg += bundle.total_weight_kg || 0;
-          entry.total_sqft      += bundle.total_sqft      || 0;
-          entry.part_count      += bundle.part_count      || 0;
+
+          // Derive metrics directly from filtered parts, not bundle aggregates.
+          const pieces = bundle.pieces || [];
+          if (pieces.length > 0) {
+            for (const p of pieces) {
+              entry.total_weight_kg += p.weight_kg || 0;
+              entry.total_sqft      += p.sqft      || 0;
+              entry.part_count      += 1;
+            }
+          } else {
+            // Fallback for bundles where piece detail is absent.
+            entry.total_weight_kg += bundle.total_weight_kg || 0;
+            entry.total_sqft      += bundle.total_sqft      || 0;
+            entry.part_count      += bundle.part_count      || 0;
+          }
 
           // Keep flat grouping for the detail view
           const fgKey = `${floor.floor}||${flat.flat}`;
@@ -123,7 +136,7 @@ function PartRow({ piece }) {
         {piece.thickness ? ` · ${piece.thickness}` : ''}
       </span>
       <span className="text-[11px] font-medium text-[#334155] flex-shrink-0 whitespace-nowrap">
-        {fmt(piece.weight_kg)} kg
+        {fmt(piece.weight_kg, 1)} kg
       </span>
     </div>
   );
@@ -158,7 +171,7 @@ function BundleCard({ bundle, assignedTo }) {
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-[#64748b]">
             {bundle.main_count > 0 && <span>{bundle.main_count} top{bundle.main_count !== 1 ? 's' : ''}</span>}
             {bundle.splash_count > 0 && <span className="text-amber-600">+{bundle.splash_count} splash</span>}
-            <span className="font-semibold text-[#1e293b]">{fmt(bundle.total_weight_kg)} kg</span>
+            <span className="font-semibold text-[#1e293b]">{fmt(bundle.total_weight_kg, 1)} kg</span>
             <span>{fmt(bundle.total_sqft, 1)} ft²</span>
           </div>
           {bundle.main_part_nos?.length > 0 && (
@@ -203,7 +216,10 @@ function BucketAssemblyRow({ bucketData, assignedBundleIds, draftCrates = [], on
   const [showDetail, setShowDetail] = useState(false);
   const st = C(bucketData.bucket);
   const freeBundles = bucketData.bundles.filter((b) => !assignedBundleIds?.has(b.unit_id));
-  const assignedCount = bucketData.bundles.length - freeBundles.length;
+  const assignedBundles = bucketData.bundles.filter((b) => assignedBundleIds?.has(b.unit_id));
+  const assignedPartCount = assignedBundles.reduce(
+    (s, b) => s + (b.pieces?.length || b.part_count || 0), 0,
+  );
   const allAssigned = freeBundles.length === 0 && bucketData.bundles.length > 0;
 
   const handleAddNew = () => {
@@ -229,13 +245,13 @@ function BucketAssemblyRow({ bucketData, assignedBundleIds, draftCrates = [], on
           <span className={`text-sm font-bold ${st.header}`}>{st.label}</span>
         </div>
         <span className="text-xs text-[#64748b]">
-          {bucketData.bundles.length} bundle{bucketData.bundles.length !== 1 ? 's' : ''}
+          {bucketData.part_count} parts
         </span>
-        <span className="text-sm font-semibold text-[#1e293b]">{fmt(bucketData.total_weight_kg)} kg</span>
-        <span className="text-xs text-[#94a3b8]">{fmt(bucketData.total_sqft, 0)} ft²</span>
-        {assignedCount > 0 && (
+        <span className="text-sm font-semibold text-[#1e293b]">{fmt(bucketData.total_weight_kg, 1)} kg</span>
+        <span className="text-xs text-[#94a3b8]">{fmt(bucketData.total_sqft, 1)} ft²</span>
+        {assignedPartCount > 0 && (
           <span className="rounded-full border border-[#e2e8f0] bg-[#f1f5f9] px-2 py-0.5 text-[10px] font-medium text-[#64748b]">
-            {assignedCount} in crate
+            {assignedPartCount} parts in crate
           </span>
         )}
 
@@ -275,7 +291,7 @@ function BucketAssemblyRow({ bucketData, assignedBundleIds, draftCrates = [], on
               onClick={() => setShowDetail((o) => !o)}
               className="rounded-full border border-[#e2e8f0] bg-[#f8fafc] px-3 py-1.5 text-[11px] font-medium text-[#64748b] hover:bg-[#f1f5f9] transition-colors whitespace-nowrap"
             >
-              {showDetail ? 'Hide' : `Details (${bucketData.bundles.length})`}
+              {showDetail ? 'Hide' : `Details (${bucketData.part_count} parts)`}
             </button>
           )}
         </div>
@@ -446,10 +462,9 @@ const DispatchInventoryExplorer = ({ projectId, dispatchSelection, onCreateCrate
         <div className="flex flex-wrap gap-2 items-center rounded-[20px] border border-[#dbe4f0] bg-[#f8fafc] px-5 py-3">
           <span className="text-xs font-semibold uppercase tracking-wide text-[#94a3b8] mr-1 self-center">In scope</span>
           {[
-            { l: 'Bundles', v: totals.bundle_count },
-            { l: 'Parts',   v: totals.part_count   },
-            { l: 'Weight',  v: `${fmt(totals.total_weight_kg)} kg` },
-            { l: 'Sq ft',   v: fmt(totals.total_sqft, 0) },
+            { l: 'Parts',  v: totals.part_count                       },
+            { l: 'Weight', v: `${fmt(totals.total_weight_kg, 1)} kg`  },
+            { l: 'Sq ft',  v: fmt(totals.total_sqft, 1)               },
           ].map(({ l, v }) => (
             <span key={l} className="flex flex-col items-center rounded-xl border border-[#e8edf3] bg-white px-3 py-1.5 min-w-[64px] text-center">
               <span className="text-[9px] uppercase tracking-wide text-[#94a3b8] leading-none">{l}</span>

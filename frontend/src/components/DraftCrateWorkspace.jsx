@@ -68,7 +68,7 @@ function PartRowInCrate({ piece }) {
         {piece.length > 0 && piece.width > 0 ? `${fmt(piece.length)} × ${fmt(piece.width)}″` : ''}
       </span>
       <span className="text-[11px] font-medium text-[#334155] flex-shrink-0 whitespace-nowrap">
-        {fmt(piece.weight_kg)} kg
+        {fmt(piece.weight_kg, 1)} kg
       </span>
     </div>
   );
@@ -96,7 +96,7 @@ function BundleInCrate({ bundle, crateId, onRemove }) {
           <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-[#64748b]">
             {bundle.main_count > 0 && <span>{bundle.main_count} top{bundle.main_count !== 1 ? 's' : ''}</span>}
             {bundle.splash_count > 0 && <span className="text-amber-600">+{bundle.splash_count} splash</span>}
-            <span className="font-semibold text-[#1e293b]">{fmt(bundle.total_weight_kg)} kg</span>
+            <span className="font-semibold text-[#1e293b]">{fmt(bundle.total_weight_kg, 1)} kg</span>
             <span>{fmt(bundle.total_sqft, 1)} ft²</span>
           </div>
         </div>
@@ -177,10 +177,9 @@ function DraftCrateCard({ crate, onRemoveBundle, onDeleteCrate }) {
             ))}
           </div>
           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-sm text-[#64748b]">
-            <span><strong className="text-[#0f172a]">{crate.bundle_count}</strong> bundle{crate.bundle_count !== 1 ? 's' : ''}</span>
             <span><strong className="text-[#0f172a]">{crate.part_count}</strong> parts</span>
-            <span><strong className="text-[#0f172a]">{fmt(crate.total_weight_kg)}</strong> kg</span>
-            <span><strong className="text-[#0f172a]">{fmt(crate.total_sqft, 0)}</strong> ft²</span>
+            <span><strong className="text-[#0f172a]">{fmt(crate.total_weight_kg, 1)}</strong> kg</span>
+            <span><strong className="text-[#0f172a]">{fmt(crate.total_sqft, 1)}</strong> ft²</span>
           </div>
         </div>
 
@@ -198,9 +197,9 @@ function DraftCrateCard({ crate, onRemoveBundle, onDeleteCrate }) {
               <button
                 type="button"
                 onClick={() => { onDeleteCrate(crate.id); setConfirmDelete(false); }}
-                className="rounded-full border border-red-300 bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors"
+                className="rounded-full border border-red-300 bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors whitespace-nowrap"
               >
-                Confirm delete
+                Confirm delete {crate.id}
               </button>
               <button
                 type="button"
@@ -273,12 +272,12 @@ const DraftCrateWorkspace = ({ draftCrates, onRemoveBundle, onDeleteCrate }) => 
 
   const globalTotals = draftCrates.reduce(
     (acc, c) => ({
-      crates:  acc.crates  + 1,
-      bundles: acc.bundles + c.bundle_count,
-      parts:   acc.parts   + c.part_count,
-      weight:  acc.weight  + c.total_weight_kg,
+      crates: acc.crates + 1,
+      parts:  acc.parts  + c.part_count,
+      weight: acc.weight + c.total_weight_kg,
+      sqft:   acc.sqft   + c.total_sqft,
     }),
-    { crates: 0, bundles: 0, parts: 0, weight: 0 },
+    { crates: 0, parts: 0, weight: 0, sqft: 0 },
   );
 
   return (
@@ -293,10 +292,10 @@ const DraftCrateWorkspace = ({ draftCrates, onRemoveBundle, onDeleteCrate }) => 
         </div>
         <div className="flex flex-wrap gap-2 text-right">
           {[
-            { l: 'Crates',  v: globalTotals.crates  },
-            { l: 'Bundles', v: globalTotals.bundles },
-            { l: 'Parts',   v: globalTotals.parts   },
-            { l: 'Weight',  v: `${fmt(globalTotals.weight)} kg` },
+            { l: 'Crates', v: globalTotals.crates                    },
+            { l: 'Parts',  v: globalTotals.parts                     },
+            { l: 'Weight', v: `${fmt(globalTotals.weight, 1)} kg`    },
+            { l: 'Sq ft',  v: fmt(globalTotals.sqft, 1)              },
           ].map(({ l, v }) => (
             <span key={l} className="flex flex-col items-center rounded-xl border border-[#e8edf3] bg-white px-3 py-1.5 min-w-[64px] text-center">
               <span className="text-[9px] uppercase tracking-wide text-[#94a3b8]">{l}</span>

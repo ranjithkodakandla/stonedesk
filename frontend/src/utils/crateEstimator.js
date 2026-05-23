@@ -37,8 +37,20 @@ const PART_TYPE_TO_CRATE_CLASS = {
   'Misc - Bar Top':            'misc',
 };
 
+const BUCKET_TO_CRATE_CLASS = {
+  kitchen_islands: 'island_vertical',
+  kitchen:         'kitchen_vertical',
+  vanity:          'vanity_vertical',
+  misc:            'misc',
+};
+
 export function getCrateClass(bundle) {
-  // Try Part Type from main pieces first
+  // part_bucket is backend-authoritative — use it first to prevent category fallback
+  // from misrouting splash bundles that carry an island family's category field.
+  if (bundle.part_bucket && BUCKET_TO_CRATE_CLASS[bundle.part_bucket]) {
+    return BUCKET_TO_CRATE_CLASS[bundle.part_bucket];
+  }
+  // Try Part Type from main pieces next
   const pieces = bundle.pieces || [];
   for (const p of pieces) {
     if (p.role !== 'splash') {
@@ -46,7 +58,7 @@ export function getCrateClass(bundle) {
       if (cls) return cls;
     }
   }
-  // Fallback: derive from category field
+  // Final fallback: derive from category field
   const cat = (bundle.category || '').toLowerCase();
   if (cat === 'island') return 'island_vertical';
   if (cat === 'perimeter' || cat === 'range') return 'kitchen_vertical';
@@ -127,11 +139,15 @@ export function batchBundlesIntoCrates(selectedBundles, targetWeightKg = 1900) {
 
   const groups = [];
   for (const cls of CLASS_ORDER) {
-    // Strip splash before weight-batching so island crate weights are accurate
+    // Strip splash before weight-batching so island crate weights are accurate.
+    // Then discard any bundles stripped down to zero content — they must not form empty crates.
     const bundles = cls === 'island_vertical'
-      ? buckets[cls].map(stripSplashFromBundle)
+      ? buckets[cls]
+          .map(stripSplashFromBundle)
+          .filter((b) => (b.part_count || b.pieces?.length || 0) > 0 || (b.total_weight_kg || 0) > 0)
       : buckets[cls];
 
+    if (!bundles.length) continue;
     const batches = weightBatchBundles(bundles, targetWeightKg);
     for (const batch of batches) {
       groups.push({ crateClass: cls, bundles: batch });

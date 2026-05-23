@@ -133,6 +133,8 @@ const PlannerV3Screen = ({ projectId, onClose = () => {} }) => {
       for (const group of groups) {
         const id = getNextDraftCrateId(all);
         const crate = buildDraftCrate(id, group.bundles);
+        // Never persist a crate with no content
+        if ((crate.part_count || 0) === 0 && (crate.total_weight_kg || 0) === 0) continue;
         newCrates.push(crate);
         all = [...all, crate];
       }
