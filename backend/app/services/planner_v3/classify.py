@@ -5,7 +5,22 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..planning_engine import parse_float
 
 # (keywords, category, is_splash)
+# Standardized Part Type names take priority (exact prefix match first).
+# Legacy keyword patterns follow as fallback for old data.
 _DESC_RULES: List[Tuple[List[str], str, bool]] = [
+    # ── Standardized Part Types (new canonical names) ──
+    (["kitchen - island tops"],     "island",    False),
+    (["kitchen - perimeter tops"],  "perimeter", False),
+    (["kitchen - range tops"],      "range",     False),
+    (["kitchen - back splash"],     "perimeter", True),
+    (["kitchen - side splash"],     "perimeter", True),
+    (["vanity - top"],              "vanity",    False),
+    (["vanity - back splash"],      "vanity",    True),
+    (["vanity - side splash"],      "vanity",    True),
+    (["misc - full height splash"], "misc",      True),
+    (["misc - window sill"],        "misc",      False),
+    (["misc - bar top"],            "misc",      False),
+    # ── Legacy keyword patterns (backward compat for pre-migration data) ──
     (["island top", "island countertop", "island kitchen"], "island", False),
     (["perimeter kitchen", "kitchen countertop", "kitchen top"], "perimeter", False),
     (["range top"], "range", False),

@@ -1377,30 +1377,72 @@ def get_dispatch_hierarchy(project_id: int):
     return discover_dispatch_hierarchy(pieces)
 
 
-_INVENTORY_CATEGORY_LABELS = {
-    "island": "Islands",
-    "perimeter": "Kitchens",
-    "range": "Range Tops",
-    "vanity": "Vanity",
-    "misc": "Misc",
+# ── Operational bucket model (4 groups) ──────────────────────────────────────
+# Grouping uses standardized Part Type from the piece `part` field.
+# Falls back to derived `category` for pieces not yet migrated to new names.
+
+_PART_TYPE_TO_BUCKET: Dict[str, str] = {
+    "Kitchen - Island Tops":     "kitchen_islands",
+    "Kitchen - Perimeter Tops":  "kitchen",
+    "Kitchen - Range Tops":      "kitchen",
+    "Kitchen - Back Splash":     "kitchen",
+    "Kitchen - Side Splash":     "kitchen",
+    "Vanity - Top":              "vanity",
+    "Vanity - Back Splash":      "vanity",
+    "Vanity - Side Splash":      "vanity",
+    "Misc - Full Height Splash": "misc",
+    "Misc - Window Sill":        "misc",
+    "Misc - Bar Top":            "misc",
 }
-_INVENTORY_CATEGORY_ORDER = ["island", "perimeter", "range", "vanity", "misc"]
+_CATEGORY_TO_BUCKET_FALLBACK: Dict[str, str] = {
+    "island":    "kitchen_islands",
+    "perimeter": "kitchen",
+    "range":     "kitchen",
+    "vanity":    "vanity",
+    "misc":      "misc",
+}
+_BUCKET_LABELS: Dict[str, str] = {
+    "kitchen_islands": "Kitchen — Islands",
+    "kitchen":         "Kitchen",
+    "vanity":          "Vanity",
+    "misc":            "Misc",
+}
+_BUCKET_ORDER = ["kitchen_islands", "kitchen", "vanity", "misc"]
+
+
+def _part_bucket_for_unit(unit: Dict[str, Any]) -> str:
+    """Return the operational bucket key for a dispatch unit.
+
+    Checks main pieces' Part Type field first; falls back to the derived category
+    so pre-migration pieces continue to group correctly.
+    """
+    for p in (unit.get("main_pieces") or []):
+        part_type = str(p.get("part") or "").strip()
+        bucket = _PART_TYPE_TO_BUCKET.get(part_type)
+        if bucket:
+            return bucket
+    cat = str(unit.get("category") or "misc")
+    return _CATEGORY_TO_BUCKET_FALLBACK.get(cat, "misc")
 
 
 @app.post("/api/projects/{project_id}/dispatch-inventory")
 def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_factory=dict)):
     """
-    Returns inventory grouped Floor → Category → Flat → Bundle with metrics.
+    Returns inventory grouped Floor → Bucket → Flat → Bundle with metrics.
+    Buckets are the 4 operational groups keyed by standardised Part Type.
     Body is a dispatch_selection payload (buildings, floors, flats, ordering).
     """
+    import logging
     from collections import defaultdict
     from .services.planner_v3.dispatch import sort_pieces_by_dispatch
     from .services.planner_v3.dispatch_units import build_dispatch_units_from_pieces
     from .services.planning_engine import piece_weight as pw, parse_float
 
+    _log = logging.getLogger("dispatch_inventory")
     empty = {"floors": [], "totals": {"part_count": 0, "total_weight_kg": 0.0, "total_sqft": 0.0, "bundle_count": 0}}
 
     pieces = list(pieces_col.find({"project_id": project_id}, {"_id": 0}))
+    _log.debug("[dispatch-inventory] project=%s db_pieces=%d", project_id, len(pieces))
     if not pieces:
         return empty
 
@@ -1410,10 +1452,14 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
     stone_color = str((project_doc or {}).get("stone_color", "") or "")
 
     filtered = sort_pieces_by_dispatch(pieces, body or {})
+    _log.debug("[dispatch-inventory] after_filter=%d (selection=%s)", len(filtered), body or {})
     if not filtered:
         return empty
 
-    units, _ = build_dispatch_units_from_pieces(filtered)
+    units, norm_events = build_dispatch_units_from_pieces(filtered)
+    _log.debug("[dispatch-inventory] units_built=%d norm_events=%d", len(units), len(norm_events))
+    if norm_events:
+        _log.debug("[dispatch-inventory] normalization_events=%s", norm_events[:10])
 
     def piece_sqft(p: Dict[str, Any]) -> float:
         L = parse_float(p.get("length"))
@@ -1426,9 +1472,13 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
         except (ValueError, TypeError):
             return (1, str(f))
 
-    floor_cat_flat: Dict[str, Dict[str, Dict[str, List[Dict[str, Any]]]]] = defaultdict(
+    # Group by floor → bucket → flat
+    floor_bucket_flat: Dict[str, Dict[str, Dict[str, List[Dict[str, Any]]]]] = defaultdict(
         lambda: defaultdict(lambda: defaultdict(list))
     )
+
+    # Validation counters for debug audit
+    _bucket_debug: Dict[str, int] = defaultdict(int)
 
     for unit in units:
         all_p = unit.get("all_pieces") or []
@@ -1439,6 +1489,8 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
         flat_str = str(ref.get("flat", "") or "").strip() or "Unassigned"
         building_str = str(ref.get("building", "") or "").strip()
         cat = str(unit.get("category") or "misc")
+        bucket = _part_bucket_for_unit(unit)
+        _bucket_debug[bucket] += 1
 
         total_w = round(sum(pw(p, material, thickness, stone_color) for p in all_p), 1)
         total_sq = round(sum(piece_sqft(p) for p in all_p), 1)
@@ -1465,6 +1517,7 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
             "unit_id": str(unit.get("unit_id") or ""),
             "family_id": str(unit.get("canonical_family_id") or unit.get("family_id") or ""),
             "category": cat,
+            "part_bucket": bucket,
             "unit_kind": unit.get("unit_kind"),
             "part_count": len(all_p),
             "main_count": len(unit.get("main_pieces") or []),
@@ -1478,7 +1531,13 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
             "floor": floor_str,
             "pieces": pieces_detail,
         }
-        floor_cat_flat[floor_str][cat][flat_str].append(bundle_row)
+        floor_bucket_flat[floor_str][bucket][flat_str].append(bundle_row)
+
+    _log.debug(
+        "[dispatch-inventory] bucket_summary=%s total_bundles=%d",
+        dict(_bucket_debug),
+        sum(_bucket_debug.values()),
+    )
 
     floors_out = []
     total_parts = 0
@@ -1486,18 +1545,18 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
     total_sqft_all = 0.0
     total_bundles = 0
 
-    for floor_str in sorted(floor_cat_flat.keys(), key=flat_sort_key):
-        floor_data = floor_cat_flat[floor_str]
+    for floor_str in sorted(floor_bucket_flat.keys(), key=flat_sort_key):
+        floor_data = floor_bucket_flat[floor_str]
         floor_parts = 0
         floor_weight = 0.0
         floor_sqft = 0.0
         floor_bundles = 0
         cats_out = []
 
-        for cat in _INVENTORY_CATEGORY_ORDER:
-            if cat not in floor_data:
+        for bucket in _BUCKET_ORDER:
+            if bucket not in floor_data:
                 continue
-            flat_data = floor_data[cat]
+            flat_data = floor_data[bucket]
             cat_parts = 0
             cat_weight = 0.0
             cat_sqft = 0.0
@@ -1522,8 +1581,8 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
 
             bundle_count_cat = sum(len(flat_data[f]) for f in flat_data)
             cats_out.append({
-                "category": cat,
-                "category_label": _INVENTORY_CATEGORY_LABELS.get(cat, cat.capitalize()),
+                "category": bucket,
+                "category_label": _BUCKET_LABELS.get(bucket, bucket),
                 "part_count": cat_parts,
                 "total_weight_kg": round(cat_weight, 1),
                 "total_sqft": round(cat_sqft, 1),
@@ -1547,6 +1606,11 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
         total_weight += floor_weight
         total_sqft_all += floor_sqft
         total_bundles += floor_bundles
+
+    _log.debug(
+        "[dispatch-inventory] RESULT floors=%d parts=%d weight=%.1f bundles=%d",
+        len(floors_out), total_parts, total_weight, total_bundles,
+    )
 
     return _json_safe_floats({
         "floors": floors_out,

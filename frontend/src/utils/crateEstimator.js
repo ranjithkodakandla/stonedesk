@@ -17,17 +17,49 @@ const THICKNESS_INCH = {
   'Mixed': 0.98,
 };
 
-// ─── Crate class determination ────────────────────────────────────────────────
-// island_vertical: island tops only — never mixed with splashes or other categories
-// kitchen_vertical: perimeter tops, range tops, their associated splashes
-// vanity_vertical: vanity tops and their associated splashes
-// misc: everything else
+// ─── Part Type → crate class ──────────────────────────────────────────────────
+// island_vertical: Kitchen - Island Tops ONLY — leaned cassette geometry
+// kitchen_vertical: Kitchen perimeter/range tops + splashes — horizontal layered
+// vanity_vertical: Vanity tops + splashes — horizontal layered
+// misc: everything else — horizontal layered
+
+const PART_TYPE_TO_CRATE_CLASS = {
+  'Kitchen - Island Tops':     'island_vertical',
+  'Kitchen - Perimeter Tops':  'kitchen_vertical',
+  'Kitchen - Range Tops':      'kitchen_vertical',
+  'Kitchen - Back Splash':     'kitchen_vertical',
+  'Kitchen - Side Splash':     'kitchen_vertical',
+  'Vanity - Top':              'vanity_vertical',
+  'Vanity - Back Splash':      'vanity_vertical',
+  'Vanity - Side Splash':      'vanity_vertical',
+  'Misc - Full Height Splash': 'misc',
+  'Misc - Window Sill':        'misc',
+  'Misc - Bar Top':            'misc',
+};
 
 export function getCrateClass(bundle) {
+  // Try Part Type from main pieces first
+  const pieces = bundle.pieces || [];
+  for (const p of pieces) {
+    if (p.role !== 'splash') {
+      const cls = PART_TYPE_TO_CRATE_CLASS[String(p.part || '').trim()];
+      if (cls) return cls;
+    }
+  }
+  // Fallback: derive from category field
   const cat = (bundle.category || '').toLowerCase();
   if (cat === 'island') return 'island_vertical';
   if (cat === 'perimeter' || cat === 'range') return 'kitchen_vertical';
   if (cat === 'vanity') return 'vanity_vertical';
+  return 'misc';
+}
+
+// Infer crate class from a group of bundles (used by buildDraftCrate).
+function inferCrateClassFromBundles(bundles) {
+  const classes = new Set(bundles.map((b) => getCrateClass(b)));
+  if (classes.has('island_vertical') && classes.size === 1) return 'island_vertical';
+  if (classes.has('vanity_vertical') && !classes.has('island_vertical') && !classes.has('kitchen_vertical')) return 'vanity_vertical';
+  if ((classes.has('kitchen_vertical')) && !classes.has('island_vertical')) return 'kitchen_vertical';
   return 'misc';
 }
 
@@ -193,14 +225,92 @@ export function estimateVerticalCassetteDimensions(pieces) {
   return estimateLeanedCassetteDimensions(pieces);
 }
 
+// ─── Horizontal layered crate geometry ───────────────────────────────────────
+// Kitchen and Vanity crates pack flat — NOT upright, NOT leaned.
+//
+// Physical stack (bottom → top):
+//   pallet frame
+//   main tops  (Perimeter Tops / Range Tops / Vanity Top)
+//   1″ separator
+//   back splashes
+//   1″ separator
+//   side splashes
+//   lid framing
+//
+// Axis model:
+//   internal_length = max long edge of all pieces + length clearance  [L]
+//   internal_width  = max short edge of all pieces + side padding      [W]
+//   internal_height = accumulated layer thicknesses + separators + framing [H]
+
+const HORIZ_PALLET_BASE   = 4.0;   // pallet / sled base
+const HORIZ_LID           = 3.0;   // top cap framing
+const HORIZ_WALL          = 3.0;   // side wall timber
+const HORIZ_END_FRAME     = 4.0;   // end boards (2" each end)
+const HORIZ_LENGTH_CLEAR  = 6.0;   // internal end clearance (3" each end)
+const HORIZ_WIDTH_PAD     = 6.0;   // internal side clearance (3" each side)
+const HORIZ_LAYER_SEP     = 1.0;   // foam separator between layers
+
+function isBackSplashPiece(piece) {
+  return /back.?splash/i.test(piece.part || '');
+}
+
+function isSideSplashPiece(piece) {
+  return /side.?splash/i.test(piece.part || '');
+}
+
+export function estimateHorizontalLayeredDimensions(pieces) {
+  if (!pieces || pieces.length === 0) {
+    return {
+      internal_length: 0, internal_width: 0, internal_height: 0,
+      external_length: 0, external_width: 0, external_height: 0,
+    };
+  }
+
+  const backSplash = pieces.filter(isBackSplashPiece);
+  const sideSplash = pieces.filter(isSideSplashPiece);
+  const mainTops   = pieces.filter((p) => !isBackSplashPiece(p) && !isSideSplashPiece(p));
+
+  // Length + width driven by largest footprint across all pieces
+  let maxLong = 0, maxShort = 0;
+  for (const p of pieces) {
+    const L = parseFloat(p.length) || 0;
+    const W = parseFloat(p.width)  || 0;
+    maxLong  = Math.max(maxLong, Math.max(L, W));
+    maxShort = Math.max(maxShort, L > 0 && W > 0 ? Math.min(L, W) : Math.max(L, W));
+  }
+
+  const intL = r1(maxLong  + HORIZ_LENGTH_CLEAR);
+  const intW = r1(maxShort + HORIZ_WIDTH_PAD);
+
+  // Height from stacked layers — each layer's height is its max material thickness
+  const mainH = mainTops.length   > 0 ? Math.max(...mainTops.map((p)   => parseThicknessIn(p.thickness))) : 0;
+  const backH = backSplash.length > 0 ? Math.max(...backSplash.map((p) => parseThicknessIn(p.thickness))) : 0;
+  const sideH = sideSplash.length > 0 ? Math.max(...sideSplash.map((p) => parseThicknessIn(p.thickness))) : 0;
+
+  let intH = HORIZ_PALLET_BASE;
+  if (mainH > 0) intH += mainH;
+  if (backH > 0) intH += HORIZ_LAYER_SEP + backH;
+  if (sideH > 0) intH += HORIZ_LAYER_SEP + sideH;
+  intH = r1(intH);
+
+  return {
+    internal_length: intL,
+    internal_width:  intW,
+    internal_height: intH,
+    external_length: r1(intL + HORIZ_END_FRAME),
+    external_width:  r1(intW + HORIZ_WALL * 2),
+    external_height: r1(intH + HORIZ_LID),
+  };
+}
+
 // ─── Operational warnings ────────────────────────────────────────────────────
 
-export function generateCrateWarnings({ totalWeightKg, dimensions, categoryMix, bundleCount, islandSplashViolation = false, hadSplashStripped = false }) {
+export function generateCrateWarnings({ totalWeightKg, dimensions, categoryMix, bundleCount, islandSplashViolation = false, hadSplashStripped = false, crateClass = null }) {
   const warnings = [];
   if (!bundleCount || totalWeightKg === 0) return warnings;
 
   if (islandSplashViolation) {
-    warnings.push('Island crate contains splash pieces — island crates must contain only island tops.');
+    warnings.push('Island crate contains splash pieces — Kitchen - Island Tops ONLY are permitted.');
   }
   if (hadSplashStripped) {
     warnings.push('Splash pieces excluded from island crate — they remain unassigned in inventory.');
@@ -215,21 +325,21 @@ export function generateCrateWarnings({ totalWeightKg, dimensions, categoryMix, 
 
   const cats = Object.keys(categoryMix || {}).filter((k) => (categoryMix[k] || 0) > 0);
   if (cats.length > 1) {
-    // perimeter + range together is a valid kitchen crate — no warning
     const isKitchenMix = cats.length === 2 && cats.includes('perimeter') && cats.includes('range');
     if (!isKitchenMix) {
       warnings.push('Mixed-category crate — confirm operational grouping with site team.');
     }
   }
 
-  // Cassette depth check (internal_width is the depth axis in the leaned model)
-  if ((dimensions?.internal_width || 0) > 24) {
+  const isIslandCrate = crateClass === 'island_vertical';
+
+  // Island cassette: depth axis is internal_width — warn if cassette gets very deep.
+  if (isIslandCrate && (dimensions?.internal_width || 0) > 24) {
     warnings.push('Deep cassette — check slot clearance and load stability.');
   }
 
-  // Island crates use a dedicated operational envelope — skip generic 90" height check
-  const isIslandOnly = cats.length === 1 && cats[0] === 'island';
-  if (!isIslandOnly && (dimensions?.external_height || 0) > 88) {
+  // Horizontal crates: check overall height clears the container roof (< 90″ external).
+  if (!isIslandCrate && (dimensions?.external_height || 0) > 88) {
     warnings.push('Tall crate — verify container interior clearance (target < 90″).');
   }
 
@@ -248,20 +358,31 @@ export function buildDraftCrate(id, selectedBundles) {
     return acc;
   }, {});
 
-  // Island isolation: detect any residual splash (can occur via manual "Add to…")
-  const cats = Object.keys(categoryMix).filter((k) => (categoryMix[k] || 0) > 0);
-  const isIslandOnly = cats.length === 1 && cats[0] === 'island';
-  const islandSplashViolation = isIslandOnly && selectedBundles.some((b) => (b.splash_count || 0) > 0);
-  const hadSplashStripped     = selectedBundles.some((b) => (b.splash_stripped || 0) > 0);
+  // Determine crate class to select the correct geometry model.
+  const crateClass = inferCrateClassFromBundles(selectedBundles);
+  const isIslandCrate = crateClass === 'island_vertical';
 
-  const dimensions = estimateLeanedCassetteDimensions(allPieces);
-  const warnings   = generateCrateWarnings({
+  // Island isolation: splash pieces must NEVER appear in island crates.
+  const islandSplashViolation = isIslandCrate && allPieces.some((p) => {
+    if (p.role === 'splash') return true;
+    const partType = String(p.part || '').trim();
+    return /back.?splash|side.?splash/i.test(partType);
+  });
+  const hadSplashStripped = selectedBundles.some((b) => (b.splash_stripped || 0) > 0);
+
+  // Select geometry: island → leaned cassette; kitchen/vanity/misc → horizontal layered.
+  const dimensions = isIslandCrate
+    ? estimateLeanedCassetteDimensions(allPieces)
+    : estimateHorizontalLayeredDimensions(allPieces);
+
+  const warnings = generateCrateWarnings({
     totalWeightKg,
     dimensions,
     categoryMix,
     bundleCount:          selectedBundles.length,
     islandSplashViolation,
     hadSplashStripped,
+    crateClass,
   });
 
   return {
@@ -272,6 +393,7 @@ export function buildDraftCrate(id, selectedBundles) {
     total_weight_kg:         totalWeightKg,
     total_sqft:              totalSqft,
     category_mix:            categoryMix,
+    crate_class:             crateClass,
     island_splash_violation: islandSplashViolation,
     dimensions,
     warnings,
@@ -295,7 +417,6 @@ export function getCrateOperationalStatus(crate) {
   const w = crate.total_weight_kg || 0;
   const cats = Object.keys(crate.category_mix || {}).filter((k) => (crate.category_mix[k] || 0) > 0);
   if (w > 2200) return 'OVERWEIGHT';
-  // perimeter + range together is a valid kitchen crate — not a review flag
   const isKitchenMix = cats.length === 2 && cats.includes('perimeter') && cats.includes('range');
   if (cats.length > 1 && !isKitchenMix) return 'REVIEW';
   if (w < 1400) return 'UNDERLOADED';

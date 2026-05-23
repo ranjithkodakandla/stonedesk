@@ -56,25 +56,34 @@ const suggestThicknessForPart = (part = '', category = '') => {
   return '';
 };
 
+// Standardized Part Type names — canonical list used everywhere.
+// Backend grouping, crate buckets, and thickness defaults all key off these exact strings.
 export const MASTER_DESCRIPTIONS = [
-  'Island Tops', 'Perimeter Kitchen Tops', 'Range Tops',
-  'Kitchen Back Splash', 'Kitchen Side Splash',
-  'Vanity Top', 'Vanity Back Splash', 'Vanity Side Splash',
-  'Full Height Splash', 'Window Sill', 'Bar Top',
+  'Kitchen - Island Tops',
+  'Kitchen - Perimeter Tops',
+  'Kitchen - Range Tops',
+  'Kitchen - Back Splash',
+  'Kitchen - Side Splash',
+  'Vanity - Top',
+  'Vanity - Back Splash',
+  'Vanity - Side Splash',
+  'Misc - Full Height Splash',
+  'Misc - Window Sill',
+  'Misc - Bar Top',
 ];
 
 export const DEFAULT_THICKNESS_MAP = {
-  'Island Tops': '3CM',
-  'Perimeter Kitchen Tops': '3CM',
-  'Range Tops': '3CM',
-  'Kitchen Back Splash': '2CM',
-  'Kitchen Side Splash': '2CM',
-  'Vanity Top': '3CM',
-  'Vanity Back Splash': '2CM',
-  'Vanity Side Splash': '2CM',
-  'Full Height Splash': '2CM',
-  'Window Sill': '2CM',
-  'Bar Top': '3CM',
+  'Kitchen - Island Tops':     '3CM',
+  'Kitchen - Perimeter Tops':  '3CM',
+  'Kitchen - Range Tops':      '3CM',
+  'Kitchen - Back Splash':     '2CM',
+  'Kitchen - Side Splash':     '2CM',
+  'Vanity - Top':              '3CM',
+  'Vanity - Back Splash':      '2CM',
+  'Vanity - Side Splash':      '2CM',
+  'Misc - Full Height Splash': '2CM',
+  'Misc - Window Sill':        '2CM',
+  'Misc - Bar Top':            '3CM',
 };
 
 // ── Row factory ─────────────────────────────────────────────────────────────
@@ -453,7 +462,7 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
             <tr>
               <th className="px-2 py-2 text-left w-7 font-medium">#</th>
               <th className="px-2 py-2 text-left min-w-[108px] font-medium">Part #</th>
-              <th className="px-2 py-2 text-left min-w-[130px] font-medium">Description</th>
+              <th className="px-2 py-2 text-left min-w-[130px] font-medium">Part Type</th>
               <th className="px-2 py-2 text-left w-12 font-medium">Qty</th>
               <th className="px-2 py-2 text-left w-16 font-medium">Length</th>
               <th className="px-2 py-2 text-left w-16 font-medium">Width</th>
@@ -490,13 +499,13 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
                     />
                   </td>
 
-                  {/* Description — searchable combobox */}
+                  {/* Part Type — searchable combobox */}
                   <td className="px-1 py-1">
                     <DescriptionCombobox
                       value={row.part || ''}
                       onChange={v => updateRow(row._id, 'part', v)}
                       options={descOptions}
-                      placeholder="Description…"
+                      placeholder="Part Type…"
                     />
                   </td>
 
@@ -527,7 +536,7 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
                       readOnly
                       tabIndex={-1}
                       className="grid-cell text-[11px] bg-slate-50 text-slate-500 cursor-not-allowed"
-                      aria-label="Thickness set by description mapping"
+                      aria-label="Thickness set by part type mapping"
                     />
                   </td>
 
@@ -590,7 +599,7 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
       </div>
 
       <p className="mt-1 text-[10px] text-slate-400">
-        Paste from Excel: <span className="font-mono">Part #, Description, Length, Width, Thickness, Qty, Sink, Cuts, Taps, Grooves, Edge, Area, Radius, Notes</span>
+        Paste from Excel: <span className="font-mono">Part #, Part Type, Length, Width, Thickness, Qty, Sink, Cuts, Taps, Grooves, Edge, Area, Radius, Notes</span>
         &nbsp;— then paste anywhere in the grid. Click <span className="font-medium">Edit</span> or any badge to review destination and technical details.
       </p>
 
