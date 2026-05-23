@@ -802,7 +802,7 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
             </div>
           </div>
           <div className="md:col-span-6">
-            <label className="label-text">Default Thickness per Description</label>
+            <label className="label-text">Default Thickness per Part Type</label>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-1.5 mt-1.5">
               {MASTER_DESCRIPTIONS.map(desc => {
                 const map = { ...DEFAULT_THICKNESS_MAP, ...(project.description_thickness_map || {}) };

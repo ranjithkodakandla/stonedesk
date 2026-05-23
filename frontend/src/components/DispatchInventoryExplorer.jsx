@@ -2,61 +2,103 @@ import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import axios from 'axios';
 import { API_BASE } from '../utils/plannerUtils';
 
-// ─── Category presentation ────────────────────────────────────────────────────
+// ─── Operational bucket presentation (4 groups) ───────────────────────────────
+// Maps the standardized Part Type → operational bucket key.
+// Falls back to derived `category` for pieces not yet migrated.
 
-const CAT = {
-  island:    { label: 'Island',   pill: 'bg-blue-100 text-blue-700',       dot: 'bg-blue-500',     header: 'text-blue-800'    },
-  perimeter: { label: 'Kitchen',  pill: 'bg-emerald-100 text-emerald-700', dot: 'bg-emerald-500',  header: 'text-emerald-800' },
-  range:     { label: 'Range',    pill: 'bg-amber-100 text-amber-700',     dot: 'bg-amber-500',    header: 'text-amber-800'   },
-  vanity:    { label: 'Vanity',   pill: 'bg-violet-100 text-violet-700',   dot: 'bg-violet-500',   header: 'text-violet-800'  },
-  misc:      { label: 'Misc',     pill: 'bg-slate-100 text-slate-600',     dot: 'bg-slate-400',    header: 'text-slate-700'   },
+const PART_TYPE_TO_BUCKET = {
+  'Kitchen - Island Tops':     'kitchen_islands',
+  'Kitchen - Perimeter Tops':  'kitchen',
+  'Kitchen - Range Tops':      'kitchen',
+  'Kitchen - Back Splash':     'kitchen',
+  'Kitchen - Side Splash':     'kitchen',
+  'Vanity - Top':              'vanity',
+  'Vanity - Back Splash':      'vanity',
+  'Vanity - Side Splash':      'vanity',
+  'Misc - Full Height Splash': 'misc',
+  'Misc - Window Sill':        'misc',
+  'Misc - Bar Top':            'misc',
 };
-const C = (cat) => CAT[cat] || CAT.misc;
-const CAT_ORDER = ['island', 'perimeter', 'range', 'vanity', 'misc'];
+
+const CATEGORY_TO_BUCKET_FALLBACK = {
+  island:    'kitchen_islands',
+  perimeter: 'kitchen',
+  range:     'kitchen',
+  vanity:    'vanity',
+  misc:      'misc',
+};
+
+const BUCKET = {
+  kitchen_islands: { label: 'Kitchen — Islands', pill: 'bg-blue-100 text-blue-700',       dot: 'bg-blue-500',     header: 'text-blue-800'    },
+  kitchen:         { label: 'Kitchen',           pill: 'bg-emerald-100 text-emerald-700', dot: 'bg-emerald-500',  header: 'text-emerald-800' },
+  vanity:          { label: 'Vanity',            pill: 'bg-violet-100 text-violet-700',   dot: 'bg-violet-500',   header: 'text-violet-800'  },
+  misc:            { label: 'Misc',              pill: 'bg-slate-100 text-slate-600',     dot: 'bg-slate-400',    header: 'text-slate-700'   },
+};
+const BUCKET_ORDER = ['kitchen_islands', 'kitchen', 'vanity', 'misc'];
+
+const C = (bucketKey) => BUCKET[bucketKey] || BUCKET.misc;
+
+// Derive bucket from a bundle: check main pieces' Part Type first, fall back to category.
+function bucketForBundle(bundle) {
+  const pieces = bundle.pieces || [];
+  for (const p of pieces) {
+    if (p.role !== 'splash') {
+      const b = PART_TYPE_TO_BUCKET[String(p.part || '').trim()];
+      if (b) return b;
+    }
+  }
+  return CATEGORY_TO_BUCKET_FALLBACK[bundle.category] || 'misc';
+}
 
 function fmt(n, d = 0) {
   if (n == null || isNaN(n)) return '—';
   return Number(n).toLocaleString('en-AU', { minimumFractionDigits: d, maximumFractionDigits: d });
 }
 
-// ─── Aggregate response → category rows (scope-level, no flat hierarchy) ─────
+// ─── Aggregate response → 4 operational buckets (scope-level) ────────────────
+// Collapses floor/category/flat hierarchy into 4 display rows keyed by bucket.
 
-function aggregateByCategory(data) {
+function aggregateByBucket(data) {
   if (!data?.floors?.length) return [];
-  const catMap = new Map();
+  const bucketMap = new Map();
 
   for (const floor of data.floors) {
     for (const cat of floor.categories) {
-      if (!catMap.has(cat.category)) {
-        catMap.set(cat.category, {
-          category: cat.category,
-          category_label: cat.category_label,
-          bundles: [],
-          flatGroups: [],
-          total_weight_kg: 0,
-          total_sqft: 0,
-          part_count: 0,
-        });
-      }
-      const entry = catMap.get(cat.category);
       for (const flat of cat.flats || []) {
-        if ((flat.bundles || []).length > 0) {
-          entry.flatGroups.push({ floor: floor.floor, flat: flat.flat, bundles: flat.bundles });
-        }
-        for (const b of flat.bundles || []) {
-          entry.bundles.push(b);
-          entry.total_weight_kg += b.total_weight_kg || 0;
-          entry.total_sqft      += b.total_sqft      || 0;
-          entry.part_count      += b.part_count      || 0;
+        for (const bundle of flat.bundles || []) {
+          const bk = bucketForBundle(bundle);
+          if (!bucketMap.has(bk)) {
+            bucketMap.set(bk, {
+              bucket: bk,
+              bundles: [],
+              flatGroups: [],
+              total_weight_kg: 0,
+              total_sqft: 0,
+              part_count: 0,
+            });
+          }
+          const entry = bucketMap.get(bk);
+          entry.bundles.push(bundle);
+          entry.total_weight_kg += bundle.total_weight_kg || 0;
+          entry.total_sqft      += bundle.total_sqft      || 0;
+          entry.part_count      += bundle.part_count      || 0;
+
+          // Keep flat grouping for the detail view
+          const fgKey = `${floor.floor}||${flat.flat}`;
+          let fg = entry.flatGroups.find((f) => f._key === fgKey);
+          if (!fg) {
+            fg = { _key: fgKey, floor: floor.floor, flat: flat.flat, bundles: [] };
+            entry.flatGroups.push(fg);
+          }
+          fg.bundles.push(bundle);
         }
       }
     }
   }
 
-  return [...catMap.values()].sort((a, b) => {
-    const ia = CAT_ORDER.indexOf(a.category), ib = CAT_ORDER.indexOf(b.category);
-    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
-  });
+  return BUCKET_ORDER
+    .filter((bk) => bucketMap.has(bk))
+    .map((bk) => bucketMap.get(bk));
 }
 
 // ─── Part row ─────────────────────────────────────────────────────────────────
@@ -88,7 +130,7 @@ function PartRow({ piece }) {
 
 function BundleCard({ bundle, assignedTo }) {
   const [showParts, setShowParts] = useState(false);
-  const st = C(bundle.category);
+  const st = C(bucketForBundle(bundle));
   const hasPieces = (bundle.pieces?.length ?? 0) > 0;
 
   return (
@@ -146,20 +188,20 @@ function BundleCard({ bundle, assignedTo }) {
   );
 }
 
-// ─── Category assembly row (scope-aggregated) ─────────────────────────────────
+// ─── Bucket assembly row (scope-aggregated, 4 operational groups) ─────────────
 
 const SELECT_STYLE = {
-  backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2394a3b8'/%3E%3C/svg%3E\")",
+  backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2020/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2394a3b8'/%3E%3C/svg%3E\")",
   backgroundRepeat: 'no-repeat',
   backgroundPosition: 'right 10px center',
 };
 
-function CategoryAssemblyRow({ cat, assignedBundleIds, draftCrates = [], onCreateCrate, onAddToCrate }) {
+function BucketAssemblyRow({ bucketData, assignedBundleIds, draftCrates = [], onCreateCrate, onAddToCrate }) {
   const [showDetail, setShowDetail] = useState(false);
-  const st = C(cat.category);
-  const freeBundles = cat.bundles.filter((b) => !assignedBundleIds?.has(b.unit_id));
-  const assignedCount = cat.bundles.length - freeBundles.length;
-  const allAssigned = freeBundles.length === 0 && cat.bundles.length > 0;
+  const st = C(bucketData.bucket);
+  const freeBundles = bucketData.bundles.filter((b) => !assignedBundleIds?.has(b.unit_id));
+  const assignedCount = bucketData.bundles.length - freeBundles.length;
+  const allAssigned = freeBundles.length === 0 && bucketData.bundles.length > 0;
 
   const handleAddNew = () => {
     if (!freeBundles.length || !onCreateCrate) return;
@@ -180,14 +222,14 @@ function CategoryAssemblyRow({ cat, assignedBundleIds, draftCrates = [], onCreat
         <span className={`w-3 h-3 rounded-full flex-shrink-0 ${st.dot}`} />
 
         {/* Identity + metrics */}
-        <div className="min-w-[120px]">
-          <span className={`text-sm font-bold ${st.header}`}>{cat.category_label}</span>
+        <div className="min-w-[150px]">
+          <span className={`text-sm font-bold ${st.header}`}>{st.label}</span>
         </div>
         <span className="text-xs text-[#64748b]">
-          {cat.bundles.length} bundle{cat.bundles.length !== 1 ? 's' : ''}
+          {bucketData.bundles.length} bundle{bucketData.bundles.length !== 1 ? 's' : ''}
         </span>
-        <span className="text-sm font-semibold text-[#1e293b]">{fmt(cat.total_weight_kg)} kg</span>
-        <span className="text-xs text-[#94a3b8]">{fmt(cat.total_sqft, 0)} ft²</span>
+        <span className="text-sm font-semibold text-[#1e293b]">{fmt(bucketData.total_weight_kg)} kg</span>
+        <span className="text-xs text-[#94a3b8]">{fmt(bucketData.total_sqft, 0)} ft²</span>
         {assignedCount > 0 && (
           <span className="rounded-full border border-[#e2e8f0] bg-[#f1f5f9] px-2 py-0.5 text-[10px] font-medium text-[#64748b]">
             {assignedCount} in crate
@@ -224,13 +266,13 @@ function CategoryAssemblyRow({ cat, assignedBundleIds, draftCrates = [], onCreat
               )}
             </>
           )}
-          {cat.bundles.length > 0 && (
+          {bucketData.bundles.length > 0 && (
             <button
               type="button"
               onClick={() => setShowDetail((o) => !o)}
               className="rounded-full border border-[#e2e8f0] bg-[#f8fafc] px-3 py-1.5 text-[11px] font-medium text-[#64748b] hover:bg-[#f1f5f9] transition-colors whitespace-nowrap"
             >
-              {showDetail ? 'Hide' : `Details (${cat.bundles.length})`}
+              {showDetail ? 'Hide' : `Details (${bucketData.bundles.length})`}
             </button>
           )}
         </div>
@@ -239,8 +281,8 @@ function CategoryAssemblyRow({ cat, assignedBundleIds, draftCrates = [], onCreat
       {/* Detail: bundles grouped by flat */}
       {showDetail && (
         <div className="border-t border-[#f1f5f9] px-5 pb-4 pt-3 space-y-4">
-          {cat.flatGroups.map((fg, i) => (
-            <div key={`${fg.floor}||${fg.flat}` || i}>
+          {bucketData.flatGroups.map((fg, i) => (
+            <div key={fg._key || i}>
               <div className="flex items-baseline gap-1.5 mb-2">
                 <span className="text-[10px] uppercase tracking-[0.2em] text-[#94a3b8]">Flat</span>
                 <span className="text-sm font-bold text-[#0f172a]">{fg.flat}</span>
@@ -368,7 +410,7 @@ const DispatchInventoryExplorer = ({ projectId, dispatchSelection, onCreateCrate
     return () => abortRef.current?.abort();
   }, [fetchInventory]);
 
-  const categories = useMemo(() => aggregateByCategory(data), [data]);
+  const categories = useMemo(() => aggregateByBucket(data), [data]);
   const totals = data?.totals;
 
   return (
@@ -432,10 +474,10 @@ const DispatchInventoryExplorer = ({ projectId, dispatchSelection, onCreateCrate
               No pieces found for this dispatch selection.
             </div>
           ) : (
-            categories.map((cat) => (
-              <CategoryAssemblyRow
-                key={cat.category}
-                cat={cat}
+            categories.map((bucketData) => (
+              <BucketAssemblyRow
+                key={bucketData.bucket}
+                bucketData={bucketData}
                 assignedBundleIds={assignedBundleIds}
                 draftCrates={draftCrates}
                 onCreateCrate={onCreateCrate}

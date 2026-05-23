@@ -11,14 +11,23 @@ const STATUS_STYLE = {
   ERROR:       { label: 'Invalid',     cls: 'border-red-300    bg-red-100   text-red-700'       },
 };
 
-// ─── Category styles (shared subset) ─────────────────────────────────────────
+// ─── Crate class display ──────────────────────────────────────────────────────
+
+const CRATE_CLASS_STYLE = {
+  island_vertical:  { label: 'Island cassette',    cls: 'bg-blue-50 text-blue-700 border-blue-200'       },
+  kitchen_vertical: { label: 'Kitchen horizontal', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  vanity_vertical:  { label: 'Vanity horizontal',  cls: 'bg-violet-50 text-violet-700 border-violet-200'  },
+  misc:             { label: 'Misc',               cls: 'bg-slate-50 text-slate-600 border-slate-200'     },
+};
+
+// ─── Category styles (legacy — used for bundle-level pills inside a crate) ───
 
 const CAT = {
-  island:    { label: 'Island',   pill: 'bg-blue-100 text-blue-700',     dot: 'bg-blue-500'   },
+  island:    { label: 'Island',   pill: 'bg-blue-100 text-blue-700',       dot: 'bg-blue-500'   },
   perimeter: { label: 'Kitchen',  pill: 'bg-emerald-100 text-emerald-700', dot: 'bg-emerald-500' },
-  range:     { label: 'Range',    pill: 'bg-amber-100 text-amber-700',   dot: 'bg-amber-500'  },
-  vanity:    { label: 'Vanity',   pill: 'bg-violet-100 text-violet-700', dot: 'bg-violet-500' },
-  misc:      { label: 'Misc',     pill: 'bg-slate-100 text-slate-600',   dot: 'bg-slate-400'  },
+  range:     { label: 'Range',    pill: 'bg-amber-100 text-amber-700',     dot: 'bg-amber-500'  },
+  vanity:    { label: 'Vanity',   pill: 'bg-violet-100 text-violet-700',   dot: 'bg-violet-500' },
+  misc:      { label: 'Misc',     pill: 'bg-slate-100 text-slate-600',     dot: 'bg-slate-400'  },
 };
 const C = (cat) => CAT[cat] || CAT.misc;
 
@@ -156,6 +165,11 @@ function DraftCrateCard({ crate, onRemoveBundle, onDeleteCrate }) {
             <span className={`rounded-full border px-2.5 py-0.5 text-[10px] font-semibold ${statusStyle.cls}`}>
               {statusStyle.label}
             </span>
+            {crate.crate_class && CRATE_CLASS_STYLE[crate.crate_class] && (
+              <span className={`rounded-full border px-2.5 py-0.5 text-[10px] font-medium ${CRATE_CLASS_STYLE[crate.crate_class].cls}`}>
+                {CRATE_CLASS_STYLE[crate.crate_class].label}
+              </span>
+            )}
             {catEntries.map(([cat, n]) => (
               <span key={cat} className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${C(cat).pill}`}>
                 {C(cat).label}{n > 1 ? ` ×${n}` : ''}
@@ -212,7 +226,9 @@ function DraftCrateCard({ crate, onRemoveBundle, onDeleteCrate }) {
       {dims && (dims.internal_length > 0 || dims.external_length > 0) && (
         <div className="mx-5 mb-3 rounded-2xl border border-[#e8edf3] bg-[#f8fafc] px-4 py-3 space-y-1.5">
           <div className="text-[10px] uppercase tracking-[0.18em] text-[#94a3b8] mb-2">
-            Estimated dimensions — L × D × H (inches)
+            {crate.crate_class === 'island_vertical'
+              ? 'Estimated dimensions — L × D × H (cassette, inches)'
+              : 'Estimated dimensions — L × W × H (flat-lay, inches)'}
           </div>
           <DimBlock label="Internal" dims={dims} prefix="internal_" />
           <DimBlock label="External" dims={dims} prefix="external_" />
