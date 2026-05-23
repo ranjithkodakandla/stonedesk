@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import axios from 'axios';
 import { API_BASE, downloadPersistedDraftCratePlan } from '../utils/plannerUtils';
-import { DraftCrateCard, CratePlanSummary, fmt } from './DraftCrateWorkspace';
+import { DraftCrateCard, fmt } from './DraftCrateWorkspace';
 import { getCrateOperationalStatus } from '../utils/crateEstimator';
 import { usePlannerStore } from '../store/plannerStore';
 
@@ -52,7 +52,9 @@ const PlannerCrateTab = ({
 
   const handleDownload = () => {
     if (!projectId) return;
-    downloadPersistedDraftCratePlan(projectId).catch((err) => alert(err.message || 'Download failed.'));
+    downloadPersistedDraftCratePlan(projectId).catch((err) => {
+      alert(err.message || 'Could not download the saved plan from the server.');
+    });
   };
 
   const persistCrates = async (nextCrates) => {
@@ -138,6 +140,9 @@ const PlannerCrateTab = ({
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="text-xs uppercase tracking-[0.2em] text-[#64748b]">Step 3 — Crate contents</div>
+            <p className="mt-1 text-sm text-[#64748b]">
+              Last saved version from the server — unsaved changes in Dispatch &amp; build are not shown here.
+            </p>
             <div className="mt-1 text-xl font-semibold text-[#0f172a]">
               {crates.length} crate{crates.length !== 1 ? 's' : ''} in saved plan
               {draftCratePlan.saved_at && (
@@ -152,9 +157,10 @@ const PlannerCrateTab = ({
               type="button"
               onClick={handleDownload}
               disabled={busy}
+              title="Downloads the last saved plan from the server (unsaved Dispatch edits are not included)"
               className="rounded-full border border-[#059669] bg-[#f0fdf4] px-5 py-2 text-sm font-semibold text-[#059669] hover:bg-[#dcfce7] transition-colors"
             >
-              Download Plan
+              Download Saved Plan
             </button>
             {confirmDeleteAll ? (
               <>
@@ -188,11 +194,6 @@ const PlannerCrateTab = ({
           </div>
         </div>
       </div>
-
-      <CratePlanSummary
-        draftCrates={crates}
-        targetWeightKg={draftCratePlan.target_weight_kg || 1900}
-      />
 
       <div className="rounded-[24px] border border-[#dbe4f0] bg-white shadow-sm overflow-hidden">
         <div className="border-b border-[#e8edf3] px-5 py-3">

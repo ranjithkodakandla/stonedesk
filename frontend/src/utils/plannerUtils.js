@@ -68,21 +68,30 @@ export const downloadPersistedDraftCratePlan = async (projectId) => {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   } catch (err) {
-    let message = 'Download failed.';
+    const status = err.response?.status;
     const data = err.response?.data;
-    if (data instanceof Blob) {
+    let message = 'Could not download the saved plan. Check your connection and try again.';
+
+    if (status === 404) {
+      message = 'No saved crate plan found on the server. Save a plan in Dispatch & build first.';
+    } else if (data instanceof Blob) {
       try {
         const text = await data.text();
         const parsed = JSON.parse(text);
-        message = parsed.detail || message;
+        if (parsed.detail) {
+          message = typeof parsed.detail === 'string' ? parsed.detail : message;
+        }
       } catch {
-        /* ignore parse errors */
+        if (status === 500) {
+          message = 'Server error while building the export file. If this persists, redeploy the backend.';
+        }
       }
     } else if (data?.detail) {
       message = typeof data.detail === 'string' ? data.detail : message;
-    } else if (err.message) {
-      message = err.message;
+    } else if (err.message === 'Network Error') {
+      message = 'Network error — could not reach the server. Check that the API is running.';
     }
+
     throw new Error(message);
   }
 };

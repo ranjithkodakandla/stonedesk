@@ -36,7 +36,9 @@ const PlannerSummaryTab = ({ draftCratePlan = null, onEditPlan = null }) => {
 
   const handleDownload = () => {
     if (!projectId) return;
-    downloadPersistedDraftCratePlan(projectId).catch((err) => alert(err.message || 'Download failed — save a crate plan first.'));
+    downloadPersistedDraftCratePlan(projectId).catch((err) => {
+      alert(err.message || 'Could not download the saved plan from the server.');
+    });
   };
 
   if (isWorkspaceLoading) {
@@ -87,7 +89,7 @@ const PlannerSummaryTab = ({ draftCratePlan = null, onEditPlan = null }) => {
                   onClick={handleDownload}
                   className="rounded-full border border-[#059669] bg-[#f0fdf4] px-5 py-2 text-sm font-semibold text-[#059669] hover:bg-[#dcfce7] transition-colors"
                 >
-                  Download Plan
+                  Download Saved Plan
                 </button>
               </div>
             </div>
