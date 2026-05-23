@@ -53,9 +53,9 @@ function bucketForBundle(bundle) {
   return CATEGORY_TO_BUCKET_FALLBACK[bundle.category] || 'misc';
 }
 
-function fmt(n, d = 0) {
+function fmt(n) {
   if (n == null || isNaN(n)) return '—';
-  return Number(n).toLocaleString('en-AU', { minimumFractionDigits: d, maximumFractionDigits: d });
+  return Number(n).toLocaleString('en-AU', { maximumFractionDigits: 8 });
 }
 
 // ─── Aggregate response → 4 operational buckets (scope-level) ────────────────
@@ -136,7 +136,7 @@ function PartRow({ piece }) {
         {piece.thickness ? ` · ${piece.thickness}` : ''}
       </span>
       <span className="text-[11px] font-medium text-[#334155] flex-shrink-0 whitespace-nowrap">
-        {fmt(piece.weight_kg, 1)} kg
+        {fmt(piece.weight_kg)} kg
       </span>
     </div>
   );
@@ -171,8 +171,8 @@ function BundleCard({ bundle, assignedTo }) {
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-[#64748b]">
             {bundle.main_count > 0 && <span>{bundle.main_count} top{bundle.main_count !== 1 ? 's' : ''}</span>}
             {bundle.splash_count > 0 && <span className="text-amber-600">+{bundle.splash_count} splash</span>}
-            <span className="font-semibold text-[#1e293b]">{fmt(bundle.total_weight_kg, 1)} kg</span>
-            <span>{fmt(bundle.total_sqft, 1)} ft²</span>
+            <span className="font-semibold text-[#1e293b]">{fmt(bundle.total_weight_kg)} kg</span>
+            <span>{fmt(bundle.total_sqft)} ft²</span>
           </div>
           {bundle.main_part_nos?.length > 0 && (
             <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5">
@@ -247,8 +247,8 @@ function BucketAssemblyRow({ bucketData, assignedBundleIds, draftCrates = [], on
         <span className="text-xs text-[#64748b]">
           {bucketData.part_count} parts
         </span>
-        <span className="text-sm font-semibold text-[#1e293b]">{fmt(bucketData.total_weight_kg, 1)} kg</span>
-        <span className="text-xs text-[#94a3b8]">{fmt(bucketData.total_sqft, 1)} ft²</span>
+        <span className="text-sm font-semibold text-[#1e293b]">{fmt(bucketData.total_weight_kg)} kg</span>
+        <span className="text-xs text-[#94a3b8]">{fmt(bucketData.total_sqft)} ft²</span>
         {assignedPartCount > 0 && (
           <span className="rounded-full border border-[#e2e8f0] bg-[#f1f5f9] px-2 py-0.5 text-[10px] font-medium text-[#64748b]">
             {assignedPartCount} parts in crate
@@ -337,7 +337,7 @@ function TargetWeightControl({ value, onChange }) {
   const isPreset = WEIGHT_PRESETS.includes(value);
 
   const applyCustom = () => {
-    const n = parseInt(inputVal, 10);
+    const n = Number(inputVal);
     if (n > 0) onChange(n);
   };
 
@@ -463,8 +463,8 @@ const DispatchInventoryExplorer = ({ projectId, dispatchSelection, onCreateCrate
           <span className="text-xs font-semibold uppercase tracking-wide text-[#94a3b8] mr-1 self-center">In scope</span>
           {[
             { l: 'Parts',  v: totals.part_count                       },
-            { l: 'Weight', v: `${fmt(totals.total_weight_kg, 1)} kg`  },
-            { l: 'Sq ft',  v: fmt(totals.total_sqft, 1)               },
+            { l: 'Weight', v: `${fmt(totals.total_weight_kg)} kg`  },
+            { l: 'Sq ft',  v: fmt(totals.total_sqft)               },
           ].map(({ l, v }) => (
             <span key={l} className="flex flex-col items-center rounded-xl border border-[#e8edf3] bg-white px-3 py-1.5 min-w-[64px] text-center">
               <span className="text-[9px] uppercase tracking-wide text-[#94a3b8] leading-none">{l}</span>

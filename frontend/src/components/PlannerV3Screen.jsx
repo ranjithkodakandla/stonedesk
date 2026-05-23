@@ -51,6 +51,8 @@ const PlannerV3Screen = ({ projectId, onClose = () => {} }) => {
   const [draftCrates, setDraftCrates] = useState([]);
   const [targetWeightKg, setTargetWeightKg] = useState(1900);
   const [savedAt, setSavedAt] = useState(null);
+  // When a saved plan is found on mount, hold it here until the user decides
+  const [savedPlanCandidate, setSavedPlanCandidate] = useState(null);
 
   // ── Load saved plan on mount ──────────────────────────────────────────────
   useEffect(() => {
@@ -59,14 +61,26 @@ const PlannerV3Screen = ({ projectId, onClose = () => {} }) => {
       .then((res) => {
         const plan = res.data?.plan;
         if (!plan || !plan.draft_crates?.length) return;
-        setDraftCrates(plan.draft_crates);
-        if (plan.target_weight_kg) setTargetWeightKg(plan.target_weight_kg);
-        if (plan.dispatch_selection) setDispatchSelection(plan.dispatch_selection);
-        setSavedAt(plan.saved_at);
-        setLastMessage(`Restored saved plan from ${new Date(plan.saved_at).toLocaleString('en-AU', { dateStyle: 'short', timeStyle: 'short' })}.`);
+        // Don't auto-restore — show a dialog so the user can choose
+        setSavedPlanCandidate(plan);
       })
       .catch(() => {});
   }, [projectId]);
+
+  const handleLoadSavedPlan = useCallback(() => {
+    if (!savedPlanCandidate) return;
+    setDraftCrates(savedPlanCandidate.draft_crates);
+    if (savedPlanCandidate.target_weight_kg) setTargetWeightKg(savedPlanCandidate.target_weight_kg);
+    if (savedPlanCandidate.dispatch_selection) setDispatchSelection(savedPlanCandidate.dispatch_selection);
+    setSavedAt(savedPlanCandidate.saved_at);
+    setSavedPlanCandidate(null);
+    setLastMessage(`Loaded plan saved ${new Date(savedPlanCandidate.saved_at).toLocaleString('en-AU', { dateStyle: 'short', timeStyle: 'short' })}.`);
+  }, [savedPlanCandidate]);
+
+  const handleDiscardSavedPlan = useCallback(() => {
+    setSavedPlanCandidate(null);
+    setLastMessage('Starting fresh — saved plan discarded from view.');
+  }, []);
 
   // Map of unit_id → crateId for all bundles currently in a draft crate (Step 3F)
   const assignedBundleIds = useMemo(() => {
@@ -161,10 +175,10 @@ const PlannerV3Screen = ({ projectId, onClose = () => {} }) => {
         const c = newCrates[0];
         setLastMessage(
           `${c.id} created — ${c.bundle_count} bundle${c.bundle_count !== 1 ? 's' : ''}, ` +
-          `${Math.round(c.total_weight_kg).toLocaleString()} kg.`,
+          `${c.total_weight_kg.toLocaleString('en-AU')} kg.`,
         );
       } else {
-        const lines = newCrates.map((c) => `${c.id} — ${Math.round(c.total_weight_kg).toLocaleString()} kg`).join(' · ');
+        const lines = newCrates.map((c) => `${c.id} — ${c.total_weight_kg.toLocaleString('en-AU')} kg`).join(' · ');
         setLastMessage(`Created ${newCrates.length} draft crates: ${lines}`);
       }
       return all;
@@ -216,12 +230,33 @@ const PlannerV3Screen = ({ projectId, onClose = () => {} }) => {
         const updated = recomputeCrate({ ...c, bundles: merged });
         setLastMessage(
           `${crateId} updated — ${updated.bundle_count} bundle${updated.bundle_count !== 1 ? 's' : ''}, ` +
-          `${Math.round(updated.total_weight_kg).toLocaleString()} kg.`,
+          `${updated.total_weight_kg.toLocaleString('en-AU')} kg.`,
         );
         return updated;
       }),
     );
   }, []);
+
+  // Download XLSX export of the current in-memory plan
+  const handleDownloadXlsx = useCallback(() => {
+    if (!projectId || !draftCrates.length) return;
+    axios.post(`${API_BASE}/projects/${projectId}/draft-crate-plan/export`, {
+      draft_crates: draftCrates,
+    }, { responseType: 'blob' }).then((res) => {
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url;
+      const disp = res.headers['content-disposition'] || '';
+      const match = disp.match(/filename="([^"]+)"/);
+      a.download = match ? match[1] : `CratePlan.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }).catch(() => {
+      setLastMessage('Export failed — check connection and retry.');
+    });
+  }, [projectId, draftCrates]);
 
   const legacyPlan = crates.length > 0 && crates.some((c) => (c.packing_mode || '') !== 'v3');
 
@@ -251,6 +286,38 @@ const PlannerV3Screen = ({ projectId, onClose = () => {} }) => {
         </p>
       </div>
 
+      {/* Load saved plan dialog — shown when a saved plan is found on mount */}
+      {savedPlanCandidate && (
+        <div className="rounded-[24px] border border-blue-200 bg-blue-50 px-5 py-4 shadow-sm">
+          <div className="flex items-start gap-4">
+            <div className="flex-1">
+              <div className="font-semibold text-blue-900">Saved crate plan found</div>
+              <div className="mt-1 text-sm text-blue-700">
+                Saved {new Date(savedPlanCandidate.saved_at).toLocaleString('en-AU', { dateStyle: 'medium', timeStyle: 'short' })}
+                {' — '}
+                {savedPlanCandidate.draft_crates?.length ?? 0} crate{savedPlanCandidate.draft_crates?.length !== 1 ? 's' : ''}
+              </div>
+            </div>
+            <div className="flex gap-2 flex-shrink-0">
+              <button
+                type="button"
+                onClick={handleLoadSavedPlan}
+                className="rounded-full border border-blue-600 bg-blue-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-blue-700 transition-colors whitespace-nowrap"
+              >
+                Load saved plan
+              </button>
+              <button
+                type="button"
+                onClick={handleDiscardSavedPlan}
+                className="rounded-full border border-blue-200 bg-white px-4 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50 transition-colors whitespace-nowrap"
+              >
+                Start fresh
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Step 1 — Dispatch scope selection */}
       <DispatchSelectionPanel
         projectId={projectId}
@@ -279,7 +346,9 @@ const PlannerV3Screen = ({ projectId, onClose = () => {} }) => {
         onRemoveBundle={handleRemoveBundleFromCrate}
         onDeleteCrate={handleDeleteDraftCrate}
         onSavePlan={handleSavePlan}
+        onDownloadXlsx={draftCrates.length > 0 ? handleDownloadXlsx : null}
         savedAt={savedAt}
+        targetWeightKg={targetWeightKg}
       />
 
       {/* Operational geometry reviews (feature-flagged) */}
