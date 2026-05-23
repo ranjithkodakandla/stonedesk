@@ -52,20 +52,48 @@ export const formatNumber = (value, digits = 2) => round2(value).toFixed(digits)
 
 /** Download persisted draft crate plan XLSX (GET — reads Mongo saved plan only). */
 export const downloadPersistedDraftCratePlan = async (projectId) => {
-  const res = await axios.get(
-    `${API_BASE}/projects/${projectId}/draft-crate-plan/export`,
-    { responseType: 'blob' },
-  );
-  const url = URL.createObjectURL(res.data);
-  const a = document.createElement('a');
-  a.href = url;
-  const disp = res.headers['content-disposition'] || '';
-  const match = disp.match(/filename="([^"]+)"/);
-  a.download = match ? match[1] : 'CratePlan.xlsx';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  try {
+    const res = await axios.get(
+      `${API_BASE}/projects/${projectId}/draft-crate-plan/export`,
+      { responseType: 'blob' },
+    );
+    const url = URL.createObjectURL(res.data);
+    const a = document.createElement('a');
+    a.href = url;
+    const disp = res.headers['content-disposition'] || '';
+    const match = disp.match(/filename="([^"]+)"/);
+    a.download = match ? match[1] : 'CratePlan.xlsx';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    const status = err.response?.status;
+    const data = err.response?.data;
+    let message = 'Could not download the saved plan. Check your connection and try again.';
+
+    if (status === 404) {
+      message = 'No saved crate plan found on the server. Save a plan in Dispatch & build first.';
+    } else if (data instanceof Blob) {
+      try {
+        const text = await data.text();
+        const parsed = JSON.parse(text);
+        if (parsed.detail) {
+          message = typeof parsed.detail === 'string' ? parsed.detail : message;
+        }
+      } catch {
+        if (status === 500) {
+          message = 'Server error while building the export file. If this persists, redeploy the backend.';
+        }
+      }
+    } else if (data?.detail) {
+      message = typeof data.detail === 'string' ? data.detail : message;
+    } else if (err.message === 'Network Error') {
+      message = 'Network error — could not reach the server. Check that the API is running.';
+    }
+
+    throw new Error(message);
+  }
 };
 
 const _COLOR_DENSITIES = {

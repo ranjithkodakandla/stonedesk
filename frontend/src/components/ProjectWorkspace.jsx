@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import Logo from './Logo';
 import EntryForm from './EntryForm';
@@ -64,15 +64,31 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
     initialize(projectId);
   }, [initialize, projectId]);
 
-  useEffect(() => {
-    if (!projectId) return;
-    axios.get(`${API_BASE}/projects/${projectId}/draft-crate-plan`)
+  const refreshSavedDraftPlan = useCallback(() => {
+    if (!projectId) return Promise.resolve(null);
+    return axios.get(`${API_BASE}/projects/${projectId}/draft-crate-plan`)
       .then((res) => {
         const plan = res.data?.plan;
-        if (plan?.draft_crates?.length) setDraftCratePlan(plan);
+        if (plan?.draft_crates?.length) {
+          setDraftCratePlan(plan);
+          return plan;
+        }
+        setDraftCratePlan(null);
+        return null;
       })
-      .catch(() => {});
+      .catch(() => null);
   }, [projectId]);
+
+  useEffect(() => {
+    refreshSavedDraftPlan();
+  }, [refreshSavedDraftPlan]);
+
+  useEffect(() => {
+    if (mainTab !== 'planning') return;
+    if (activeTab === 'summary' || activeTab === 'crate-plan') {
+      refreshSavedDraftPlan();
+    }
+  }, [mainTab, activeTab, refreshSavedDraftPlan]);
 
   const hasPlan = crates.length > 0;
   const hasSavedDraftPlan = (draftCratePlan?.draft_crates?.length ?? 0) > 0;

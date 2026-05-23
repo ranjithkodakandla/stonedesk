@@ -698,16 +698,28 @@ class PlannerPayloadUpdate(BaseModel):
 
 app = FastAPI()
 
+_cors_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://stonedesk-wwrc.vercel.app",
+]
+_extra_origins = os.getenv("CORS_ORIGINS", "")
+if _extra_origins:
+    _cors_origins.extend(o.strip() for o in _extra_origins.split(",") if o.strip())
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "https://stonedesk-wwrc.vercel.app",
-    ],
+    allow_origins=_cors_origins,
+    allow_origin_regex=r"https://stonedesk-[a-z0-9-]+\.vercel\.app",
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Perf-Validation", "X-Perf-Mongo", "X-Perf-Backend-Total"],
+    expose_headers=[
+        "Content-Disposition",
+        "X-Perf-Validation",
+        "X-Perf-Mongo",
+        "X-Perf-Backend-Total",
+    ],
 )
 
 
@@ -1985,8 +1997,8 @@ def _build_draft_crate_plan_xlsx_response(project_name: str, draft_crates: List)
 
     _auto_width(ws3)
 
-    # ── Sheet 4: Warnings / Insights ──────────────────────────────────────────
-    ws4 = wb.create_sheet("Warnings / Insights")
+    # Excel sheet titles cannot contain / \ ? * [ ] — use "Warnings Insights" (display label in UI)
+    ws4 = wb.create_sheet("Warnings Insights")
     ws4.append(["Crate ID", "Type", "Warning"])
     _header_fill(ws4, 1)
 
@@ -2020,8 +2032,13 @@ def _build_draft_crate_plan_xlsx_response(project_name: str, draft_crates: List)
 @app.get("/api/projects/{project_id}/draft-crate-plan/export")
 def export_saved_draft_crate_plan_xlsx(project_id: int):
     """Export the persisted saved crate plan (single source of truth — Mongo only)."""
-    project_name, draft_crates = _load_saved_draft_crates_for_export(project_id)
-    return _build_draft_crate_plan_xlsx_response(project_name, draft_crates)
+    try:
+        project_name, draft_crates = _load_saved_draft_crates_for_export(project_id)
+        return _build_draft_crate_plan_xlsx_response(project_name, draft_crates)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Export failed: {exc}") from exc
 
 
 @app.post("/api/projects/{project_id}/draft-crate-plan/export")
