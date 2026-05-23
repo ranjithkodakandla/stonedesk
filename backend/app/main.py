@@ -1483,6 +1483,8 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
             "id": p.get("id"),
             "part_no": str(p.get("part_no", "") or ""),
             "part": str(p.get("part", "") or ""),
+            "drawing": str(p.get("drawing", "") or ""),
+            "unit": str(p.get("unit", "") or ""),
             "length": round(parse_float(p.get("length")), 1),
             "width": round(parse_float(p.get("width")), 1),
             "thickness": str(p.get("thickness", "") or thickness),
@@ -1720,6 +1722,41 @@ def _family_split_reason(
     if snippets:
         return snippets[0]
     return "Split across crates — inspect packing_warnings / planner_notes on the listed crates for details."
+
+
+@app.post("/api/projects/{project_id}/draft-crate-plan")
+def save_draft_crate_plan(project_id: int, body: Dict):
+    """Persist the current manual crate plan (draft crates + filters) to the project document."""
+    now = utc_now()
+    plan = {
+        "target_weight_kg": body.get("target_weight_kg", 1900),
+        "dispatch_selection": body.get("dispatch_selection") or {},
+        "draft_crates": body.get("draft_crates") or [],
+        "saved_at": now,
+    }
+    projects_col.update_one(
+        {"id": project_id},
+        {"$set": {"planner_v3_draft_crate_plan": plan}},
+    )
+    return {"saved": True, "saved_at": now}
+
+
+@app.get("/api/projects/{project_id}/draft-crate-plan")
+def load_draft_crate_plan(project_id: int):
+    """Return the last saved manual crate plan, or null if none exists."""
+    doc = projects_col.find_one({"id": project_id}, {"planner_v3_draft_crate_plan": 1, "_id": 0})
+    plan = (doc or {}).get("planner_v3_draft_crate_plan")
+    return {"plan": plan}
+
+
+@app.delete("/api/projects/{project_id}/draft-crate-plan")
+def delete_draft_crate_plan(project_id: int):
+    """Remove a saved crate plan so the workspace starts fresh."""
+    projects_col.update_one(
+        {"id": project_id},
+        {"$unset": {"planner_v3_draft_crate_plan": ""}},
+    )
+    return {"deleted": True}
 
 
 @app.get("/api/projects/{project_id}/families")

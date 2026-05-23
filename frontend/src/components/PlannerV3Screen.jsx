@@ -1,4 +1,6 @@
-import React, { useMemo, useState, useCallback } from 'react';
+import React, { useMemo, useState, useCallback, useEffect } from 'react';
+import axios from 'axios';
+import { API_BASE } from '../utils/plannerUtils';
 import DispatchSelectionPanel from './DispatchSelectionPanel';
 import DispatchInventoryExplorer from './DispatchInventoryExplorer';
 import DraftCrateWorkspace from './DraftCrateWorkspace';
@@ -48,6 +50,23 @@ const PlannerV3Screen = ({ projectId, onClose = () => {} }) => {
   // ── Draft crate state (Step 3A) ──────────────────────────────────────────
   const [draftCrates, setDraftCrates] = useState([]);
   const [targetWeightKg, setTargetWeightKg] = useState(1900);
+  const [savedAt, setSavedAt] = useState(null);
+
+  // ── Load saved plan on mount ──────────────────────────────────────────────
+  useEffect(() => {
+    if (!projectId) return;
+    axios.get(`${API_BASE}/projects/${projectId}/draft-crate-plan`)
+      .then((res) => {
+        const plan = res.data?.plan;
+        if (!plan || !plan.draft_crates?.length) return;
+        setDraftCrates(plan.draft_crates);
+        if (plan.target_weight_kg) setTargetWeightKg(plan.target_weight_kg);
+        if (plan.dispatch_selection) setDispatchSelection(plan.dispatch_selection);
+        setSavedAt(plan.saved_at);
+        setLastMessage(`Restored saved plan from ${new Date(plan.saved_at).toLocaleString('en-AU', { dateStyle: 'short', timeStyle: 'short' })}.`);
+      })
+      .catch(() => {});
+  }, [projectId]);
 
   // Map of unit_id → crateId for all bundles currently in a draft crate (Step 3F)
   const assignedBundleIds = useMemo(() => {
@@ -171,6 +190,21 @@ const PlannerV3Screen = ({ projectId, onClose = () => {} }) => {
     setDraftCrates((prev) => prev.filter((c) => c.id !== crateId));
   }, []);
 
+  // Step 3G — Persist the current plan to the backend
+  const handleSavePlan = useCallback(() => {
+    if (!projectId || !draftCrates.length) return;
+    axios.post(`${API_BASE}/projects/${projectId}/draft-crate-plan`, {
+      target_weight_kg: targetWeightKg,
+      dispatch_selection: dispatchSelection,
+      draft_crates: draftCrates,
+    }).then((res) => {
+      setSavedAt(res.data.saved_at);
+      setLastMessage('Crate plan saved.');
+    }).catch(() => {
+      setLastMessage('Save failed — check connection and retry.');
+    });
+  }, [projectId, draftCrates, targetWeightKg, dispatchSelection]);
+
   // Step 4B/4C — Add bundles to an existing draft crate (dedup by unit_id, then recompute)
   const handleAddBundlesToCrate = useCallback((crateId, newBundles) => {
     if (!newBundles?.length) return;
@@ -244,6 +278,8 @@ const PlannerV3Screen = ({ projectId, onClose = () => {} }) => {
         draftCrates={draftCrates}
         onRemoveBundle={handleRemoveBundleFromCrate}
         onDeleteCrate={handleDeleteDraftCrate}
+        onSavePlan={handleSavePlan}
+        savedAt={savedAt}
       />
 
       {/* Operational geometry reviews (feature-flagged) */}

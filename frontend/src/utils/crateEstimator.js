@@ -321,7 +321,7 @@ export function estimateHorizontalLayeredDimensions(pieces) {
 
 // ─── Operational warnings ────────────────────────────────────────────────────
 
-export function generateCrateWarnings({ totalWeightKg, dimensions, categoryMix, bundleCount, islandSplashViolation = false, hadSplashStripped = false, crateClass = null }) {
+export function generateCrateWarnings({ totalWeightKg, dimensions, partTypeMix, bundleCount, islandSplashViolation = false, hadSplashStripped = false, crateClass = null }) {
   const warnings = [];
   if (!bundleCount || totalWeightKg === 0) return warnings;
 
@@ -333,18 +333,19 @@ export function generateCrateWarnings({ totalWeightKg, dimensions, categoryMix, 
   }
 
   if (totalWeightKg < 300) {
-    warnings.push('Underloaded — consider adding more bundles before shipping.');
+    warnings.push('Underloaded — consider adding more pieces before shipping.');
   }
   if (totalWeightKg > 5000) {
     warnings.push(`Heavy load — ${Math.round(totalWeightKg).toLocaleString()} kg. Verify forklift capacity.`);
   }
 
-  const cats = Object.keys(categoryMix || {}).filter((k) => (categoryMix[k] || 0) > 0);
-  if (cats.length > 1) {
-    const isKitchenMix = cats.length === 2 && cats.includes('perimeter') && cats.includes('range');
-    if (!isKitchenMix) {
-      warnings.push('Mixed-category crate — confirm operational grouping with site team.');
-    }
+  // Warn if crate mixes parts from different crate classes (e.g. island tops with vanity tops).
+  const ptm = partTypeMix || {};
+  const crateClasses = new Set(
+    Object.keys(ptm).filter((k) => (ptm[k] || 0) > 0).map((pt) => PART_TYPE_TO_CRATE_CLASS[pt] || 'misc'),
+  );
+  if (crateClasses.size > 1) {
+    warnings.push('Mixed-type crate — confirm operational grouping with site team.');
   }
 
   const isIslandCrate = crateClass === 'island_vertical';
@@ -365,14 +366,28 @@ export function generateCrateWarnings({ totalWeightKg, dimensions, categoryMix, 
 // ─── Draft crate builder ─────────────────────────────────────────────────────
 
 export function buildDraftCrate(id, selectedBundles) {
-  const allPieces     = selectedBundles.flatMap((b) => b.pieces || []);
-  const totalWeightKg = r1(selectedBundles.reduce((s, b) => s + (b.total_weight_kg || 0), 0));
-  const totalSqft     = r1(selectedBundles.reduce((s, b) => s + (b.total_sqft     || 0), 0));
-  const partCount     = selectedBundles.reduce((s, b) => s + (b.part_count || 0), 0);
-  const categoryMix   = selectedBundles.reduce((acc, b) => {
-    acc[b.category] = (acc[b.category] || 0) + 1;
-    return acc;
-  }, {});
+  const allPieces = selectedBundles.flatMap((b) => b.pieces || []);
+
+  // Metrics computed from individual pieces — never from bundle aggregates.
+  // Falls back to bundle-level fields when piece detail is absent.
+  const hasPieceDetail = allPieces.length > 0;
+  const totalWeightKg = hasPieceDetail
+    ? r1(allPieces.reduce((s, p) => s + (p.weight_kg || 0), 0))
+    : r1(selectedBundles.reduce((s, b) => s + (b.total_weight_kg || 0), 0));
+  const totalSqft = hasPieceDetail
+    ? r1(allPieces.reduce((s, p) => s + (p.sqft || 0), 0))
+    : r1(selectedBundles.reduce((s, b) => s + (b.total_sqft || 0), 0));
+  const partCount = hasPieceDetail
+    ? allPieces.length
+    : selectedBundles.reduce((s, b) => s + (b.part_count || 0), 0);
+
+  // Part Type mix — keyed by standardized Part Type name (e.g. "Kitchen - Island Tops").
+  // Drives chips, warnings, and operational status — NEVER uses legacy category fields.
+  const partTypeMix = {};
+  for (const p of allPieces) {
+    const pt = String(p.part || '').trim() || '(Unknown)';
+    partTypeMix[pt] = (partTypeMix[pt] || 0) + 1;
+  }
 
   // Determine crate class to select the correct geometry model.
   const crateClass = inferCrateClassFromBundles(selectedBundles);
@@ -394,8 +409,8 @@ export function buildDraftCrate(id, selectedBundles) {
   const warnings = generateCrateWarnings({
     totalWeightKg,
     dimensions,
-    categoryMix,
-    bundleCount:          selectedBundles.length,
+    partTypeMix,
+    bundleCount: selectedBundles.length,
     islandSplashViolation,
     hadSplashStripped,
     crateClass,
@@ -408,7 +423,7 @@ export function buildDraftCrate(id, selectedBundles) {
     part_count:              partCount,
     total_weight_kg:         totalWeightKg,
     total_sqft:              totalSqft,
-    category_mix:            categoryMix,
+    part_type_mix:           partTypeMix,
     crate_class:             crateClass,
     island_splash_violation: islandSplashViolation,
     dimensions,
@@ -431,10 +446,13 @@ export function recomputeCrate(crate) {
 export function getCrateOperationalStatus(crate) {
   if (crate.island_splash_violation) return 'ERROR';
   const w = crate.total_weight_kg || 0;
-  const cats = Object.keys(crate.category_mix || {}).filter((k) => (crate.category_mix[k] || 0) > 0);
   if (w > 2200) return 'OVERWEIGHT';
-  const isKitchenMix = cats.length === 2 && cats.includes('perimeter') && cats.includes('range');
-  if (cats.length > 1 && !isKitchenMix) return 'REVIEW';
+  // REVIEW if parts from different crate classes are mixed (e.g. island tops + vanity tops).
+  const ptm = crate.part_type_mix || {};
+  const crateClasses = new Set(
+    Object.keys(ptm).filter((k) => (ptm[k] || 0) > 0).map((pt) => PART_TYPE_TO_CRATE_CLASS[pt] || 'misc'),
+  );
+  if (crateClasses.size > 1) return 'REVIEW';
   if (w < 1400) return 'UNDERLOADED';
   return 'READY';
 }

@@ -14,22 +14,49 @@ const STATUS_STYLE = {
 // ─── Crate class display ──────────────────────────────────────────────────────
 
 const CRATE_CLASS_STYLE = {
-  island_vertical:  { label: 'Island cassette',    cls: 'bg-blue-50 text-blue-700 border-blue-200'       },
+  island_vertical:  { label: 'Island cassette',    cls: 'bg-blue-50 text-blue-700 border-blue-200'          },
   kitchen_vertical: { label: 'Kitchen horizontal', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-  vanity_vertical:  { label: 'Vanity horizontal',  cls: 'bg-violet-50 text-violet-700 border-violet-200'  },
-  misc:             { label: 'Misc',               cls: 'bg-slate-50 text-slate-600 border-slate-200'     },
+  vanity_vertical:  { label: 'Vanity horizontal',  cls: 'bg-violet-50 text-violet-700 border-violet-200'    },
+  misc:             { label: 'Misc',               cls: 'bg-slate-50 text-slate-600 border-slate-200'       },
 };
 
-// ─── Category styles (legacy — used for bundle-level pills inside a crate) ───
+// ─── Part Type → bucket + display ────────────────────────────────────────────
 
-const CAT = {
-  island:    { label: 'Island',   pill: 'bg-blue-100 text-blue-700',       dot: 'bg-blue-500'   },
-  perimeter: { label: 'Kitchen',  pill: 'bg-emerald-100 text-emerald-700', dot: 'bg-emerald-500' },
-  range:     { label: 'Range',    pill: 'bg-amber-100 text-amber-700',     dot: 'bg-amber-500'  },
-  vanity:    { label: 'Vanity',   pill: 'bg-violet-100 text-violet-700',   dot: 'bg-violet-500' },
-  misc:      { label: 'Misc',     pill: 'bg-slate-100 text-slate-600',     dot: 'bg-slate-400'  },
+const PART_TYPE_BUCKET = {
+  'Kitchen - Island Tops':     'kitchen_islands',
+  'Kitchen - Perimeter Tops':  'kitchen',
+  'Kitchen - Range Tops':      'kitchen',
+  'Kitchen - Back Splash':     'kitchen',
+  'Kitchen - Side Splash':     'kitchen',
+  'Vanity - Top':              'vanity',
+  'Vanity - Back Splash':      'vanity',
+  'Vanity - Side Splash':      'vanity',
+  'Misc - Full Height Splash': 'misc',
+  'Misc - Window Sill':        'misc',
+  'Misc - Bar Top':            'misc',
 };
-const C = (cat) => CAT[cat] || CAT.misc;
+
+const BUCKET_PILL = {
+  kitchen_islands: 'bg-blue-100 text-blue-700',
+  kitchen:         'bg-emerald-100 text-emerald-700',
+  vanity:          'bg-violet-100 text-violet-700',
+  misc:            'bg-slate-100 text-slate-600',
+};
+
+const BUCKET_DOT = {
+  kitchen_islands: 'bg-blue-500',
+  kitchen:         'bg-emerald-500',
+  vanity:          'bg-violet-500',
+  misc:            'bg-slate-400',
+};
+
+function partTypePill(pt) {
+  return BUCKET_PILL[PART_TYPE_BUCKET[pt] || 'misc'] || BUCKET_PILL.misc;
+}
+
+function bucketDot(bk) {
+  return BUCKET_DOT[bk || 'misc'] || BUCKET_DOT.misc;
+}
 
 function fmt(n, d = 0) {
   if (n == null || isNaN(n)) return '—';
@@ -50,52 +77,71 @@ function DimBlock({ label, dims, prefix }) {
   );
 }
 
-// ─── Part row inside bundle ───────────────────────────────────────────────────
+// ─── Part row inside crate (full detail) ─────────────────────────────────────
 
 function PartRowInCrate({ piece }) {
   const isMain = piece.role === 'main';
+  const meta = [piece.drawing, piece.unit].filter(Boolean).join(' · ');
   return (
-    <div className="flex items-baseline gap-2 py-1 border-b border-[#f8fafc] last:border-0">
-      <span className={`flex-shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${
+    <div className="grid gap-x-3 gap-y-0.5 py-1.5 border-b border-[#f8fafc] last:border-0"
+         style={{ gridTemplateColumns: 'auto 1fr auto auto auto' }}>
+      {/* Role */}
+      <span className={`self-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${
         isMain ? 'bg-[#eff6ff] text-[#1d4ed8]' : 'bg-amber-50 text-amber-700'
       }`}>
         {isMain ? 'Top' : 'Splash'}
       </span>
-      <span className="font-mono text-[11px] text-[#334155] flex-1 min-w-0 truncate">
-        {piece.part_no || piece.part || '—'}
+      {/* Part Type + Part # + Drawing/Unit */}
+      <div className="min-w-0">
+        <div className="text-[11px] font-semibold text-[#1e293b] truncate">{piece.part || '—'}</div>
+        <div className="flex gap-2 text-[10px] text-[#94a3b8]">
+          {piece.part_no && <span className="font-mono">{piece.part_no}</span>}
+          {meta && <span>{meta}</span>}
+        </div>
+      </div>
+      {/* Dimensions */}
+      <span className="self-center text-[11px] text-[#64748b] whitespace-nowrap">
+        {piece.length > 0 && piece.width > 0 ? `${fmt(piece.length)} × ${fmt(piece.width)}″` : '—'}
       </span>
-      <span className="text-[11px] text-[#64748b] flex-shrink-0 whitespace-nowrap">
-        {piece.length > 0 && piece.width > 0 ? `${fmt(piece.length)} × ${fmt(piece.width)}″` : ''}
-      </span>
-      <span className="text-[11px] font-medium text-[#334155] flex-shrink-0 whitespace-nowrap">
+      {/* Weight */}
+      <span className="self-center text-[11px] font-medium text-[#334155] whitespace-nowrap">
         {fmt(piece.weight_kg, 1)} kg
+      </span>
+      {/* Sqft */}
+      <span className="self-center text-[11px] text-[#64748b] whitespace-nowrap">
+        {fmt(piece.sqft, 1)} ft²
       </span>
     </div>
   );
 }
 
-// ─── Bundle row inside draft crate ───────────────────────────────────────────
+// ─── Bundle group inside draft crate ─────────────────────────────────────────
 
 function BundleInCrate({ bundle, crateId, onRemove }) {
   const [showParts, setShowParts] = useState(false);
-  const st = C(bundle.category);
+  const bk = bundle.part_bucket || 'misc';
+  // Derive displayed Part Types from pieces (full names, no aliases)
+  const partTypes = [...new Set(
+    (bundle.pieces || []).map((p) => String(p.part || '').trim()).filter(Boolean),
+  )];
 
   return (
     <div className="rounded-xl border border-[#e8edf3] bg-white overflow-hidden">
       <div className="flex items-start gap-2.5 px-3 py-2.5">
-        <span className={`mt-0.5 flex-shrink-0 w-1.5 h-1.5 rounded-full ${st.dot}`} />
+        <span className={`mt-1 flex-shrink-0 w-1.5 h-1.5 rounded-full ${bucketDot(bk)}`} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="font-mono text-xs font-semibold text-[#1e293b]">
               {bundle.family_id || bundle.unit_id?.slice(3, 11) || '—'}
             </span>
-            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${st.pill}`}>
-              {st.label}
-            </span>
+            {partTypes.map((pt) => (
+              <span key={pt} className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${partTypePill(pt)}`}>
+                {pt}
+              </span>
+            ))}
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-[#64748b]">
-            {bundle.main_count > 0 && <span>{bundle.main_count} top{bundle.main_count !== 1 ? 's' : ''}</span>}
-            {bundle.splash_count > 0 && <span className="text-amber-600">+{bundle.splash_count} splash</span>}
+            <span>{bundle.part_count || bundle.pieces?.length || 0} parts</span>
             <span className="font-semibold text-[#1e293b]">{fmt(bundle.total_weight_kg, 1)} kg</span>
             <span>{fmt(bundle.total_sqft, 1)} ft²</span>
           </div>
@@ -115,7 +161,7 @@ function BundleInCrate({ bundle, crateId, onRemove }) {
             type="button"
             onClick={() => onRemove(crateId, bundle.unit_id)}
             className="rounded-lg border border-[#fee2e2] bg-[#fff5f5] px-2 py-1 text-[10px] font-medium text-red-500 hover:bg-red-50 transition-colors"
-            title="Return bundle to inventory"
+            title="Return to inventory"
           >
             Return
           </button>
@@ -147,11 +193,12 @@ function WarningChip({ text }) {
 // ─── Draft crate card ─────────────────────────────────────────────────────────
 
 function DraftCrateCard({ crate, onRemoveBundle, onDeleteCrate }) {
-  const [showBundles, setShowBundles] = useState(false);
+  const [showContents, setShowContents] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const dims = crate.dimensions;
-  const catEntries = Object.entries(crate.category_mix || {}).filter(([, n]) => n > 0);
+  const ptm = crate.part_type_mix || {};
+  const ptEntries = Object.entries(ptm).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
   const status = getCrateOperationalStatus(crate);
   const statusStyle = STATUS_STYLE[status] || STATUS_STYLE.READY;
 
@@ -170,9 +217,10 @@ function DraftCrateCard({ crate, onRemoveBundle, onDeleteCrate }) {
                 {CRATE_CLASS_STYLE[crate.crate_class].label}
               </span>
             )}
-            {catEntries.map(([cat, n]) => (
-              <span key={cat} className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${C(cat).pill}`}>
-                {C(cat).label}{n > 1 ? ` ×${n}` : ''}
+            {/* Full Part Type chips — no aliases, no shortened names */}
+            {ptEntries.map(([pt, n]) => (
+              <span key={pt} className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${partTypePill(pt)}`}>
+                {pt}{n > 1 ? ` ×${n}` : ''}
               </span>
             ))}
           </div>
@@ -183,33 +231,16 @@ function DraftCrateCard({ crate, onRemoveBundle, onDeleteCrate }) {
           </div>
         </div>
 
-        {/* Actions */}
+        {/* Actions — only toggle + delete trigger (no confirm here) */}
         <div className="flex items-center gap-2 flex-shrink-0">
           <button
             type="button"
-            onClick={() => setShowBundles((s) => !s)}
-            className="rounded-full border border-[#e2e8f0] bg-[#f8fafc] px-3 py-1.5 text-xs font-medium text-[#475569] hover:bg-[#f1f5f9] transition-colors"
+            onClick={() => setShowContents((s) => !s)}
+            className="rounded-full border border-[#e2e8f0] bg-[#f8fafc] px-3 py-1.5 text-xs font-medium text-[#475569] hover:bg-[#f1f5f9] transition-colors whitespace-nowrap"
           >
-            {showBundles ? '▴ Hide contents' : '▾ View contents'}
+            {showContents ? '▴ Hide contents' : '▾ View contents'}
           </button>
-          {confirmDelete ? (
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => { onDeleteCrate(crate.id); setConfirmDelete(false); }}
-                className="rounded-full border border-red-300 bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors whitespace-nowrap"
-              >
-                Confirm delete {crate.id}
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmDelete(false)}
-                className="rounded-full border border-[#e2e8f0] px-3 py-1.5 text-xs text-[#64748b] hover:bg-[#f8fafc]"
-              >
-                Cancel
-              </button>
-            </div>
-          ) : (
+          {!confirmDelete && (
             <button
               type="button"
               onClick={() => setConfirmDelete(true)}
@@ -220,6 +251,29 @@ function DraftCrateCard({ crate, onRemoveBundle, onDeleteCrate }) {
           )}
         </div>
       </div>
+
+      {/* Delete confirmation — own full-width row, impossible to clip */}
+      {confirmDelete && (
+        <div className="mx-5 mb-3 flex items-center gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3">
+          <span className="flex-1 text-sm font-medium text-red-900">
+            Delete {crate.id}? All parts return to inventory.
+          </span>
+          <button
+            type="button"
+            onClick={() => { onDeleteCrate(crate.id); setConfirmDelete(false); }}
+            className="rounded-full border border-red-400 bg-red-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-red-700 transition-colors whitespace-nowrap"
+          >
+            Confirm delete {crate.id}
+          </button>
+          <button
+            type="button"
+            onClick={() => setConfirmDelete(false)}
+            className="rounded-full border border-[#e2e8f0] bg-white px-3 py-1.5 text-xs font-medium text-[#475569] hover:bg-[#f8fafc] transition-colors"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
 
       {/* Dimensions row */}
       {dims && (dims.internal_length > 0 || dims.external_length > 0) && (
@@ -243,11 +297,11 @@ function DraftCrateCard({ crate, onRemoveBundle, onDeleteCrate }) {
         </div>
       )}
 
-      {/* Bundle contents */}
-      {showBundles && (
+      {/* Crate contents — groups + full piece rows */}
+      {showContents && (
         <div className="border-t border-[#f1f5f9] px-5 pb-4 pt-3">
           <div className="text-[10px] uppercase tracking-[0.18em] text-[#94a3b8] mb-2">
-            Bundles in crate
+            Crate contents — {crate.part_count} parts
           </div>
           <div className="space-y-2">
             {crate.bundles.map((b, i) => (
@@ -267,7 +321,7 @@ function DraftCrateCard({ crate, onRemoveBundle, onDeleteCrate }) {
 
 // ─── Draft crate workspace ────────────────────────────────────────────────────
 
-const DraftCrateWorkspace = ({ draftCrates, onRemoveBundle, onDeleteCrate }) => {
+const DraftCrateWorkspace = ({ draftCrates, onRemoveBundle, onDeleteCrate, onSavePlan, savedAt }) => {
   if (!draftCrates || draftCrates.length === 0) return null;
 
   const globalTotals = draftCrates.reduce(
@@ -283,14 +337,30 @@ const DraftCrateWorkspace = ({ draftCrates, onRemoveBundle, onDeleteCrate }) => 
   return (
     <div className="space-y-4">
       {/* Section header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <div className="text-[10px] uppercase tracking-[0.22em] text-[#64748b]">Step 3 — Draft Crates</div>
           <div className="mt-0.5 text-xl font-semibold text-[#0f172a]">
             {draftCrates.length} Draft Crate{draftCrates.length !== 1 ? 's' : ''}
           </div>
         </div>
-        <div className="flex flex-wrap gap-2 text-right">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Save button */}
+          {onSavePlan && (
+            <button
+              type="button"
+              onClick={onSavePlan}
+              className="rounded-full border border-[#0f172a] bg-[#0f172a] px-4 py-1.5 text-xs font-semibold text-white hover:bg-[#1e293b] transition-colors whitespace-nowrap"
+            >
+              Save Crate Plan
+            </button>
+          )}
+          {savedAt && (
+            <span className="text-[11px] text-[#94a3b8]">
+              Saved {new Date(savedAt).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })}
+            </span>
+          )}
+          {/* Totals chips */}
           {[
             { l: 'Crates', v: globalTotals.crates                    },
             { l: 'Parts',  v: globalTotals.parts                     },
