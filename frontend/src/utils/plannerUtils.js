@@ -52,20 +52,39 @@ export const formatNumber = (value, digits = 2) => round2(value).toFixed(digits)
 
 /** Download persisted draft crate plan XLSX (GET — reads Mongo saved plan only). */
 export const downloadPersistedDraftCratePlan = async (projectId) => {
-  const res = await axios.get(
-    `${API_BASE}/projects/${projectId}/draft-crate-plan/export`,
-    { responseType: 'blob' },
-  );
-  const url = URL.createObjectURL(res.data);
-  const a = document.createElement('a');
-  a.href = url;
-  const disp = res.headers['content-disposition'] || '';
-  const match = disp.match(/filename="([^"]+)"/);
-  a.download = match ? match[1] : 'CratePlan.xlsx';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  try {
+    const res = await axios.get(
+      `${API_BASE}/projects/${projectId}/draft-crate-plan/export`,
+      { responseType: 'blob' },
+    );
+    const url = URL.createObjectURL(res.data);
+    const a = document.createElement('a');
+    a.href = url;
+    const disp = res.headers['content-disposition'] || '';
+    const match = disp.match(/filename="([^"]+)"/);
+    a.download = match ? match[1] : 'CratePlan.xlsx';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    let message = 'Download failed.';
+    const data = err.response?.data;
+    if (data instanceof Blob) {
+      try {
+        const text = await data.text();
+        const parsed = JSON.parse(text);
+        message = parsed.detail || message;
+      } catch {
+        /* ignore parse errors */
+      }
+    } else if (data?.detail) {
+      message = typeof data.detail === 'string' ? data.detail : message;
+    } else if (err.message) {
+      message = err.message;
+    }
+    throw new Error(message);
+  }
 };
 
 const _COLOR_DENSITIES = {

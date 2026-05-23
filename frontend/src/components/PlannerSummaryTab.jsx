@@ -36,7 +36,7 @@ const PlannerSummaryTab = ({ draftCratePlan = null, onEditPlan = null }) => {
 
   const handleDownload = () => {
     if (!projectId) return;
-    downloadPersistedDraftCratePlan(projectId).catch(() => alert('Download failed — save a crate plan first.'));
+    downloadPersistedDraftCratePlan(projectId).catch((err) => alert(err.message || 'Download failed — save a crate plan first.'));
   };
 
   if (isWorkspaceLoading) {

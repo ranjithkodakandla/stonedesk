@@ -52,7 +52,7 @@ const PlannerCrateTab = ({
 
   const handleDownload = () => {
     if (!projectId) return;
-    downloadPersistedDraftCratePlan(projectId).catch(() => alert('Download failed.'));
+    downloadPersistedDraftCratePlan(projectId).catch((err) => alert(err.message || 'Download failed.'));
   };
 
   const persistCrates = async (nextCrates) => {
