@@ -93,7 +93,7 @@ function stripSplashFromBundle(bundle) {
     pieces:          mainPieces,
     splash_count:    0,
     part_count:      mainPieces.length,
-    total_weight_kg: r1(Math.max(0, (bundle.total_weight_kg || 0) - splashWeight)),
+    total_weight_kg: Math.max(0, (bundle.total_weight_kg || 0) - splashWeight),
     splash_stripped: splashPieces.length,
   };
 }
@@ -165,8 +165,6 @@ function parseThicknessIn(t) {
   return isNaN(n) ? 1.18 : n;
 }
 
-const r1 = (n) => Math.round(n * 10) / 10;
-
 // ─── Leaned cassette geometry ─────────────────────────────────────────────────
 // Mirrors island_cassette_dimensions_operational() in Python (dimensions.py).
 //
@@ -218,21 +216,21 @@ export function estimateLeanedCassetteDimensions(pieces) {
   }
 
   // L — primary length: fixed by slab footprint, not by slab count
-  const intL = r1(maxLongEdge + LENGTH_CLEARANCE);
+  const intL = maxLongEdge + LENGTH_CLEARANCE;
 
   // D — cassette depth: grows with slab count and foam separators
-  const intD = r1(stackDepth + Math.max(0, pieces.length - 1) * SEPARATOR_IN + DEPTH_FRAME);
+  const intD = stackDepth + Math.max(0, pieces.length - 1) * SEPARATOR_IN + DEPTH_FRAME;
 
   // H — height from leaned geometry: short edge projected at lean angle
-  const intH = r1(maxShortEdge * LEAN_FACTOR + PALLET_BASE + LEAN_HEADROOM);
+  const intH = maxShortEdge * LEAN_FACTOR + PALLET_BASE + LEAN_HEADROOM;
 
   return {
     internal_length: intL,                           // primary cassette length (L)
     internal_width:  intD,                           // cassette depth          (D)
     internal_height: intH,                           // operational height      (H)
-    external_length: r1(intL + END_FRAME),            // + end boards
-    external_width:  r1(intD + WALL_TIMBER * 2),      // + side walls
-    external_height: r1(intH + HEIGHT_CAP_TBR + FORKLIFT_TINE),
+    external_length: intL + END_FRAME,               // + end boards
+    external_width:  intD + WALL_TIMBER * 2,         // + side walls
+    external_height: intH + HEIGHT_CAP_TBR + FORKLIFT_TINE,
   };
 }
 
@@ -295,8 +293,8 @@ export function estimateHorizontalLayeredDimensions(pieces) {
     maxShort = Math.max(maxShort, L > 0 && W > 0 ? Math.min(L, W) : Math.max(L, W));
   }
 
-  const intL = r1(maxLong  + HORIZ_LENGTH_CLEAR);
-  const intW = r1(maxShort + HORIZ_WIDTH_PAD);
+  const intL = maxLong  + HORIZ_LENGTH_CLEAR;
+  const intW = maxShort + HORIZ_WIDTH_PAD;
 
   // Height from stacked layers — each layer's height is its max material thickness
   const mainH = mainTops.length   > 0 ? Math.max(...mainTops.map((p)   => parseThicknessIn(p.thickness))) : 0;
@@ -307,15 +305,14 @@ export function estimateHorizontalLayeredDimensions(pieces) {
   if (mainH > 0) intH += mainH;
   if (backH > 0) intH += HORIZ_LAYER_SEP + backH;
   if (sideH > 0) intH += HORIZ_LAYER_SEP + sideH;
-  intH = r1(intH);
 
   return {
     internal_length: intL,
     internal_width:  intW,
     internal_height: intH,
-    external_length: r1(intL + HORIZ_END_FRAME),
-    external_width:  r1(intW + HORIZ_WALL * 2),
-    external_height: r1(intH + HORIZ_LID),
+    external_length: intL + HORIZ_END_FRAME,
+    external_width:  intW + HORIZ_WALL * 2,
+    external_height: intH + HORIZ_LID,
   };
 }
 
@@ -336,7 +333,7 @@ export function generateCrateWarnings({ totalWeightKg, dimensions, partTypeMix, 
     warnings.push('Underloaded — consider adding more pieces before shipping.');
   }
   if (totalWeightKg > 5000) {
-    warnings.push(`Heavy load — ${Math.round(totalWeightKg).toLocaleString()} kg. Verify forklift capacity.`);
+    warnings.push(`Heavy load — ${totalWeightKg.toLocaleString('en-AU')} kg. Verify forklift capacity.`);
   }
 
   // Warn if crate mixes parts from different crate classes (e.g. island tops with vanity tops).
@@ -372,11 +369,11 @@ export function buildDraftCrate(id, selectedBundles) {
   // Falls back to bundle-level fields when piece detail is absent.
   const hasPieceDetail = allPieces.length > 0;
   const totalWeightKg = hasPieceDetail
-    ? r1(allPieces.reduce((s, p) => s + (p.weight_kg || 0), 0))
-    : r1(selectedBundles.reduce((s, b) => s + (b.total_weight_kg || 0), 0));
+    ? allPieces.reduce((s, p) => s + (p.weight_kg || 0), 0)
+    : selectedBundles.reduce((s, b) => s + (b.total_weight_kg || 0), 0);
   const totalSqft = hasPieceDetail
-    ? r1(allPieces.reduce((s, p) => s + (p.sqft || 0), 0))
-    : r1(selectedBundles.reduce((s, b) => s + (b.total_sqft || 0), 0));
+    ? allPieces.reduce((s, p) => s + (p.sqft || 0), 0)
+    : selectedBundles.reduce((s, b) => s + (b.total_sqft || 0), 0);
   const partCount = hasPieceDetail
     ? allPieces.length
     : selectedBundles.reduce((s, b) => s + (b.part_count || 0), 0);
@@ -464,7 +461,7 @@ export function getCrateOperationalStatus(crate) {
 export function getNextDraftCrateId(draftCrates) {
   const existing = new Set(
     (draftCrates || [])
-      .map((c) => parseInt(c.id.replace('DC-', ''), 10))
+      .map((c) => Number(c.id.replace('DC-', '')))
       .filter((n) => Number.isFinite(n) && n > 0),
   );
   let n = 1;

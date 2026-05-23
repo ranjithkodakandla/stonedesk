@@ -58,9 +58,11 @@ function bucketDot(bk) {
   return BUCKET_DOT[bk || 'misc'] || BUCKET_DOT.misc;
 }
 
-function fmt(n, d = 0) {
+// Show full numeric precision — no rounding, no truncation.
+// maximumFractionDigits:8 shows all significant digits without floating-point noise.
+function fmt(n) {
   if (n == null || isNaN(n)) return '—';
-  return Number(n).toLocaleString('en-AU', { minimumFractionDigits: d, maximumFractionDigits: d });
+  return Number(n).toLocaleString('en-AU', { maximumFractionDigits: 8 });
 }
 
 // ─── Dimension display row ────────────────────────────────────────────────────
@@ -71,7 +73,7 @@ function DimBlock({ label, dims, prefix }) {
     <div className="flex items-baseline gap-2">
       <span className="text-[10px] uppercase tracking-wide text-[#94a3b8] w-16 flex-shrink-0">{label}</span>
       <span className="font-mono text-sm text-[#334155]">
-        {fmt(dims[`${prefix}length`], 1)} × {fmt(dims[`${prefix}width`], 1)} × {fmt(dims[`${prefix}height`], 1)}″
+        {fmt(dims[`${prefix}length`])} × {fmt(dims[`${prefix}width`])} × {fmt(dims[`${prefix}height`])}″
       </span>
     </div>
   );
@@ -105,11 +107,11 @@ function PartRowInCrate({ piece }) {
       </span>
       {/* Weight */}
       <span className="self-center text-[11px] font-medium text-[#334155] whitespace-nowrap">
-        {fmt(piece.weight_kg, 1)} kg
+        {fmt(piece.weight_kg)} kg
       </span>
       {/* Sqft */}
       <span className="self-center text-[11px] text-[#64748b] whitespace-nowrap">
-        {fmt(piece.sqft, 1)} ft²
+        {fmt(piece.sqft)} ft²
       </span>
     </div>
   );
@@ -142,8 +144,8 @@ function BundleInCrate({ bundle, crateId, onRemove }) {
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-[#64748b]">
             <span>{bundle.part_count || bundle.pieces?.length || 0} parts</span>
-            <span className="font-semibold text-[#1e293b]">{fmt(bundle.total_weight_kg, 1)} kg</span>
-            <span>{fmt(bundle.total_sqft, 1)} ft²</span>
+            <span className="font-semibold text-[#1e293b]">{fmt(bundle.total_weight_kg)} kg</span>
+            <span>{fmt(bundle.total_sqft)} ft²</span>
           </div>
         </div>
 
@@ -202,8 +204,17 @@ function DraftCrateCard({ crate, onRemoveBundle, onDeleteCrate }) {
   const status = getCrateOperationalStatus(crate);
   const statusStyle = STATUS_STYLE[status] || STATUS_STYLE.READY;
 
+  const handleDeleteClick = () => {
+    if (confirmDelete) {
+      onDeleteCrate(crate.id);
+      setConfirmDelete(false);
+    } else {
+      setConfirmDelete(true);
+    }
+  };
+
   return (
-    <div className="rounded-[24px] border border-[#dbe4f0] bg-white shadow-sm overflow-hidden">
+    <div className="rounded-[24px] border border-[#dbe4f0] bg-white shadow-sm">
       {/* Crate header */}
       <div className="flex items-start gap-4 px-5 pt-4 pb-3">
         <div className="flex-1 min-w-0">
@@ -226,12 +237,12 @@ function DraftCrateCard({ crate, onRemoveBundle, onDeleteCrate }) {
           </div>
           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-sm text-[#64748b]">
             <span><strong className="text-[#0f172a]">{crate.part_count}</strong> parts</span>
-            <span><strong className="text-[#0f172a]">{fmt(crate.total_weight_kg, 1)}</strong> kg</span>
-            <span><strong className="text-[#0f172a]">{fmt(crate.total_sqft, 1)}</strong> ft²</span>
+            <span><strong className="text-[#0f172a]">{fmt(crate.total_weight_kg)}</strong> kg</span>
+            <span><strong className="text-[#0f172a]">{fmt(crate.total_sqft)}</strong> ft²</span>
           </div>
         </div>
 
-        {/* Actions — only toggle + delete trigger (no confirm here) */}
+        {/* Actions */}
         <div className="flex items-center gap-2 flex-shrink-0">
           <button
             type="button"
@@ -240,40 +251,28 @@ function DraftCrateCard({ crate, onRemoveBundle, onDeleteCrate }) {
           >
             {showContents ? '▴ Hide contents' : '▾ View contents'}
           </button>
-          {!confirmDelete && (
+          <button
+            type="button"
+            onClick={handleDeleteClick}
+            className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
+              confirmDelete
+                ? 'border-red-500 bg-red-600 text-white font-bold hover:bg-red-700'
+                : 'border-[#fee2e2] bg-[#fff5f5] text-red-500 hover:bg-red-50'
+            }`}
+          >
+            {confirmDelete ? `Confirm delete ${crate.id}` : 'Delete'}
+          </button>
+          {confirmDelete && (
             <button
               type="button"
-              onClick={() => setConfirmDelete(true)}
-              className="rounded-full border border-[#fee2e2] bg-[#fff5f5] px-3 py-1.5 text-xs font-medium text-red-500 hover:bg-red-50 transition-colors"
+              onClick={() => setConfirmDelete(false)}
+              className="rounded-full border border-[#e2e8f0] bg-white px-3 py-1.5 text-xs font-medium text-[#475569] hover:bg-[#f8fafc] transition-colors"
             >
-              Delete
+              Cancel
             </button>
           )}
         </div>
       </div>
-
-      {/* Delete confirmation — own full-width row, impossible to clip */}
-      {confirmDelete && (
-        <div className="mx-5 mb-3 flex items-center gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3">
-          <span className="flex-1 text-sm font-medium text-red-900">
-            Delete {crate.id}? All parts return to inventory.
-          </span>
-          <button
-            type="button"
-            onClick={() => { onDeleteCrate(crate.id); setConfirmDelete(false); }}
-            className="rounded-full border border-red-400 bg-red-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-red-700 transition-colors whitespace-nowrap"
-          >
-            Confirm delete {crate.id}
-          </button>
-          <button
-            type="button"
-            onClick={() => setConfirmDelete(false)}
-            className="rounded-full border border-[#e2e8f0] bg-white px-3 py-1.5 text-xs font-medium text-[#475569] hover:bg-[#f8fafc] transition-colors"
-          >
-            Cancel
-          </button>
-        </div>
-      )}
 
       {/* Dimensions row */}
       {dims && (dims.internal_length > 0 || dims.external_length > 0) && (
@@ -319,9 +318,176 @@ function DraftCrateCard({ crate, onRemoveBundle, onDeleteCrate }) {
   );
 }
 
+// ─── Summary & Insights panel ─────────────────────────────────────────────────
+
+const PART_TYPE_TO_CRATE_CLASS = {
+  'Kitchen - Island Tops':     'island_vertical',
+  'Kitchen - Perimeter Tops':  'kitchen_vertical',
+  'Kitchen - Range Tops':      'kitchen_vertical',
+  'Kitchen - Back Splash':     'kitchen_vertical',
+  'Kitchen - Side Splash':     'kitchen_vertical',
+  'Vanity - Top':              'vanity_vertical',
+  'Vanity - Back Splash':      'vanity_vertical',
+  'Vanity - Side Splash':      'vanity_vertical',
+  'Misc - Full Height Splash': 'misc',
+  'Misc - Window Sill':        'misc',
+  'Misc - Bar Top':            'misc',
+};
+
+const CLASS_LABEL = {
+  island_vertical:  'Island',
+  kitchen_vertical: 'Kitchen',
+  vanity_vertical:  'Vanity',
+  misc:             'Misc',
+};
+
+function CratePlanSummary({ draftCrates, targetWeightKg }) {
+  if (!draftCrates || draftCrates.length === 0) return null;
+
+  const totalCrates   = draftCrates.length;
+  const totalParts    = draftCrates.reduce((s, c) => s + (c.part_count || 0), 0);
+  const totalWeight   = draftCrates.reduce((s, c) => s + (c.total_weight_kg || 0), 0);
+  const totalSqft     = draftCrates.reduce((s, c) => s + (c.total_sqft || 0), 0);
+
+  // Utilization per crate
+  const utilizations  = draftCrates.map((c) => (c.total_weight_kg || 0) / targetWeightKg);
+  const avgUtil       = utilizations.length > 0 ? utilizations.reduce((s, u) => s + u, 0) / utilizations.length : 0;
+
+  // Warnings summary
+  const overweight    = draftCrates.filter((c) => (c.total_weight_kg || 0) > targetWeightKg);
+  const underloaded   = draftCrates.filter((c) => (c.total_weight_kg || 0) < 300);
+  const withWarnings  = draftCrates.filter((c) => (c.warnings?.length || 0) > 0);
+
+  // Crate type distribution
+  const typeCounts = {};
+  for (const c of draftCrates) {
+    const lbl = CLASS_LABEL[c.crate_class] || 'Misc';
+    typeCounts[lbl] = (typeCounts[lbl] || 0) + 1;
+  }
+
+  // Part Type distribution across entire plan
+  const ptCounts = {};
+  for (const c of draftCrates) {
+    for (const [pt, n] of Object.entries(c.part_type_mix || {})) {
+      ptCounts[pt] = (ptCounts[pt] || 0) + n;
+    }
+  }
+
+  // Insights
+  const heaviest   = draftCrates.reduce((a, b) => (b.total_weight_kg > a.total_weight_kg ? b : a), draftCrates[0]);
+  const largest    = draftCrates.reduce((a, b) => (b.part_count > a.part_count ? b : a), draftCrates[0]);
+  const mostSqft   = draftCrates.reduce((a, b) => (b.total_sqft > a.total_sqft ? b : a), draftCrates[0]);
+  const leastFull  = draftCrates.reduce((a, b) => (b.total_weight_kg < a.total_weight_kg ? b : a), draftCrates[0]);
+  const mixedCrates = draftCrates.filter((c) => {
+    const classes = new Set(
+      Object.keys(c.part_type_mix || {}).filter((k) => (c.part_type_mix[k] || 0) > 0).map((pt) => PART_TYPE_TO_CRATE_CLASS[pt] || 'misc'),
+    );
+    return classes.size > 1;
+  });
+
+  return (
+    <div className="rounded-[24px] border border-[#dbe4f0] bg-white p-5 shadow-sm space-y-5">
+      <div className="text-[10px] uppercase tracking-[0.22em] text-[#64748b]">Crate Plan Summary</div>
+
+      {/* KPI row */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {[
+          { label: 'Crates',        value: totalCrates },
+          { label: 'Parts',         value: totalParts },
+          { label: 'Total weight',  value: `${fmt(totalWeight)} kg` },
+          { label: 'Total sq ft',   value: fmt(totalSqft) },
+        ].map(({ label, value }) => (
+          <div key={label} className="rounded-2xl border border-[#e8edf3] bg-[#f8fafc] px-4 py-3">
+            <div className="text-[10px] uppercase tracking-wide text-[#94a3b8]">{label}</div>
+            <div className="mt-1 text-lg font-semibold text-[#0f172a]">{value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Utilization */}
+      <div className="rounded-2xl border border-[#e8edf3] bg-[#f8fafc] px-4 py-3">
+        <div className="text-[10px] uppercase tracking-wide text-[#94a3b8] mb-2">
+          Weight utilisation (target {fmt(targetWeightKg)} kg/crate)
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {draftCrates.map((c) => {
+            const pct = Math.min(((c.total_weight_kg || 0) / targetWeightKg) * 100, 100);
+            const bar = (c.total_weight_kg || 0) > targetWeightKg ? 'bg-red-400' : pct < 30 ? 'bg-amber-300' : 'bg-emerald-400';
+            return (
+              <div key={c.id} className="flex flex-col items-center gap-1 min-w-[48px]">
+                <div className="w-full h-16 bg-[#e8edf3] rounded-lg overflow-hidden flex items-end">
+                  <div className={`w-full ${bar} rounded-lg transition-all`} style={{ height: `${Math.max(pct, 4)}%` }} />
+                </div>
+                <span className="text-[9px] font-mono text-[#64748b]">{c.id}</span>
+                <span className="text-[9px] text-[#94a3b8]">{fmt(c.total_weight_kg)} kg</span>
+              </div>
+            );
+          })}
+        </div>
+        <div className="mt-2 text-xs text-[#64748b]">
+          Avg utilisation: <strong className="text-[#0f172a]">{fmt(avgUtil * 100)}%</strong>
+          {overweight.length > 0 && <span className="ml-3 text-red-600">{overweight.length} over target</span>}
+          {underloaded.length > 0 && <span className="ml-3 text-amber-600">{underloaded.length} underloaded (&lt; 300 kg)</span>}
+        </div>
+      </div>
+
+      {/* Distribution */}
+      <div className="grid sm:grid-cols-2 gap-3">
+        {/* Crate type distribution */}
+        <div className="rounded-2xl border border-[#e8edf3] bg-[#f8fafc] px-4 py-3">
+          <div className="text-[10px] uppercase tracking-wide text-[#94a3b8] mb-2">Crate type distribution</div>
+          <div className="space-y-1">
+            {Object.entries(typeCounts).map(([t, n]) => (
+              <div key={t} className="flex items-center justify-between text-xs">
+                <span className="text-[#334155]">{t}</span>
+                <span className="font-semibold text-[#0f172a]">{n}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        {/* Part type distribution */}
+        <div className="rounded-2xl border border-[#e8edf3] bg-[#f8fafc] px-4 py-3">
+          <div className="text-[10px] uppercase tracking-wide text-[#94a3b8] mb-2">Part type distribution</div>
+          <div className="space-y-1">
+            {Object.entries(ptCounts).sort((a, b) => b[1] - a[1]).map(([pt, n]) => (
+              <div key={pt} className="flex items-center justify-between text-xs">
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${partTypePill(pt)}`}>{pt}</span>
+                <span className="font-semibold text-[#0f172a]">{n}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Insights */}
+      <div>
+        <div className="text-[10px] uppercase tracking-wide text-[#94a3b8] mb-2">Insights</div>
+        <div className="space-y-1 text-sm text-[#334155]">
+          <div>Heaviest crate: <strong className="text-[#0f172a]">{heaviest?.id}</strong> — {fmt(heaviest?.total_weight_kg)} kg</div>
+          <div>Largest crate: <strong className="text-[#0f172a]">{largest?.id}</strong> — {largest?.part_count} parts</div>
+          <div>Highest sq ft: <strong className="text-[#0f172a]">{mostSqft?.id}</strong> — {fmt(mostSqft?.total_sqft)} ft²</div>
+          <div>Lightest crate: <strong className="text-[#0f172a]">{leastFull?.id}</strong> — {fmt(leastFull?.total_weight_kg)} kg</div>
+          {withWarnings.length > 0 && (
+            <div className="text-amber-700">
+              {withWarnings.length} crate{withWarnings.length !== 1 ? 's' : ''} with warnings: {withWarnings.map((c) => c.id).join(', ')}
+            </div>
+          )}
+          {mixedCrates.length > 0 && (
+            <div className="text-violet-700">
+              {mixedCrates.length} mixed-type crate{mixedCrates.length !== 1 ? 's' : ''}: {mixedCrates.map((c) => c.id).join(', ')}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Draft crate workspace ────────────────────────────────────────────────────
 
-const DraftCrateWorkspace = ({ draftCrates, onRemoveBundle, onDeleteCrate, onSavePlan, savedAt }) => {
+const DraftCrateWorkspace = ({ draftCrates, onRemoveBundle, onDeleteCrate, onSavePlan, onDownloadXlsx, savedAt, targetWeightKg = 1900 }) => {
+  const [showSummary, setShowSummary] = useState(false);
+
   if (!draftCrates || draftCrates.length === 0) return null;
 
   const globalTotals = draftCrates.reduce(
@@ -345,6 +511,24 @@ const DraftCrateWorkspace = ({ draftCrates, onRemoveBundle, onDeleteCrate, onSav
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {/* Download button */}
+          {onDownloadXlsx && (
+            <button
+              type="button"
+              onClick={onDownloadXlsx}
+              className="rounded-full border border-[#1d4ed8] bg-[#eff6ff] px-4 py-1.5 text-xs font-semibold text-[#1d4ed8] hover:bg-[#dbeafe] transition-colors whitespace-nowrap"
+            >
+              Download XLSX
+            </button>
+          )}
+          {/* Summary toggle */}
+          <button
+            type="button"
+            onClick={() => setShowSummary((s) => !s)}
+            className="rounded-full border border-[#e2e8f0] bg-[#f8fafc] px-4 py-1.5 text-xs font-medium text-[#475569] hover:bg-[#f1f5f9] transition-colors whitespace-nowrap"
+          >
+            {showSummary ? 'Hide summary' : 'View summary'}
+          </button>
           {/* Save button */}
           {onSavePlan && (
             <button
@@ -362,10 +546,10 @@ const DraftCrateWorkspace = ({ draftCrates, onRemoveBundle, onDeleteCrate, onSav
           )}
           {/* Totals chips */}
           {[
-            { l: 'Crates', v: globalTotals.crates                    },
-            { l: 'Parts',  v: globalTotals.parts                     },
-            { l: 'Weight', v: `${fmt(globalTotals.weight, 1)} kg`    },
-            { l: 'Sq ft',  v: fmt(globalTotals.sqft, 1)              },
+            { l: 'Crates', v: globalTotals.crates                   },
+            { l: 'Parts',  v: globalTotals.parts                    },
+            { l: 'Weight', v: `${fmt(globalTotals.weight)} kg`      },
+            { l: 'Sq ft',  v: fmt(globalTotals.sqft)                },
           ].map(({ l, v }) => (
             <span key={l} className="flex flex-col items-center rounded-xl border border-[#e8edf3] bg-white px-3 py-1.5 min-w-[64px] text-center">
               <span className="text-[9px] uppercase tracking-wide text-[#94a3b8]">{l}</span>
@@ -374,6 +558,11 @@ const DraftCrateWorkspace = ({ draftCrates, onRemoveBundle, onDeleteCrate, onSav
           ))}
         </div>
       </div>
+
+      {/* Summary & Insights panel */}
+      {showSummary && (
+        <CratePlanSummary draftCrates={draftCrates} targetWeightKg={targetWeightKg} />
+      )}
 
       {/* Crate cards */}
       <div className="space-y-4">

@@ -1485,11 +1485,11 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
             "part": str(p.get("part", "") or ""),
             "drawing": str(p.get("drawing", "") or ""),
             "unit": str(p.get("unit", "") or ""),
-            "length": round(parse_float(p.get("length")), 1),
-            "width": round(parse_float(p.get("width")), 1),
+            "length": parse_float(p.get("length")),
+            "width": parse_float(p.get("width")),
             "thickness": str(p.get("thickness", "") or thickness),
-            "weight_kg": round(pw(p, material, thickness, stone_color), 1),
-            "sqft": round(piece_sqft(p), 1),
+            "weight_kg": pw(p, material, thickness, stone_color),
+            "sqft": piece_sqft(p),
             "role": role,
         }
 
@@ -1547,8 +1547,8 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
             splash_p = [p for role, p in pieces_with_roles if role == "splash"]
             all_p_bucket = main_p + splash_p
 
-            total_w = round(sum(pw(p, material, thickness, stone_color) for p in all_p_bucket), 1)
-            total_sq = round(sum(piece_sqft(p) for p in all_p_bucket), 1)
+            total_w = sum(pw(p, material, thickness, stone_color) for p in all_p_bucket)
+            total_sq = sum(piece_sqft(p) for p in all_p_bucket)
 
             pieces_detail = (
                 [_piece_detail(p, "main") for p in main_p] +
@@ -1641,8 +1641,8 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
                 flats_out.append({
                     "flat": flat_str,
                     "part_count": fp,
-                    "total_weight_kg": round(fw, 1),
-                    "total_sqft": round(fsq, 1),
+                    "total_weight_kg": fw,
+                    "total_sqft": fsq,
                     "bundle_count": len(bundles),
                     "bundles": bundles,
                 })
@@ -1655,8 +1655,8 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
                 "category": bucket,
                 "category_label": _BUCKET_LABELS.get(bucket, bucket),
                 "part_count": cat_parts,
-                "total_weight_kg": round(cat_weight, 1),
-                "total_sqft": round(cat_sqft, 1),
+                "total_weight_kg": cat_weight,
+                "total_sqft": cat_sqft,
                 "bundle_count": bundle_count_cat,
                 "flats": flats_out,
             })
@@ -1668,8 +1668,8 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
         floors_out.append({
             "floor": floor_str,
             "part_count": floor_parts,
-            "total_weight_kg": round(floor_weight, 1),
-            "total_sqft": round(floor_sqft, 1),
+            "total_weight_kg": floor_weight,
+            "total_sqft": floor_sqft,
             "bundle_count": floor_bundles,
             "categories": cats_out,
         })
@@ -1679,7 +1679,7 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
         total_bundles += floor_bundles
 
     _log.debug(
-        "[dispatch-inventory] RESULT floors=%d parts=%d weight=%.1f bundles=%d",
+        "[dispatch-inventory] RESULT floors=%d parts=%d weight=%.3f bundles=%d",
         len(floors_out), total_parts, total_weight, total_bundles,
     )
 
@@ -1687,8 +1687,8 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
         "floors": floors_out,
         "totals": {
             "part_count": total_parts,
-            "total_weight_kg": round(total_weight, 1),
-            "total_sqft": round(total_sqft_all, 1),
+            "total_weight_kg": total_weight,
+            "total_sqft": total_sqft_all,
             "bundle_count": total_bundles,
         },
     })
@@ -1757,6 +1757,171 @@ def delete_draft_crate_plan(project_id: int):
         {"$unset": {"planner_v3_draft_crate_plan": ""}},
     )
     return {"deleted": True}
+
+
+@app.post("/api/projects/{project_id}/draft-crate-plan/export")
+def export_draft_crate_plan_xlsx(project_id: int, body: Dict):
+    """Export the current draft crate plan as a 3-sheet XLSX workbook."""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+
+    doc = projects_col.find_one({"id": project_id}, {"name": 1, "job_number": 1, "_id": 0})
+    project_name = (doc or {}).get("name") or (doc or {}).get("job_number") or f"Project {project_id}"
+
+    draft_crates = body.get("draft_crates") or []
+
+    def _bold(ws, row_num):
+        for cell in ws[row_num]:
+            cell.font = Font(bold=True)
+
+    def _header_fill(ws, row_num, hex_color="1e293b"):
+        fill = PatternFill("solid", fgColor=hex_color)
+        font = Font(bold=True, color="FFFFFF")
+        for cell in ws[row_num]:
+            cell.fill = fill
+            cell.font = font
+
+    def _auto_width(ws):
+        for col in ws.columns:
+            max_len = max((len(str(cell.value or "")) for cell in col), default=8)
+            ws.column_dimensions[get_column_letter(col[0].column)].width = min(max_len + 2, 50)
+
+    STATUS_MAP = {
+        "island_vertical":  "Island cassette",
+        "kitchen_vertical": "Kitchen horizontal",
+        "vanity_vertical":  "Vanity horizontal",
+        "misc":             "Misc",
+    }
+
+    wb = openpyxl.Workbook()
+
+    # ── Sheet 1: Crate Summary ─────────────────────────────────────────────────
+    ws1 = wb.active
+    ws1.title = "Crate Summary"
+    ws1.append([project_name, "", f"Exported {date.today().isoformat()}"])
+    ws1.append([])
+    ws1.append([
+        "Crate ID", "Type", "Bundles", "Parts",
+        "Weight (kg)", "Sq Ft",
+        "Int L×W×H (in)", "Ext L×W×H (in)",
+        "Warnings",
+    ])
+    _header_fill(ws1, 3)
+
+    total_parts_all = 0
+    total_weight_all = 0.0
+    total_sqft_all = 0.0
+
+    for crate in draft_crates:
+        cid = crate.get("id", "")
+        crate_class = crate.get("crate_class", "misc")
+        dims = crate.get("dimensions") or {}
+        il = dims.get("internal_length", "")
+        iw = dims.get("internal_width", "")
+        ih = dims.get("internal_height", "")
+        el = dims.get("external_length", "")
+        ew = dims.get("external_width", "")
+        eh = dims.get("external_height", "")
+        int_dim = f"{il} × {iw} × {ih}" if il else ""
+        ext_dim = f"{el} × {ew} × {eh}" if el else ""
+        warnings_str = " | ".join(crate.get("warnings") or [])
+        wt = crate.get("total_weight_kg", 0)
+        sq = crate.get("total_sqft", 0)
+        total_parts_all += crate.get("part_count", 0)
+        total_weight_all += wt
+        total_sqft_all += sq
+        ws1.append([
+            cid,
+            STATUS_MAP.get(crate_class, crate_class),
+            crate.get("bundle_count", 0),
+            crate.get("part_count", 0),
+            wt,
+            sq,
+            int_dim,
+            ext_dim,
+            warnings_str,
+        ])
+
+    ws1.append([])
+    ws1.append(["TOTAL", "", "", total_parts_all, total_weight_all, total_sqft_all])
+    _bold(ws1, ws1.max_row)
+    _auto_width(ws1)
+
+    # ── Sheet 2: Crate Contents ────────────────────────────────────────────────
+    ws2 = wb.create_sheet("Crate Contents")
+    ws2.append([
+        "Crate ID", "Bundle ID", "Role",
+        "Part Type", "Part #", "Drawing", "Unit",
+        "Length (in)", "Width (in)", "Thickness",
+        "Weight (kg)", "Sq Ft",
+    ])
+    _header_fill(ws2, 1)
+
+    for crate in draft_crates:
+        cid = crate.get("id", "")
+        for bundle in crate.get("bundles") or []:
+            bid = bundle.get("family_id") or bundle.get("unit_id", "")
+            for piece in bundle.get("pieces") or []:
+                ws2.append([
+                    cid,
+                    bid,
+                    piece.get("role", "main"),
+                    piece.get("part", ""),
+                    piece.get("part_no", ""),
+                    piece.get("drawing", ""),
+                    piece.get("unit", ""),
+                    piece.get("length", ""),
+                    piece.get("width", ""),
+                    piece.get("thickness", ""),
+                    piece.get("weight_kg", ""),
+                    piece.get("sqft", ""),
+                ])
+
+    _auto_width(ws2)
+
+    # ── Sheet 3: Plan Summary ──────────────────────────────────────────────────
+    ws3 = wb.create_sheet("Plan Summary")
+    ws3.append([project_name])
+    ws3.append([f"Exported {date.today().isoformat()}"])
+    ws3.append([])
+    ws3.append(["Total crates", len(draft_crates)])
+    ws3.append(["Total parts", total_parts_all])
+    ws3.append(["Total weight (kg)", total_weight_all])
+    ws3.append(["Total sq ft", total_sqft_all])
+    ws3.append([])
+
+    # Crate type distribution
+    ws3.append(["Crate type distribution"])
+    _bold(ws3, ws3.max_row)
+    from collections import Counter
+    type_counts = Counter(STATUS_MAP.get(c.get("crate_class", "misc"), c.get("crate_class", "misc")) for c in draft_crates)
+    for t, n in type_counts.most_common():
+        ws3.append([t, n])
+    ws3.append([])
+
+    # Part Type distribution
+    ws3.append(["Part type distribution"])
+    _bold(ws3, ws3.max_row)
+    pt_counts: Dict[str, int] = {}
+    for crate in draft_crates:
+        for k, v in (crate.get("part_type_mix") or {}).items():
+            pt_counts[k] = pt_counts.get(k, 0) + v
+    for pt, n in sorted(pt_counts.items(), key=lambda x: -x[1]):
+        ws3.append([pt, n])
+
+    _auto_width(ws3)
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    safe_name = "".join(c if c.isalnum() or c in "-_ " else "_" for c in project_name).strip()
+    filename = f"CratePlan_{safe_name}_{date.today().isoformat()}.xlsx"
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/api/projects/{project_id}/families")
