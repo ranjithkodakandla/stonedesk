@@ -4,11 +4,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..planning_engine import parse_float
 
-# (keywords, category, is_splash)
-# Standardized Part Type names take priority (exact prefix match first).
-# Legacy keyword patterns follow as fallback for old data.
-_DESC_RULES: List[Tuple[List[str], str, bool]] = [
-    # ── Standardized Part Types (new canonical names) ──
+# ── Standardized Part Type rules — NO width threshold applied ────────────────
+# If a piece carries one of these exact Part Type names, the classification is
+# definitive regardless of slab width.  Width thresholds only apply to the
+# legacy keyword heuristics below where the Part Type field may be absent.
+_STANDARDIZED_RULES: List[Tuple[List[str], str, bool]] = [
     (["kitchen - island tops"],     "island",    False),
     (["kitchen - perimeter tops"],  "perimeter", False),
     (["kitchen - range tops"],      "range",     False),
@@ -20,7 +20,11 @@ _DESC_RULES: List[Tuple[List[str], str, bool]] = [
     (["misc - full height splash"], "misc",      True),
     (["misc - window sill"],        "misc",      False),
     (["misc - bar top"],            "misc",      False),
-    # ── Legacy keyword patterns (backward compat for pre-migration data) ──
+]
+
+# ── Legacy keyword patterns — width threshold applied ─────────────────────────
+# Used when Part Type field is absent or contains an unrecognized description.
+_LEGACY_RULES: List[Tuple[List[str], str, bool]] = [
     (["island top", "island countertop", "island kitchen"], "island", False),
     (["perimeter kitchen", "kitchen countertop", "kitchen top"], "perimeter", False),
     (["range top"], "range", False),
@@ -30,6 +34,9 @@ _DESC_RULES: List[Tuple[List[str], str, bool]] = [
     (["vanity back splash", "vanity side splash", "vanity splash", "bathroom splash"], "vanity", True),
     (["back splash", "side splash", "backsplash"], "misc", True),
 ]
+
+# Combined list kept for callers that iterate all rules (e.g. _is_main_slab_for_island_rule).
+_DESC_RULES: List[Tuple[List[str], str, bool]] = _STANDARDIZED_RULES + _LEGACY_RULES
 
 # Islands (Category A): min(length,width) in inches strictly greater than 36 ⇒ vertical island cassette.
 # Overrides Kitchen/Perimeter CSV wording so wide slabs never ship in horizontal B crates.
@@ -114,7 +121,15 @@ def classify_piece(piece: Dict[str, Any]) -> Tuple[str, bool]:
     if _is_main_slab_for_island_rule(piece, desc) and w > ISLAND_MIN_EDGE_IN:
         return "island", False
 
-    for keywords, cat, is_splash in _DESC_RULES:
+    # Standardized Part Type rules — NO width threshold.
+    # If the Part Type field carries a canonical name, it is definitive.
+    for keywords, cat, is_splash in _STANDARDIZED_RULES:
+        for kw in keywords:
+            if kw in desc:
+                return cat, is_splash
+
+    # Legacy keyword heuristics — apply width threshold to filter out narrow mismatches.
+    for keywords, cat, is_splash in _LEGACY_RULES:
         for kw in keywords:
             if kw in desc:
                 if not is_splash:
