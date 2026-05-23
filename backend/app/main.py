@@ -1477,66 +1477,135 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
         lambda: defaultdict(lambda: defaultdict(list))
     )
 
-    # Validation counters for debug audit
-    _bucket_debug: Dict[str, int] = defaultdict(int)
+    # ── Piece-detail builder (defined once, captures material/thickness/stone_color) ──
+    def _piece_detail(p: Dict[str, Any], role: str) -> Dict[str, Any]:
+        return {
+            "id": p.get("id"),
+            "part_no": str(p.get("part_no", "") or ""),
+            "part": str(p.get("part", "") or ""),
+            "length": round(parse_float(p.get("length")), 1),
+            "width": round(parse_float(p.get("width")), 1),
+            "thickness": str(p.get("thickness", "") or thickness),
+            "weight_kg": round(pw(p, material, thickness, stone_color), 1),
+            "sqft": round(piece_sqft(p), 1),
+            "role": role,
+        }
+
+    # ── Rebalance audit counters ──────────────────────────────────────────────
+    # Tracks pieces split away from their family's primary bucket so we can
+    # prove conservation: global totals must be identical before and after.
+    _raw_pieces = 0
+    _raw_weight = 0.0
+    _bucket_pieces: Dict[str, int] = defaultdict(int)
+    _bucket_weight: Dict[str, float] = defaultdict(float)
+    _redirect_pieces: Dict[str, int] = defaultdict(int)   # pieces moved across buckets
+    _redirect_weight: Dict[str, float] = defaultdict(float)
 
     for unit in units:
-        all_p = unit.get("all_pieces") or []
-        if not all_p:
+        main_pieces_raw = unit.get("main_pieces") or []
+        splash_pieces_raw = unit.get("splash_pieces") or []
+        all_p_raw = main_pieces_raw + splash_pieces_raw
+        if not all_p_raw:
             continue
-        ref = all_p[0]
+
+        ref = all_p_raw[0]
         floor_str = str(ref.get("floor", "") or "").strip() or "Unassigned"
         flat_str = str(ref.get("flat", "") or "").strip() or "Unassigned"
         building_str = str(ref.get("building", "") or "").strip()
         cat = str(unit.get("category") or "misc")
-        bucket = _part_bucket_for_unit(unit)
-        _bucket_debug[bucket] += 1
+        family_id = str(unit.get("canonical_family_id") or unit.get("family_id") or "")
+        unit_id = str(unit.get("unit_id") or "")
+        unit_kind = unit.get("unit_kind")
+        family_bucket = _part_bucket_for_unit(unit)  # bucket for main pieces
 
-        total_w = round(sum(pw(p, material, thickness, stone_color) for p in all_p), 1)
-        total_sq = round(sum(piece_sqft(p) for p in all_p), 1)
+        # ── PIECE-LEVEL BUCKET SPLIT ─────────────────────────────────────────
+        # Each piece is routed to its own bucket based on its Part Type.
+        # This ensures splash pieces are NEVER included in the island bucket,
+        # even when they share a family prefix with island tops.
+        pieces_by_bucket: Dict[str, List[tuple]] = defaultdict(list)
 
-        def _piece_detail(p: Dict[str, Any], role: str) -> Dict[str, Any]:
-            return {
-                "id": p.get("id"),
-                "part_no": str(p.get("part_no", "") or ""),
-                "part": str(p.get("part", "") or ""),
-                "length": round(parse_float(p.get("length")), 1),
-                "width": round(parse_float(p.get("width")), 1),
-                "thickness": str(p.get("thickness", "") or thickness),
-                "weight_kg": round(pw(p, material, thickness, stone_color), 1),
-                "sqft": round(piece_sqft(p), 1),
-                "role": role,
+        for p in main_pieces_raw:
+            pt = str(p.get("part") or "").strip()
+            b = _PART_TYPE_TO_BUCKET.get(pt) or _CATEGORY_TO_BUCKET_FALLBACK.get(cat, "misc")
+            pieces_by_bucket[b].append(("main", p))
+
+        for p in splash_pieces_raw:
+            pt = str(p.get("part") or "").strip()
+            b = _PART_TYPE_TO_BUCKET.get(pt) or _CATEGORY_TO_BUCKET_FALLBACK.get(cat, "misc")
+            pieces_by_bucket[b].append(("splash", p))
+
+        # Update raw totals (before splitting)
+        raw_unit_weight = sum(pw(p, material, thickness, stone_color) for p in all_p_raw)
+        _raw_pieces += len(all_p_raw)
+        _raw_weight += raw_unit_weight
+
+        # ── Emit one bundle_row per (unit × bucket) group ────────────────────
+        for bucket, pieces_with_roles in pieces_by_bucket.items():
+            main_p = [p for role, p in pieces_with_roles if role == "main"]
+            splash_p = [p for role, p in pieces_with_roles if role == "splash"]
+            all_p_bucket = main_p + splash_p
+
+            total_w = round(sum(pw(p, material, thickness, stone_color) for p in all_p_bucket), 1)
+            total_sq = round(sum(piece_sqft(p) for p in all_p_bucket), 1)
+
+            pieces_detail = (
+                [_piece_detail(p, "main") for p in main_p] +
+                [_piece_detail(p, "splash") for p in splash_p]
+            )
+
+            # Suffix unit_id when this family produces multiple bucket rows
+            bucket_uid = f"{unit_id}|{bucket}" if len(pieces_by_bucket) > 1 else unit_id
+
+            bundle_row = {
+                "unit_id": bucket_uid,
+                "family_id": family_id,
+                "category": cat,
+                "part_bucket": bucket,
+                "unit_kind": unit_kind,
+                "part_count": len(all_p_bucket),
+                "main_count": len(main_p),
+                "splash_count": len(splash_p),
+                "total_weight_kg": total_w,
+                "total_sqft": total_sq,
+                "main_part_nos": [str(p.get("part_no", "") or "") for p in main_p],
+                "splash_part_nos": [str(p.get("part_no", "") or "") for p in splash_p],
+                "flat": flat_str,
+                "building": building_str,
+                "floor": floor_str,
+                "pieces": pieces_detail,
             }
+            floor_bucket_flat[floor_str][bucket][flat_str].append(bundle_row)
 
-        pieces_detail = (
-            [_piece_detail(p, "main") for p in (unit.get("main_pieces") or [])] +
-            [_piece_detail(p, "splash") for p in (unit.get("splash_pieces") or [])]
-        )
+            _bucket_pieces[bucket] += len(all_p_bucket)
+            _bucket_weight[bucket] += total_w
+            if bucket != family_bucket:
+                _redirect_pieces[bucket] += len(all_p_bucket)
+                _redirect_weight[bucket] += total_w
 
-        bundle_row = {
-            "unit_id": str(unit.get("unit_id") or ""),
-            "family_id": str(unit.get("canonical_family_id") or unit.get("family_id") or ""),
-            "category": cat,
-            "part_bucket": bucket,
-            "unit_kind": unit.get("unit_kind"),
-            "part_count": len(all_p),
-            "main_count": len(unit.get("main_pieces") or []),
-            "splash_count": len(unit.get("splash_pieces") or []),
-            "total_weight_kg": total_w,
-            "total_sqft": total_sq,
-            "main_part_nos": [str(p.get("part_no", "") or "") for p in unit.get("main_pieces") or []],
-            "splash_part_nos": [str(p.get("part_no", "") or "") for p in unit.get("splash_pieces") or []],
-            "flat": flat_str,
-            "building": building_str,
-            "floor": floor_str,
-            "pieces": pieces_detail,
-        }
-        floor_bucket_flat[floor_str][bucket][flat_str].append(bundle_row)
-
-    _log.debug(
-        "[dispatch-inventory] bucket_summary=%s total_bundles=%d",
-        dict(_bucket_debug),
-        sum(_bucket_debug.values()),
+    # ── BUCKET REBALANCE REPORT (INFO) ───────────────────────────────────────
+    _log.info(
+        "\n=== BUCKET REBALANCE REPORT ===\n"
+        "RAW INVENTORY:\n"
+        "  %d pieces / %.1f kg\n"
+        "BUCKET BREAKDOWN (after piece-level split):\n"
+        "%s\n"
+        "REDIRECTED PIECES (split away from family primary bucket):\n"
+        "%s\n"
+        "GLOBAL TOTAL (must equal raw):\n"
+        "  %d pieces / %.1f kg\n"
+        "CONSERVATION: %s",
+        _raw_pieces, _raw_weight,
+        "\n".join(
+            f"  {b}: {_bucket_pieces[b]} pieces / {_bucket_weight[b]:.1f} kg"
+            for b in _BUCKET_ORDER if _bucket_pieces.get(b)
+        ),
+        "\n".join(
+            f"  → {b}: +{_redirect_pieces[b]} pieces / +{_redirect_weight[b]:.1f} kg"
+            for b in _BUCKET_ORDER if _redirect_pieces.get(b)
+        ) or "  (none — all pieces matched their family bucket)",
+        sum(_bucket_pieces.values()),
+        sum(_bucket_weight.values()),
+        "OK" if abs(sum(_bucket_weight.values()) - _raw_weight) < 0.5 else "MISMATCH — INVESTIGATE",
     )
 
     floors_out = []
@@ -2398,7 +2467,7 @@ def export_source_data(project_id: int):
         ws2 = wb.create_sheet("Parts List")
         ws2.append([
             # Identity
-            "Part #", "Description", "Category", "Drawing", "Unit",
+            "Part #", "Part Type", "Category", "Drawing", "Unit",
             # Location
             "Building", "Floor", "Flat",
             # Dimensions
@@ -2589,7 +2658,7 @@ def export_excel(project_id: int):
             # Crate
             "Crate ID", "Crate Name",
             # Identity
-            "Piece ID", "Part #", "Description", "Category", "Drawing", "Unit",
+            "Piece ID", "Part #", "Part Type", "Category", "Drawing", "Unit",
             # Location
             "Building", "Floor", "Flat",
             # Dimensions

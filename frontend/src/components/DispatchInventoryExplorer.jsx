@@ -40,6 +40,9 @@ const C = (bucketKey) => BUCKET[bucketKey] || BUCKET.misc;
 
 // Derive bucket from a bundle: check main pieces' Part Type first, fall back to category.
 function bucketForBundle(bundle) {
+  // Backend pre-splits bundles by bucket — part_bucket is authoritative.
+  if (bundle.part_bucket) return bundle.part_bucket;
+  // Legacy fallback: derive from piece Part Types then category.
   const pieces = bundle.pieces || [];
   for (const p of pieces) {
     if (p.role !== 'splash') {
