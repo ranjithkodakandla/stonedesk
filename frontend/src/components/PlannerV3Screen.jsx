@@ -4,7 +4,7 @@ import { API_BASE } from '../utils/plannerUtils';
 import DispatchSelectionPanel from './DispatchSelectionPanel';
 import DispatchInventoryExplorer from './DispatchInventoryExplorer';
 import DraftCrateWorkspace from './DraftCrateWorkspace';
-import { buildDraftCrate, recomputeCrate, getNextDraftCrateId, batchBundlesIntoCrates } from '../utils/crateEstimator';
+import { buildDraftCrate, recomputeCrate, getNextDraftCrateId, batchBundlesIntoCrates, getCrateClass } from '../utils/crateEstimator';
 import IslandOperationalReview from './IslandOperationalReview';
 import KitchenOperationalReview from './KitchenOperationalReview';
 import Container3DPreview from './planner3d/Container3DPreview';
@@ -246,6 +246,13 @@ const PlannerV3Screen = ({
     setDraftCrates((prev) =>
       prev.map((c) => {
         if (c.id !== crateId) return c;
+        const incomingClass = getCrateClass(newBundles[0]);
+        if (c.crate_class && incomingClass !== c.crate_class) {
+          setLastMessage(
+            `Cannot add to ${crateId} — part group type (${incomingClass}) does not match crate type (${c.crate_class}).`,
+          );
+          return c;
+        }
         const existingIds = new Set(c.bundles.map((b) => b.unit_id));
         const merged = [...c.bundles, ...newBundles.filter((b) => !existingIds.has(b.unit_id))];
         const updated = recomputeCrate({ ...c, bundles: merged });

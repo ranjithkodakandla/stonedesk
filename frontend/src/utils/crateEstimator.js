@@ -274,7 +274,8 @@ function isSideSplashPiece(piece) {
   return /side.?splash/i.test(piece.part || '');
 }
 
-export function estimateHorizontalLayeredDimensions(pieces) {
+export function estimateHorizontalLayeredDimensions(pieces, layerGapIn = HORIZ_LAYER_SEP) {
+  const gap = Number(layerGapIn) > 0 ? Number(layerGapIn) : HORIZ_LAYER_SEP;
   if (!pieces || pieces.length === 0) {
     return {
       internal_length: 0, internal_width: 0, internal_height: 0,
@@ -305,8 +306,8 @@ export function estimateHorizontalLayeredDimensions(pieces) {
 
   let intH = HORIZ_PALLET_BASE;
   if (mainH > 0) intH += mainH;
-  if (backH > 0) intH += HORIZ_LAYER_SEP + backH;
-  if (sideH > 0) intH += HORIZ_LAYER_SEP + sideH;
+  if (backH > 0) intH += gap + backH;
+  if (sideH > 0) intH += gap + sideH;
 
   return {
     internal_length: round2(intL),
