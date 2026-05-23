@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { usePlannerStore } from '../store/plannerStore';
-import { API_BASE, bundleRowKey } from '../utils/plannerUtils';
+import { API_BASE, bundleRowKey, formatNumber } from '../utils/plannerUtils';
 
 // ── Category metadata ─────────────────────────────────────────────────────────
 const CATEGORY_META = {
@@ -717,7 +717,7 @@ const FamilyBuilderPanel = () => {
             className="w-full rounded-2xl border border-[#e2e8f0] bg-[#f8fafc] px-3 py-2 text-sm text-[#0f172a] focus:outline-none focus:border-blue-400">
             {crateRows.map(c => (
               <option key={c.id} value={c.id}>
-                {c.crate_id} · {Math.round(c.gross_weight || 0)} kg · {(c.fill_percent || 0).toFixed(0)}%
+                {c.crate_id} · {formatNumber(c.gross_weight || 0)} kg · {formatNumber(c.fill_percent || 0)}%
               </option>
             ))}
           </select>

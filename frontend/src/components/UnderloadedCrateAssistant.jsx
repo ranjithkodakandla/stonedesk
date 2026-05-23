@@ -116,8 +116,8 @@ const UnderloadedCrateAssistant = ({ projectId }) => {
     <div className="mt-6 rounded-[28px] border border-amber-200 bg-amber-50/80 p-5 shadow-sm">
       <div className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-900/80">Underloaded crate assistant</div>
       <p className="mt-2 text-sm text-amber-950/90">
-        For island crates below target weight, we suggest nearby bundles that share pull candidates. Use{' '}
-        <strong>Auto pull</strong> to move the lightest matching bundle into this crate (whole family),{' '}
+        For island crates below target weight, we suggest nearby part groups that share pull candidates. Use{' '}
+        <strong>Auto pull</strong> to move the lightest matching group into this crate (whole family),{' '}
         <strong>Choose</strong> to pick one, or <strong>Ignore</strong> to hide this crate until you clear site data.
       </p>
       {loadErr && <div className="mt-2 text-sm text-red-700">{loadErr}</div>}
@@ -136,7 +136,7 @@ const UnderloadedCrateAssistant = ({ projectId }) => {
                   {c.crate_id} <span className="font-normal text-[#64748b]">· {c.name || 'Crate'}</span>
                 </div>
                 <div className="mt-1 text-xs text-[#64748b]">
-                  {opts.length} nearby bundle{opts.length === 1 ? '' : 's'} match pull hints ·{' '}
+                  {opts.length} nearby part group{opts.length === 1 ? '' : 's'} match pull hints ·{' '}
                   {(c.planner_v3_pull_piece_ids || []).length} candidate part id(s)
                 </div>
               </div>
@@ -188,7 +188,7 @@ const UnderloadedCrateAssistant = ({ projectId }) => {
       {chooseCrate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog">
           <div className="max-h-[90vh] w-full max-w-md overflow-auto rounded-2xl bg-white p-5 shadow-xl">
-            <div className="text-sm font-semibold text-[#0f172a]">Pull bundle into {chooseCrate.crate_id}</div>
+            <div className="text-sm font-semibold text-[#0f172a]">Pull part group into {chooseCrate.crate_id}</div>
             <p className="mt-2 text-xs text-[#64748b]">Whole family moves; planner recalculates immediately after.</p>
             <select
               className="mt-4 w-full rounded-xl border border-[#cbd5e1] bg-[#f8fafc] px-3 py-2 text-sm"

@@ -34,7 +34,12 @@ import { printV3OperationalPackSheet } from '../utils/printUtils';
 // Set to true to restore optimizer workflow UI (fleet decision, 3D container, crate table, etc.)
 const OPTIMIZER_UI_ENABLED = false;
 
-const PlannerV3Screen = ({ projectId, onClose = () => {}, savedPlan = null, onPlanSaved = null }) => {
+const PlannerV3Screen = ({
+  projectId,
+  onClose = () => {},
+  savedPlan = null,
+  onPlanSaved = null,
+}) => {
   const project = usePlannerStore((s) => s.project);
   const pieces = usePlannerStore((s) => s.pieces);
   const crates = usePlannerStore((s) => s.crates);
@@ -42,6 +47,8 @@ const PlannerV3Screen = ({ projectId, onClose = () => {}, savedPlan = null, onPl
   const generateV3Plan = usePlannerStore((s) => s.generateV3Plan);
   const isRefreshing = usePlannerStore((s) => s.isRefreshing);
   const setDeliveryPayloadCapKg = usePlannerStore((s) => s.setDeliveryPayloadCapKg);
+  const draftPlanHydration = usePlannerStore((s) => s.draftPlanHydration);
+  const consumeDraftPlanHydration = usePlannerStore((s) => s.consumeDraftPlanHydration);
 
   const [lastMessage, setLastMessage] = useState(null);
   const [selectedCrateId, setSelectedCrateId] = useState(null);
@@ -54,21 +61,35 @@ const PlannerV3Screen = ({ projectId, onClose = () => {}, savedPlan = null, onPl
   // When a saved plan is found on mount, hold it here until the user decides
   const [savedPlanCandidate, setSavedPlanCandidate] = useState(null);
 
+  const applySavedPlan = useCallback((plan) => {
+    if (!plan?.draft_crates?.length) return;
+    setDraftCrates(plan.draft_crates);
+    if (plan.target_weight_kg) setTargetWeightKg(plan.target_weight_kg);
+    if (plan.dispatch_selection) setDispatchSelection(plan.dispatch_selection);
+    setSavedAt(plan.saved_at);
+    setSavedPlanCandidate(null);
+    setLastMessage(
+      `Loaded saved plan (${new Date(plan.saved_at).toLocaleString('en-AU', { dateStyle: 'short', timeStyle: 'short' })}).`,
+    );
+  }, []);
+
   // ── Watch savedPlan prop (loaded by ProjectWorkspace) ────────────────────
   useEffect(() => {
     if (!savedPlan?.draft_crates?.length) return;
-    setSavedPlanCandidate(savedPlan);
-  }, [savedPlan]);
+    if (draftPlanHydration === 'auto') {
+      applySavedPlan(savedPlan);
+      consumeDraftPlanHydration();
+      return;
+    }
+    if (draftCrates.length === 0) {
+      setSavedPlanCandidate(savedPlan);
+    }
+  }, [savedPlan, draftPlanHydration, draftCrates.length, applySavedPlan, consumeDraftPlanHydration]);
 
   const handleLoadSavedPlan = useCallback(() => {
     if (!savedPlanCandidate) return;
-    setDraftCrates(savedPlanCandidate.draft_crates);
-    if (savedPlanCandidate.target_weight_kg) setTargetWeightKg(savedPlanCandidate.target_weight_kg);
-    if (savedPlanCandidate.dispatch_selection) setDispatchSelection(savedPlanCandidate.dispatch_selection);
-    setSavedAt(savedPlanCandidate.saved_at);
-    setSavedPlanCandidate(null);
-    setLastMessage(`Loaded plan saved ${new Date(savedPlanCandidate.saved_at).toLocaleString('en-AU', { dateStyle: 'short', timeStyle: 'short' })}.`);
-  }, [savedPlanCandidate]);
+    applySavedPlan(savedPlanCandidate);
+  }, [savedPlanCandidate, applySavedPlan]);
 
   const handleDiscardSavedPlan = useCallback(() => {
     setSavedPlanCandidate(null);
@@ -308,7 +329,7 @@ const PlannerV3Screen = ({ projectId, onClose = () => {}, savedPlan = null, onPl
         showGenerate={OPTIMIZER_UI_ENABLED}
       />
 
-      {/* Step 2 — Inventory + bundle selection workspace */}
+      {/* Step 2 — Inventory + part selection workspace */}
       <DispatchInventoryExplorer
         projectId={projectId}
         dispatchSelection={dispatchSelection}
@@ -415,8 +436,8 @@ const PlannerV3Screen = ({ projectId, onClose = () => {}, savedPlan = null, onPl
                   {fleetSelectionReason || decision?.rationale || 'Planner seeds with 20′ boxes, then evaluates an all-40′ fleet when average stone per 20′ falls below the economic threshold.'}
                 </p>
                 <ul className="mt-3 list-disc space-y-1 pl-5 text-[#64748b]">
-                  <li>Payload guidance: {formatNumber(layout?.max_weight_kg ?? payloadCapKg, 0)} kg cap</li>
-                  <li>Interior: {formatNumber(interior.length, 0)}″ L × {formatNumber(interior.width, 0)}″ W</li>
+                  <li>Payload guidance: {formatNumber(layout?.max_weight_kg ?? payloadCapKg)} kg cap</li>
+                  <li>Interior: {formatNumber(interior.length)}″ L × {formatNumber(interior.width)}″ W</li>
                 </ul>
               </div>
               <div className="rounded-2xl border border-blue-200 bg-[#eff6ff] p-4 text-sm text-[#1e3a8a]">
@@ -511,7 +532,7 @@ const PlannerV3Screen = ({ projectId, onClose = () => {}, savedPlan = null, onPl
                           <td className="py-2 pr-4 font-mono text-xs">{c.crate_id}</td>
                           <td className="py-2 pr-4 font-semibold text-[#1d4ed8]">{cls}</td>
                           <td className="py-2 pr-4 capitalize">{ori}</td>
-                          <td className="py-2 pr-4">{formatNumber(kg, 0)}</td>
+                          <td className="py-2 pr-4">{formatNumber(kg)}</td>
                           <td className="py-2 pr-4 text-xs text-[#64748b]">{splashLayerLabel(c)}</td>
                         </tr>
                       );
@@ -538,8 +559,8 @@ const PlannerV3Screen = ({ projectId, onClose = () => {}, savedPlan = null, onPl
                       if (!pl) return <p className="mt-2">No placement row — regenerate plan.</p>;
                       return (
                         <ul className="mt-2 list-disc space-y-1 pl-5">
-                          <li>Floor corner: ({formatNumber(pl.x, 1)}, {formatNumber(pl.y, 1)})″</li>
-                          <li>Footprint: {formatNumber(pl.floor_l, 1)} × {formatNumber(pl.floor_w, 1)}″</li>
+                          <li>Floor corner: ({formatNumber(pl.x)}, {formatNumber(pl.y)})″</li>
+                          <li>Footprint: {formatNumber(pl.floor_l)} × {formatNumber(pl.floor_w)}″</li>
                           <li>Stack level: {pl.stack_level ?? 0}</li>
                         </ul>
                       );
@@ -555,10 +576,10 @@ const PlannerV3Screen = ({ projectId, onClose = () => {}, savedPlan = null, onPl
             <div className="mt-8 rounded-[32px] border border-[#dbe4f0] bg-white p-6 shadow-sm">
               <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[#64748b]">Solver metrics</div>
               <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-4 text-sm">
-                <div><div className="text-[#64748b]">Shipment weight</div><div className="text-lg font-semibold">{formatNumber(layout.total_weight_kg, 0)} kg</div></div>
-                <div><div className="text-[#64748b]">Floor length used</div><div className="text-lg font-semibold">{formatNumber(layout.used_length_in, 0)}″</div></div>
-                <div><div className="text-[#64748b]">Island strip depth</div><div className="text-lg font-semibold">{formatNumber(layout.linear_island_strip_end_x_in ?? 0, 0)}″</div></div>
-                <div><div className="text-[#64748b]">Horizontal zone starts @</div><div className="text-lg font-semibold">{formatNumber(layout.horizontal_zone_start_x_in ?? layout.horizontal_zone_start_x ?? 0, 0)}″</div></div>
+                <div><div className="text-[#64748b]">Shipment weight</div><div className="text-lg font-semibold">{formatNumber(layout.total_weight_kg)} kg</div></div>
+                <div><div className="text-[#64748b]">Floor length used</div><div className="text-lg font-semibold">{formatNumber(layout.used_length_in)}″</div></div>
+                <div><div className="text-[#64748b]">Island strip depth</div><div className="text-lg font-semibold">{formatNumber(layout.linear_island_strip_end_x_in ?? 0)}″</div></div>
+                <div><div className="text-[#64748b]">Horizontal zone starts @</div><div className="text-lg font-semibold">{formatNumber(layout.horizontal_zone_start_x_in ?? layout.horizontal_zone_start_x ?? 0)}″</div></div>
               </div>
               {(layout.warnings || []).length > 0 && (
                 <ul className="mt-4 list-disc space-y-1 pl-5 text-sm text-[#b45309]">

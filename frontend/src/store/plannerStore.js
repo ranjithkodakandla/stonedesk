@@ -49,6 +49,11 @@ export const usePlannerStore = create((set, get) => ({
   selectedPlacementCrateId: null,
   manualContainers: [],
   manualContainerDirty: false,
+  /** null | 'auto' — when 'auto', Dispatch & build hydrates saved plan without prompt */
+  draftPlanHydration: null,
+
+  requestEditSavedDraftPlan: () => set({ draftPlanHydration: 'auto' }),
+  consumeDraftPlanHydration: () => set({ draftPlanHydration: null }),
 
   initialize: async (projectId) => {
     set({ projectId, isWorkspaceLoading: true });

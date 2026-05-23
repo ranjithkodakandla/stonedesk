@@ -91,7 +91,7 @@ function statusBadge(status) {
   return `<span class="badge ${cls}">${status}</span>`;
 }
 
-function fmt(val, decimals = 1) {
+function fmt(val, decimals = 2) {
   if (val == null || isNaN(val)) return '—';
   return Number(val).toFixed(decimals);
 }

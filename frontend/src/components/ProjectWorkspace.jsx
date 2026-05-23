@@ -58,6 +58,7 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
   const [entryMode, setEntryMode] = useState('manual');  // 'manual' | 'upload'
   const [loadedDrawing, setLoadedDrawing] = useState(null);
   const [draftCratePlan, setDraftCratePlan] = useState(null);
+  const requestEditSavedDraftPlan = usePlannerStore((s) => s.requestEditSavedDraftPlan);
 
   useEffect(() => {
     initialize(projectId);
@@ -74,12 +75,20 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
   }, [projectId]);
 
   const hasPlan = crates.length > 0;
+  const hasSavedDraftPlan = (draftCratePlan?.draft_crates?.length ?? 0) > 0;
   const projectStatus = project.status || 'draft';
 
   const planningUnlocked =
     hasPlan ||
+    hasSavedDraftPlan ||
     (pieces.length > 0 &&
       ['approved_for_packing', 'crate_planned', 'container_planned'].includes(projectStatus));
+
+  const openEditDraftPlan = () => {
+    requestEditSavedDraftPlan();
+    setMainTab('planning');
+    setActiveTab('build-plan');
+  };
 
   const openPlanningBuild = () => {
     setMainTab('planning');
@@ -87,11 +96,11 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
   };
 
   useEffect(() => {
-    if (mainTab !== 'planning' || !planningUnlocked || hasPlan) return;
+    if (mainTab !== 'planning' || !planningUnlocked || hasPlan || hasSavedDraftPlan) return;
     if (activeTab === 'crate-plan' || activeTab === 'container-loading') {
       setActiveTab('build-plan');
     }
-  }, [mainTab, planningUnlocked, hasPlan, activeTab, setActiveTab]);
+  }, [mainTab, planningUnlocked, hasPlan, hasSavedDraftPlan, activeTab, setActiveTab]);
 
   const totalWeight = pieces.reduce((sum, piece) => sum + getPieceWeight(piece, project), 0);
   const totalSqFt = pieces.reduce((sum, piece) => sum + ((Number(piece.length || 0) * Number(piece.width || 0)) / 144) * (Number(piece.qty) || 1), 0);
@@ -317,11 +326,11 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
                 </div>
                 <div className="rounded-[24px] border border-[#e2e8f0] bg-[#f8fafc] px-4 py-4">
                   <div className="text-xs uppercase tracking-[0.16em] text-[#64748b]">Total Sq Ft</div>
-                  <div className="mt-2 text-2xl font-semibold text-[#0f172a]">{formatNumber(totalSqFt, 1)}</div>
+                  <div className="mt-2 text-2xl font-semibold text-[#0f172a]">{formatNumber(totalSqFt)}</div>
                 </div>
                 <div className="rounded-[24px] border border-[#e2e8f0] bg-[#f8fafc] px-4 py-4">
                   <div className="text-xs uppercase tracking-[0.16em] text-[#64748b]">Shipment Weight</div>
-                  <div className="mt-2 text-2xl font-semibold text-[#0f172a]">{formatNumber(totalWeight, 0)} kg</div>
+                  <div className="mt-2 text-2xl font-semibold text-[#0f172a]">{formatNumber(totalWeight)} kg</div>
                 </div>
               </div>
             </div>
@@ -430,7 +439,7 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
                   <div className="text-sm text-[#64748b]">
                     {pieces.length === 0
                       ? 'Add parts above to enable plan generation'
-                      : `${totalQty} parts ready • ${formatNumber(totalSqFt, 1)} sq ft • ${formatNumber(totalWeight, 0)} kg`}
+                      : `${totalQty} parts ready • ${formatNumber(totalSqFt)} sq ft • ${formatNumber(totalWeight)} kg`}
                   </div>
                   <div className="flex gap-3 flex-wrap">
                     {pieces.length > 0 && (
@@ -440,26 +449,6 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
                         className="rounded-full border border-[#cbd5e1] bg-white px-5 py-3 text-sm font-semibold text-[#334155] hover:bg-[#f8fafc] transition-all"
                       >
                         ↓ Download Source Data
-                      </button>
-                    )}
-
-                    {/* Approval workflow buttons */}
-                    {projectStatus === 'draft' && pieces.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => handleApprove('review_pending')}
-                        className="rounded-full border border-[#f59e0b] bg-[#fffbeb] px-6 py-3 text-sm font-semibold text-[#b45309] hover:bg-[#fef3c7] transition-all"
-                      >
-                        Submit for Review
-                      </button>
-                    )}
-                    {projectStatus === 'review_pending' && (
-                      <button
-                        type="button"
-                        onClick={() => handleApprove('approved_for_packing')}
-                        className="rounded-full bg-[#059669] px-6 py-3 text-sm font-semibold text-white hover:bg-[#047857] transition-all shadow-sm"
-                      >
-                        ✓ Approve for Packing
                       </button>
                     )}
 
@@ -507,9 +496,25 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
               </div>
 
               <div className="px-6 py-6">
-                {activeTab === 'summary' && <PlannerSummaryTab draftCratePlan={draftCratePlan} />}
-                {activeTab === 'build-plan' && <PlannerV3Screen projectId={projectId} savedPlan={draftCratePlan} onPlanSaved={setDraftCratePlan} />}
-                {activeTab === 'crate-plan' && <PlannerCrateTab draftCratePlan={draftCratePlan} projectId={projectId} />}
+                {activeTab === 'summary' && (
+                  <PlannerSummaryTab draftCratePlan={draftCratePlan} onEditPlan={openEditDraftPlan} />
+                )}
+                {activeTab === 'build-plan' && (
+                  <PlannerV3Screen
+                    projectId={projectId}
+                    savedPlan={draftCratePlan}
+                    onPlanSaved={setDraftCratePlan}
+                  />
+                )}
+                {activeTab === 'crate-plan' && (
+                  <PlannerCrateTab
+                    draftCratePlan={draftCratePlan}
+                    projectId={projectId}
+                    onPlanUpdated={setDraftCratePlan}
+                    onPlanDeleted={() => setDraftCratePlan(null)}
+                    onEditPlan={openEditDraftPlan}
+                  />
+                )}
                 {activeTab === 'container-loading' && <PlannerContainerTab />}
               </div>
             </>

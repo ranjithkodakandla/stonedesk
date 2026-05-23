@@ -214,7 +214,7 @@ export default function IslandOperationalReview({ projectId, project, embedded =
           <div className="font-semibold text-[#0f172a]">Batching mode: {meta.batching.mode}</div>
           <p className="mt-1 leading-relaxed text-[#64748b]">{meta.batching.explanation}</p>
           <p className="mt-1 text-[#475569]">
-            Scope: <span className="font-medium">{meta.batching.scope_label}</span> · Island bundles in scope:{' '}
+            Scope: <span className="font-medium">{meta.batching.scope_label}</span> · Island part groups in scope:{' '}
             {meta.batching.scoped_island_bundle_count}
           </p>
         </div>
@@ -237,7 +237,7 @@ export default function IslandOperationalReview({ projectId, project, embedded =
                     Dimensions: <strong>{c.dimensions_in?.label || '—'}</strong> in
                   </div>
                   <div className="mt-2 text-sm text-[#64748b]">
-                    Bundles: {c.bundle_count} · Slabs: {c.slab_count}
+                    Part groups: {c.bundle_count} · Slabs: {c.slab_count}
                   </div>
                 </div>
                 <div className="flex flex-col items-end gap-2">

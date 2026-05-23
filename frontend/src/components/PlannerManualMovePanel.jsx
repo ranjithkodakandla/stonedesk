@@ -4,7 +4,7 @@ import { API_BASE, bundleRowKey, formatNumber } from '../utils/plannerUtils';
 import { usePlannerStore } from '../store/plannerStore';
 
 /**
- * Default: move whole PartBundle (packing family). Advanced: pick individual pieces.
+ * Default: move whole part group (packing family). Advanced: pick individual pieces.
  */
 const PlannerManualMovePanel = ({ projectId }) => {
   const crates = usePlannerStore((s) => s.crates);
@@ -67,7 +67,7 @@ const PlannerManualMovePanel = ({ projectId }) => {
 
   const runMove = async (ids) => {
     if (!ids?.length || !targetCrateDbId) {
-      setMsg('Select a bundle (or pieces) and a target crate.');
+      setMsg('Select a part group (or individual parts) and a target crate.');
       return;
     }
     setBusy(true);
@@ -86,10 +86,10 @@ const PlannerManualMovePanel = ({ projectId }) => {
 
   return (
     <div className="rounded-[28px] border border-[#dbe4f0] bg-white p-5 shadow-sm">
-      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[#64748b]">Manual move (bundles first)</div>
+      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[#64748b]">Manual move (part groups first)</div>
       <p className="mt-2 text-sm text-[#64748b]">
-        Default moves keep <strong className="text-[#0f172a]">family / PartBundle integrity</strong> (mains + splashes
-        together). Enable advanced mode only to split a bundle by selecting individual parts.
+        Default moves keep <strong className="text-[#0f172a]">family / part group integrity</strong> (mains + splashes
+        together). Enable advanced mode only to split a group by selecting individual parts.
       </p>
 
       {loadErr && <div className="mt-3 text-sm text-red-600">{loadErr}</div>}
@@ -104,14 +104,14 @@ const PlannerManualMovePanel = ({ projectId }) => {
       {!advanced ? (
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <div>
-            <div className="text-xs font-semibold text-[#64748b]">Bundle (family)</div>
+            <div className="text-xs font-semibold text-[#64748b]">Part group (family)</div>
             <select
               className="mt-1 w-full rounded-xl border border-[#cbd5e1] bg-[#f8fafc] px-3 py-2 text-sm"
               value={selectedFamilyKey}
               onChange={(e) => setSelectedFamilyKey(e.target.value)}
               disabled={busy}
             >
-              <option value="">— Select bundle —</option>
+              <option value="">— Select part group —</option>
               {familyOptions.map((f) => (
                 <option key={f.key} value={f.key}>
                   {f.label}
@@ -141,7 +141,7 @@ const PlannerManualMovePanel = ({ projectId }) => {
         </div>
       ) : (
         <div className="mt-4 space-y-3">
-          <div className="text-xs font-semibold text-[#64748b]">Pick pieces (split bundle)</div>
+          <div className="text-xs font-semibold text-[#64748b]">Pick pieces (split group)</div>
           <div className="max-h-48 overflow-y-auto rounded-xl border border-[#e2e8f0] bg-[#f8fafc] p-2 text-sm">
             {families.flatMap((f) => (f.all_piece_ids || []).map((id) => ({ id, fam: bundleRowKey(f) }))).length === 0 ? (
               <div className="text-[#64748b]">No pieces.</div>

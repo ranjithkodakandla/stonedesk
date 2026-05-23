@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import axios from 'axios';
+import { formatNumber } from '../utils/plannerUtils';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
@@ -486,13 +487,13 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing })
                   <td className="p-3">{p.edge}</td>
                   <td className="p-3">{typeof p.edge_polish_machine === 'number' && p.edge_polish_machine > 0 ? p.edge_polish_machine.toFixed(2) : '-'}</td>
                   <td className="p-3 text-right text-[#64748b]">{sqft.toFixed(2)}</td>
-                  <td className="p-3 text-right text-[#64748b]">{wt.toFixed(1)}</td>
+                  <td className="p-3 text-right text-[#64748b]">{formatNumber(wt)}</td>
                   <td className="p-3 text-left text-[#64748b]">{p.building}</td>
                   <td className="p-3 text-left text-[#64748b]">{p.floor}</td>
                   <td className="p-3 text-left text-[#64748b]">{p.flat}</td>
                   <td className="p-3 text-xs text-[#64748b]">
                     <div>{p.delivery_priority || 'Standard'} · {p.fragility || 'Standard'}</div>
-                    <div>{p.stack_preference || 'Auto'}{p.weight_override ? ` · ${Number(p.weight_override).toFixed(1)}kg ea` : ''}</div>
+                    <div>{p.stack_preference || 'Auto'}{p.weight_override ? ` · ${formatNumber(p.weight_override)} kg ea` : ''}</div>
                   </td>
                   <td className="p-3 text-center">
                     <div className="flex items-center justify-center gap-2">
