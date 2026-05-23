@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { usePlannerStore } from '../store/plannerStore';
 import { buildRecommendationReasons, formatNumber, summarizeWarnings } from '../utils/plannerUtils';
 import { printCratePlan, printContainerPlan } from '../utils/printUtils';
+import { CratePlanSummary } from './DraftCrateWorkspace';
 const KpiCard = ({ label, value, accent = 'text-[#0f172a]' }) => (
   <div className="rounded-[24px] border border-[#e2e8f0] bg-white px-4 py-4 shadow-sm">
     <div className="text-xs uppercase tracking-[0.18em] text-[#64748b]">{label}</div>
@@ -103,7 +104,7 @@ const StatusFlowStrip = ({ currentStatus, onApprove, isRefreshing }) => {
   );
 };
 
-const PlannerSummaryTab = () => {
+const PlannerSummaryTab = ({ draftCratePlan = null }) => {
   const project    = usePlannerStore((s) => s.project);
   const insights   = usePlannerStore((s) => s.insights);
   const crates       = usePlannerStore((s) => s.crates);
@@ -143,6 +144,27 @@ const PlannerSummaryTab = () => {
         onApprove={approveProject}
         isRefreshing={isRefreshing}
       />
+
+      {/* Draft crate plan summary — shown when a plan has been saved in Step 2 */}
+      {draftCratePlan?.draft_crates?.length > 0 && (
+        <div className="space-y-4">
+          <div className="rounded-[32px] border border-[#dbe4f0] bg-white p-6 shadow-sm">
+            <div className="text-xs uppercase tracking-[0.22em] text-[#64748b]">Draft Crate Plan</div>
+            <div className="mt-1 text-xl font-semibold text-[#0f172a]">
+              {draftCratePlan.draft_crates.length} crate{draftCratePlan.draft_crates.length !== 1 ? 's' : ''} saved
+              {draftCratePlan.saved_at && (
+                <span className="ml-3 text-sm font-normal text-[#64748b]">
+                  · Saved {new Date(draftCratePlan.saved_at).toLocaleString('en-AU', { dateStyle: 'medium', timeStyle: 'short' })}
+                </span>
+              )}
+            </div>
+          </div>
+          <CratePlanSummary
+            draftCrates={draftCratePlan.draft_crates}
+            targetWeightKg={draftCratePlan.target_weight_kg || 1900}
+          />
+        </div>
+      )}
 
       {/* Shipping recommendation — shown after a plan exists */}
       {hasCratePlan && insights && (

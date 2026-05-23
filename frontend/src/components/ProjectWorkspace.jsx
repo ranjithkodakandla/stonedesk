@@ -57,10 +57,21 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
   const [mainTab, setMainTab] = useState('source-data'); // 'source-data' | 'planning'
   const [entryMode, setEntryMode] = useState('manual');  // 'manual' | 'upload'
   const [loadedDrawing, setLoadedDrawing] = useState(null);
+  const [draftCratePlan, setDraftCratePlan] = useState(null);
 
   useEffect(() => {
     initialize(projectId);
   }, [initialize, projectId]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    axios.get(`${API_BASE}/projects/${projectId}/draft-crate-plan`)
+      .then((res) => {
+        const plan = res.data?.plan;
+        if (plan?.draft_crates?.length) setDraftCratePlan(plan);
+      })
+      .catch(() => {});
+  }, [projectId]);
 
   const hasPlan = crates.length > 0;
   const projectStatus = project.status || 'draft';
@@ -496,9 +507,9 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
               </div>
 
               <div className="px-6 py-6">
-                {activeTab === 'summary' && <PlannerSummaryTab />}
-                {activeTab === 'build-plan' && <PlannerV3Screen projectId={projectId} />}
-                {activeTab === 'crate-plan' && <PlannerCrateTab />}
+                {activeTab === 'summary' && <PlannerSummaryTab draftCratePlan={draftCratePlan} />}
+                {activeTab === 'build-plan' && <PlannerV3Screen projectId={projectId} savedPlan={draftCratePlan} onPlanSaved={setDraftCratePlan} />}
+                {activeTab === 'crate-plan' && <PlannerCrateTab draftCratePlan={draftCratePlan} projectId={projectId} />}
                 {activeTab === 'container-loading' && <PlannerContainerTab />}
               </div>
             </>

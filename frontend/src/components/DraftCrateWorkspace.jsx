@@ -58,11 +58,9 @@ function bucketDot(bk) {
   return BUCKET_DOT[bk || 'misc'] || BUCKET_DOT.misc;
 }
 
-// Show full numeric precision — no rounding, no truncation.
-// maximumFractionDigits:8 shows all significant digits without floating-point noise.
 function fmt(n) {
   if (n == null || isNaN(n)) return '—';
-  return Number(n).toLocaleString('en-AU', { maximumFractionDigits: 8 });
+  return Number(n).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 // ─── Dimension display row ────────────────────────────────────────────────────
@@ -119,7 +117,7 @@ function PartRowInCrate({ piece }) {
 
 // ─── Bundle group inside draft crate ─────────────────────────────────────────
 
-function BundleInCrate({ bundle, crateId, onRemove }) {
+function BundleInCrate({ bundle, crateId, onRemove, readOnly = false }) {
   const [showParts, setShowParts] = useState(false);
   const bk = bundle.part_bucket || 'misc';
   // Derive displayed Part Types from pieces (full names, no aliases)
@@ -159,14 +157,16 @@ function BundleInCrate({ bundle, crateId, onRemove }) {
               {showParts ? '▴ Hide' : '▾ Parts'}
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => onRemove(crateId, bundle.unit_id)}
-            className="rounded-lg border border-[#fee2e2] bg-[#fff5f5] px-2 py-1 text-[10px] font-medium text-red-500 hover:bg-red-50 transition-colors"
-            title="Return to inventory"
-          >
-            Return
-          </button>
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={() => onRemove(crateId, bundle.unit_id)}
+              className="rounded-lg border border-[#fee2e2] bg-[#fff5f5] px-2 py-1 text-[10px] font-medium text-red-500 hover:bg-red-50 transition-colors"
+              title="Return to inventory"
+            >
+              Return
+            </button>
+          )}
         </div>
       </div>
 
@@ -194,7 +194,7 @@ function WarningChip({ text }) {
 
 // ─── Draft crate card ─────────────────────────────────────────────────────────
 
-function DraftCrateCard({ crate, onRemoveBundle, onDeleteCrate }) {
+function DraftCrateCard({ crate, onRemoveBundle, onDeleteCrate, readOnly = false }) {
   const [showContents, setShowContents] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -251,25 +251,29 @@ function DraftCrateCard({ crate, onRemoveBundle, onDeleteCrate }) {
           >
             {showContents ? '▴ Hide contents' : '▾ View contents'}
           </button>
-          <button
-            type="button"
-            onClick={handleDeleteClick}
-            className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
-              confirmDelete
-                ? 'border-red-500 bg-red-600 text-white font-bold hover:bg-red-700'
-                : 'border-[#fee2e2] bg-[#fff5f5] text-red-500 hover:bg-red-50'
-            }`}
-          >
-            {confirmDelete ? `Confirm delete ${crate.id}` : 'Delete'}
-          </button>
-          {confirmDelete && (
-            <button
-              type="button"
-              onClick={() => setConfirmDelete(false)}
-              className="rounded-full border border-[#e2e8f0] bg-white px-3 py-1.5 text-xs font-medium text-[#475569] hover:bg-[#f8fafc] transition-colors"
-            >
-              Cancel
-            </button>
+          {!readOnly && (
+            <>
+              <button
+                type="button"
+                onClick={handleDeleteClick}
+                className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
+                  confirmDelete
+                    ? 'border-red-500 bg-red-600 text-white font-bold hover:bg-red-700'
+                    : 'border-[#fee2e2] bg-[#fff5f5] text-red-500 hover:bg-red-50'
+                }`}
+              >
+                {confirmDelete ? `Confirm delete ${crate.id}` : 'Delete'}
+              </button>
+              {confirmDelete && (
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete(false)}
+                  className="rounded-full border border-[#e2e8f0] bg-white px-3 py-1.5 text-xs font-medium text-[#475569] hover:bg-[#f8fafc] transition-colors"
+                >
+                  Cancel
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -309,6 +313,7 @@ function DraftCrateCard({ crate, onRemoveBundle, onDeleteCrate }) {
                 bundle={b}
                 crateId={crate.id}
                 onRemove={onRemoveBundle}
+                readOnly={readOnly}
               />
             ))}
           </div>
@@ -485,7 +490,7 @@ function CratePlanSummary({ draftCrates, targetWeightKg }) {
 
 // ─── Draft crate workspace ────────────────────────────────────────────────────
 
-const DraftCrateWorkspace = ({ draftCrates, onRemoveBundle, onDeleteCrate, onSavePlan, onDownloadXlsx, savedAt, targetWeightKg = 1900 }) => {
+const DraftCrateWorkspace = ({ draftCrates, onRemoveBundle, onDeleteCrate, onSavePlan, savedAt, targetWeightKg = 1900 }) => {
   const [showSummary, setShowSummary] = useState(false);
 
   if (!draftCrates || draftCrates.length === 0) return null;
@@ -511,16 +516,6 @@ const DraftCrateWorkspace = ({ draftCrates, onRemoveBundle, onDeleteCrate, onSav
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {/* Download button */}
-          {onDownloadXlsx && (
-            <button
-              type="button"
-              onClick={onDownloadXlsx}
-              className="rounded-full border border-[#1d4ed8] bg-[#eff6ff] px-4 py-1.5 text-xs font-semibold text-[#1d4ed8] hover:bg-[#dbeafe] transition-colors whitespace-nowrap"
-            >
-              Download XLSX
-            </button>
-          )}
           {/* Summary toggle */}
           <button
             type="button"
@@ -579,4 +574,5 @@ const DraftCrateWorkspace = ({ draftCrates, onRemoveBundle, onDeleteCrate, onSav
   );
 };
 
+export { DraftCrateCard, CratePlanSummary, fmt };
 export default DraftCrateWorkspace;
