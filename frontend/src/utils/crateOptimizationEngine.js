@@ -167,17 +167,11 @@ export function validateEditPlan(editCrates, targetWeightKg = 1900, options = {}
       );
     }
 
-    if (!island && layers.length > 0) {
-      const expectedKeys = [];
-      for (const layer of buildHorizontalStackLayers(pieces, gapIn)) {
-        layer.pieces.forEach((p, i) => expectedKeys.push(pieceKey(p, i)));
-      }
-      const actualKeys = pieces.map((p, i) => pieceKey(p, i));
-      if (actualKeys.join('|') !== expectedKeys.join('|')) {
-        warnings.push(
-          `${c.id}: Piece list order may not match factory stack — review exploded stack.`,
-        );
-      }
+    const hasCustomLayerOrder = Boolean(layerOrderByCrateId[c.id]?.length);
+    if (!island && hasCustomLayerOrder && layers.length > 0) {
+      warnings.push(
+        `${c.id}: Custom layer order active — confirm factory stack before apply.`,
+      );
     }
 
     const ptm = preview.crate.part_type_mix || {};
