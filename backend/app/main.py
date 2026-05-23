@@ -1787,6 +1787,12 @@ def export_draft_crate_plan_xlsx(project_id: int, body: Dict):
             max_len = max((len(str(cell.value or "")) for cell in col), default=8)
             ws.column_dimensions[get_column_letter(col[0].column)].width = min(max_len + 2, 50)
 
+    def _num_fmt(ws, col_indices, number_format="0.00"):
+        """Set number format on specified 1-based column indices of the last row."""
+        row = ws.max_row
+        for col in col_indices:
+            ws.cell(row=row, column=col).number_format = number_format
+
     STATUS_MAP = {
         "island_vertical":  "Island cassette",
         "kitchen_vertical": "Kitchen horizontal",
@@ -1842,10 +1848,12 @@ def export_draft_crate_plan_xlsx(project_id: int, body: Dict):
             ext_dim,
             warnings_str,
         ])
+        _num_fmt(ws1, [5, 6])
 
     ws1.append([])
     ws1.append(["TOTAL", "", "", total_parts_all, total_weight_all, total_sqft_all])
     _bold(ws1, ws1.max_row)
+    _num_fmt(ws1, [5, 6])
     _auto_width(ws1)
 
     # ── Sheet 2: Crate Contents ────────────────────────────────────────────────
@@ -1877,6 +1885,7 @@ def export_draft_crate_plan_xlsx(project_id: int, body: Dict):
                     piece.get("weight_kg", ""),
                     piece.get("sqft", ""),
                 ])
+                _num_fmt(ws2, [11, 12])
 
     _auto_width(ws2)
 
@@ -1888,7 +1897,9 @@ def export_draft_crate_plan_xlsx(project_id: int, body: Dict):
     ws3.append(["Total crates", len(draft_crates)])
     ws3.append(["Total parts", total_parts_all])
     ws3.append(["Total weight (kg)", total_weight_all])
+    _num_fmt(ws3, [2])
     ws3.append(["Total sq ft", total_sqft_all])
+    _num_fmt(ws3, [2])
     ws3.append([])
 
     # Crate type distribution

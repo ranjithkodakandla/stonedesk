@@ -55,7 +55,7 @@ function bucketForBundle(bundle) {
 
 function fmt(n) {
   if (n == null || isNaN(n)) return '—';
-  return Number(n).toLocaleString('en-AU', { maximumFractionDigits: 8 });
+  return Number(n).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 // ─── Aggregate response → 4 operational buckets (scope-level) ────────────────

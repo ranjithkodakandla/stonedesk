@@ -34,7 +34,7 @@ import { printV3OperationalPackSheet } from '../utils/printUtils';
 // Set to true to restore optimizer workflow UI (fleet decision, 3D container, crate table, etc.)
 const OPTIMIZER_UI_ENABLED = false;
 
-const PlannerV3Screen = ({ projectId, onClose = () => {} }) => {
+const PlannerV3Screen = ({ projectId, onClose = () => {}, savedPlan = null, onPlanSaved = null }) => {
   const project = usePlannerStore((s) => s.project);
   const pieces = usePlannerStore((s) => s.pieces);
   const crates = usePlannerStore((s) => s.crates);
@@ -54,18 +54,11 @@ const PlannerV3Screen = ({ projectId, onClose = () => {} }) => {
   // When a saved plan is found on mount, hold it here until the user decides
   const [savedPlanCandidate, setSavedPlanCandidate] = useState(null);
 
-  // ── Load saved plan on mount ──────────────────────────────────────────────
+  // ── Watch savedPlan prop (loaded by ProjectWorkspace) ────────────────────
   useEffect(() => {
-    if (!projectId) return;
-    axios.get(`${API_BASE}/projects/${projectId}/draft-crate-plan`)
-      .then((res) => {
-        const plan = res.data?.plan;
-        if (!plan || !plan.draft_crates?.length) return;
-        // Don't auto-restore — show a dialog so the user can choose
-        setSavedPlanCandidate(plan);
-      })
-      .catch(() => {});
-  }, [projectId]);
+    if (!savedPlan?.draft_crates?.length) return;
+    setSavedPlanCandidate(savedPlan);
+  }, [savedPlan]);
 
   const handleLoadSavedPlan = useCallback(() => {
     if (!savedPlanCandidate) return;
@@ -174,7 +167,7 @@ const PlannerV3Screen = ({ projectId, onClose = () => {} }) => {
       if (newCrates.length === 1) {
         const c = newCrates[0];
         setLastMessage(
-          `${c.id} created — ${c.bundle_count} bundle${c.bundle_count !== 1 ? 's' : ''}, ` +
+          `${c.id} created — ${c.part_count} parts, ` +
           `${c.total_weight_kg.toLocaleString('en-AU')} kg.`,
         );
       } else {
@@ -212,8 +205,15 @@ const PlannerV3Screen = ({ projectId, onClose = () => {} }) => {
       dispatch_selection: dispatchSelection,
       draft_crates: draftCrates,
     }).then((res) => {
+      const plan = {
+        draft_crates: draftCrates,
+        target_weight_kg: targetWeightKg,
+        dispatch_selection: dispatchSelection,
+        saved_at: res.data.saved_at,
+      };
       setSavedAt(res.data.saved_at);
       setLastMessage('Crate plan saved.');
+      if (onPlanSaved) onPlanSaved(plan);
     }).catch(() => {
       setLastMessage('Save failed — check connection and retry.');
     });
@@ -229,7 +229,7 @@ const PlannerV3Screen = ({ projectId, onClose = () => {} }) => {
         const merged = [...c.bundles, ...newBundles.filter((b) => !existingIds.has(b.unit_id))];
         const updated = recomputeCrate({ ...c, bundles: merged });
         setLastMessage(
-          `${crateId} updated — ${updated.bundle_count} bundle${updated.bundle_count !== 1 ? 's' : ''}, ` +
+          `${crateId} updated — ${updated.part_count} parts, ` +
           `${updated.total_weight_kg.toLocaleString('en-AU')} kg.`,
         );
         return updated;
@@ -237,26 +237,6 @@ const PlannerV3Screen = ({ projectId, onClose = () => {} }) => {
     );
   }, []);
 
-  // Download XLSX export of the current in-memory plan
-  const handleDownloadXlsx = useCallback(() => {
-    if (!projectId || !draftCrates.length) return;
-    axios.post(`${API_BASE}/projects/${projectId}/draft-crate-plan/export`, {
-      draft_crates: draftCrates,
-    }, { responseType: 'blob' }).then((res) => {
-      const url = URL.createObjectURL(res.data);
-      const a = document.createElement('a');
-      a.href = url;
-      const disp = res.headers['content-disposition'] || '';
-      const match = disp.match(/filename="([^"]+)"/);
-      a.download = match ? match[1] : `CratePlan.xlsx`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    }).catch(() => {
-      setLastMessage('Export failed — check connection and retry.');
-    });
-  }, [projectId, draftCrates]);
 
   const legacyPlan = crates.length > 0 && crates.some((c) => (c.packing_mode || '') !== 'v3');
 
@@ -280,7 +260,7 @@ const PlannerV3Screen = ({ projectId, onClose = () => {} }) => {
           {project.name || project.job_number || `Project #${projectId}`}
         </h2>
         <p className="mt-2 max-w-3xl text-sm text-[#64748b]">
-          Select the dispatch scope, then choose bundles to manually build crates.
+          Select the dispatch scope, then choose parts to manually build crates.
           The system provides inventory visibility, dimension estimates, and operational warnings —
           you decide the load.
         </p>
@@ -346,7 +326,6 @@ const PlannerV3Screen = ({ projectId, onClose = () => {} }) => {
         onRemoveBundle={handleRemoveBundleFromCrate}
         onDeleteCrate={handleDeleteDraftCrate}
         onSavePlan={handleSavePlan}
-        onDownloadXlsx={draftCrates.length > 0 ? handleDownloadXlsx : null}
         savedAt={savedAt}
         targetWeightKg={targetWeightKg}
       />
