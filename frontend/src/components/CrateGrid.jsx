@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
+import { formatNumber } from '../utils/plannerUtils';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
@@ -62,8 +63,6 @@ const defaultContainerView = {
 };
 
 const getStatusMeta = (status) => statusMeta[status] || statusMeta.yellow;
-
-const formatNumber = (value, digits = 1) => Number(value || 0).toFixed(digits);
 
 const buildEditableContainersFromPlan = (containers = []) =>
   containers.map((container, containerIndex) => ({
@@ -848,19 +847,19 @@ const CrateGrid = ({ pieces, crates, assignments, project, onDataChange }) => {
                 <div className="rounded-2xl border border-[#e2e8f0] bg-[#f8fafc] px-4 py-3">
                   <div className="text-[#64748b]">Shipment Wt</div>
                   <div className="mt-1 text-xl font-semibold text-[#0f172a]">
-                    {formatNumber(insights.summary?.shipment_weight, 0)} kg
+                    {formatNumber(insights.summary?.shipment_weight)} kg
                   </div>
                 </div>
                 <div className="rounded-2xl border border-[#e2e8f0] bg-[#f8fafc] px-4 py-3">
                   <div className="text-[#64748b]">Avg Fill</div>
                   <div className="mt-1 text-xl font-semibold text-[#0f172a]">
-                    {formatNumber(insights.efficiency_kpis?.average_fill_percent, 1)}%
+                    {formatNumber(insights.efficiency_kpis?.average_fill_percent)}%
                   </div>
                 </div>
                 <div className="rounded-2xl border border-[#e2e8f0] bg-[#f8fafc] px-4 py-3">
                   <div className="text-[#64748b]">Avg Gross Util</div>
                   <div className="mt-1 text-xl font-semibold text-[#0f172a]">
-                    {formatNumber(insights.efficiency_kpis?.average_weight_utilization, 1)}%
+                    {formatNumber(insights.efficiency_kpis?.average_weight_utilization)}%
                   </div>
                 </div>
               </div>
@@ -879,8 +878,8 @@ const CrateGrid = ({ pieces, crates, assignments, project, onDataChange }) => {
                   <div className="text-xs uppercase tracking-[0.18em] text-[#64748b]">{option.mode}</div>
                   <div className="mt-1 text-lg font-semibold text-[#0f172a]">{option.label}</div>
                   <div className="mt-2 text-xs text-[#475569]">Feasible: {option.feasible ? 'Yes' : 'No'}</div>
-                  <div className="text-xs text-[#475569]">Avg weight util: {formatNumber(option.average_weight_utilization, 0)}%</div>
-                  <div className="text-xs text-[#475569]">Avg floor util: {formatNumber(option.average_length_utilization, 0)}%</div>
+                  <div className="text-xs text-[#475569]">Avg weight util: {formatNumber(option.average_weight_utilization)}%</div>
+                  <div className="text-xs text-[#475569]">Avg floor util: {formatNumber(option.average_length_utilization)}%</div>
                   <div className="text-xs text-[#475569]">Cost index: {formatNumber(option.cost_index, 2)}</div>
                 </div>
               ))}
@@ -901,7 +900,7 @@ const CrateGrid = ({ pieces, crates, assignments, project, onDataChange }) => {
                           <div className="text-sm text-[#475569]">{crate.name}</div>
                         </div>
                         <span className={`rounded-full px-3 py-1 text-xs font-semibold ${meta.badge}`}>
-                          Fill {formatNumber(crate.utilization, 0)}%
+                          Fill {formatNumber(crate.utilization)}%
                         </span>
                       </div>
                       <p className="mt-2 text-sm text-[#475569]">{crate.suggestion}</p>
@@ -1024,7 +1023,7 @@ const CrateGrid = ({ pieces, crates, assignments, project, onDataChange }) => {
                 <div className="mt-2 flex flex-wrap gap-2">
                   {unplacedCratesForContainerPlan.map((crate) => (
                     <span key={crate.id} className="rounded-full border border-amber-300 bg-white px-3 py-1 text-xs text-amber-900">
-                      {crate.crate_id} · {formatNumber(crate.gross_weight, 0)} kg
+                      {crate.crate_id} · {formatNumber(crate.gross_weight)} kg
                     </span>
                   ))}
                 </div>
@@ -1059,12 +1058,12 @@ const CrateGrid = ({ pieces, crates, assignments, project, onDataChange }) => {
                             </button>
                           </div>
                           <div className="mt-1 text-sm text-[#475569]">
-                            Gross {formatNumber(container.used_weight, 0)} / {formatNumber(container.max_weight, 0)} kg ·
-                            Floor {formatNumber(container.used_length, 1)} / {formatNumber(container.max_length, 1)} in
+                            Gross {formatNumber(container.used_weight)} / {formatNumber(container.max_weight)} kg ·
+                            Floor {formatNumber(container.used_length)} / {formatNumber(container.max_length)} in
                           </div>
                           <div className="mt-1 text-xs text-[#64748b]">
-                            Balance L/R {formatNumber(container.balance?.left_right_delta_pct, 1)}% ·
-                            F/R {formatNumber(container.balance?.front_rear_delta_pct, 1)}%
+                            Balance L/R {formatNumber(container.balance?.left_right_delta_pct)}% ·
+                            F/R {formatNumber(container.balance?.front_rear_delta_pct)}%
                           </div>
                         </div>
                         <div className="flex flex-wrap gap-2 text-xs">
@@ -1090,7 +1089,7 @@ const CrateGrid = ({ pieces, crates, assignments, project, onDataChange }) => {
                             .filter((crate) => !draftContainer.placements.some((placement) => placement.crate_id === crate.crate_id))
                             .map((crate) => (
                             <option key={crate.id} value={crate.crate_id}>
-                              {crate.crate_id} · {crate.destination_group} · {formatNumber(crate.gross_weight, 0)} kg
+                              {crate.crate_id} · {crate.destination_group} · {formatNumber(crate.gross_weight)} kg
                             </option>
                           ))}
                         </select>
@@ -1216,7 +1215,7 @@ const CrateGrid = ({ pieces, crates, assignments, project, onDataChange }) => {
                                   <td className="px-3 py-2">
                                     <div className="font-semibold text-[#0f172a]">{placement.crate_id}</div>
                                     <div className="text-[11px] text-[#64748b]">
-                                      {placementPreview?.destination_group || 'No destination'} · {formatNumber(placementPreview?.weight, 0)} kg
+                                      {placementPreview?.destination_group || 'No destination'} · {formatNumber(placementPreview?.weight)} kg
                                     </div>
                                   </td>
                                   <td className="px-3 py-2">
@@ -1342,7 +1341,7 @@ const CrateGrid = ({ pieces, crates, assignments, project, onDataChange }) => {
                           </div>
                         </div>
                       </label>
-                      <div className="text-sm font-semibold text-[#475569]">{formatNumber(pieceWeights[piece.id], 1)} kg</div>
+                      <div className="text-sm font-semibold text-[#475569]">{formatNumber(pieceWeights[piece.id])} kg</div>
                     </div>
                   </div>
                 ))}
@@ -1430,20 +1429,20 @@ const CrateGrid = ({ pieces, crates, assignments, project, onDataChange }) => {
                         />
                       </div>
                       <div className="mt-2 flex justify-between text-xs font-medium text-[#475569]">
-                        <span>Fill {formatNumber(crate.fill_percent, 1)}%</span>
-                        <span>Gross util {formatNumber(crate.gross_utilization, 1)}%</span>
+                        <span>Fill {formatNumber(crate.fill_percent)}%</span>
+                        <span>Gross util {formatNumber(crate.gross_utilization)}%</span>
                       </div>
                     </div>
 
                     <div className="mt-4 grid grid-cols-2 gap-2 text-xs text-[#475569]">
-                      <div className="rounded-2xl bg-white/80 px-3 py-2">Net {formatNumber(crate.total_weight, 1)} kg</div>
-                      <div className="rounded-2xl bg-white/80 px-3 py-2">Gross {formatNumber(crate.gross_weight, 1)} kg</div>
-                      <div className="rounded-2xl bg-white/80 px-3 py-2">Tare {formatNumber(crate.tare_weight, 1)} kg</div>
+                      <div className="rounded-2xl bg-white/80 px-3 py-2">Net {formatNumber(crate.total_weight)} kg</div>
+                      <div className="rounded-2xl bg-white/80 px-3 py-2">Gross {formatNumber(crate.gross_weight)} kg</div>
+                      <div className="rounded-2xl bg-white/80 px-3 py-2">Tare {formatNumber(crate.tare_weight)} kg</div>
                       <div className="rounded-2xl bg-white/80 px-3 py-2">{crate.wood_type} {formatNumber(crate.wood_thickness, 2)} in</div>
                       <div className="rounded-2xl bg-white/80 px-3 py-2">{crate.stackable ? 'Stackable' : 'Single layer'}</div>
                       <div className="rounded-2xl bg-white/80 px-3 py-2">Forklift {crate.forklift_entry}</div>
                       <div className="rounded-2xl bg-white/80 px-3 py-2">
-                        Reserve {formatNumber(crate.reserved_space_pct, 0)}%
+                        Reserve {formatNumber(crate.reserved_space_pct)}%
                       </div>
                     </div>
 
@@ -1510,7 +1509,7 @@ const CrateGrid = ({ pieces, crates, assignments, project, onDataChange }) => {
                           </div>
                           <div className="mt-2 flex justify-between text-xs text-[#475569]">
                             <span>{formatNumber(piece.length)} × {formatNumber(piece.width)} in</span>
-                            <span>{formatNumber(pieceWeights[piece.id], 1)} kg</span>
+                            <span>{formatNumber(pieceWeights[piece.id])} kg</span>
                           </div>
                         </div>
                       ))}
@@ -1615,11 +1614,11 @@ const CrateGrid = ({ pieces, crates, assignments, project, onDataChange }) => {
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div className="rounded-2xl border border-[#e2e8f0] bg-[#f8fafc] px-4 py-3">
                     <div className="text-[#64748b]">Gross Weight</div>
-                    <div className="mt-1 font-semibold text-[#0f172a]">{formatNumber(selectedCrate.gross_weight, 1)} kg</div>
+                    <div className="mt-1 font-semibold text-[#0f172a]">{formatNumber(selectedCrate.gross_weight)} kg</div>
                   </div>
                   <div className="rounded-2xl border border-[#e2e8f0] bg-[#f8fafc] px-4 py-3">
                     <div className="text-[#64748b]">Fill</div>
-                    <div className="mt-1 font-semibold text-[#0f172a]">{formatNumber(selectedCrate.fill_percent, 1)}%</div>
+                    <div className="mt-1 font-semibold text-[#0f172a]">{formatNumber(selectedCrate.fill_percent)}%</div>
                   </div>
                   <div className="rounded-2xl border border-[#e2e8f0] bg-[#f8fafc] px-4 py-3">
                     <div className="text-[#64748b]">Center of Gravity</div>

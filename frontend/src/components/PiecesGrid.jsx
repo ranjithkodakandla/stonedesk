@@ -446,7 +446,7 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
         <div className="text-sm font-semibold text-slate-900">
           Pieces in this Drawing
           <span className="ml-2 text-xs font-normal text-slate-500">
-            {rows.length} row{rows.length !== 1 ? 's' : ''} · {totalQty} pcs · {totalSqft.toFixed(1)} sqft · {totalWt.toFixed(0)} kg
+            {rows.length} row{rows.length !== 1 ? 's' : ''} · {totalQty} pcs · {totalSqft.toFixed(2)} sqft · {totalWt.toFixed(2)} kg
           </span>
         </div>
         <button type="button" onClick={addRow}
@@ -540,8 +540,8 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
                     />
                   </td>
 
-                  <td className="px-2 py-1 text-slate-500 tabular-nums">{sqft > 0 ? sqft.toFixed(1) : '—'}</td>
-                  <td className="px-2 py-1 text-slate-500 tabular-nums">{wt > 0 ? wt.toFixed(0) : '—'}</td>
+                  <td className="px-2 py-1 text-slate-500 tabular-nums">{sqft > 0 ? sqft.toFixed(2) : '—'}</td>
+                  <td className="px-2 py-1 text-slate-500 tabular-nums">{wt > 0 ? wt.toFixed(2) : '—'}</td>
 
                   <td className="px-2 py-1">
                     <SinkBadge row={row} onClick={() => openDrawer(row, 'sink')} />

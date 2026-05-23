@@ -1,3 +1,5 @@
+import { round2 } from './plannerUtils';
+
 /**
  * Frontend port of backend operational dimension helpers.
  * Mirrors island_cassette_dimensions_operational() and related logic in
@@ -225,12 +227,12 @@ export function estimateLeanedCassetteDimensions(pieces) {
   const intH = maxShortEdge * LEAN_FACTOR + PALLET_BASE + LEAN_HEADROOM;
 
   return {
-    internal_length: intL,                           // primary cassette length (L)
-    internal_width:  intD,                           // cassette depth          (D)
-    internal_height: intH,                           // operational height      (H)
-    external_length: intL + END_FRAME,               // + end boards
-    external_width:  intD + WALL_TIMBER * 2,         // + side walls
-    external_height: intH + HEIGHT_CAP_TBR + FORKLIFT_TINE,
+    internal_length: round2(intL),
+    internal_width:  round2(intD),
+    internal_height: round2(intH),
+    external_length: round2(intL + END_FRAME),
+    external_width:  round2(intD + WALL_TIMBER * 2),
+    external_height: round2(intH + HEIGHT_CAP_TBR + FORKLIFT_TINE),
   };
 }
 
@@ -307,12 +309,12 @@ export function estimateHorizontalLayeredDimensions(pieces) {
   if (sideH > 0) intH += HORIZ_LAYER_SEP + sideH;
 
   return {
-    internal_length: intL,
-    internal_width:  intW,
-    internal_height: intH,
-    external_length: intL + HORIZ_END_FRAME,
-    external_width:  intW + HORIZ_WALL * 2,
-    external_height: intH + HORIZ_LID,
+    internal_length: round2(intL),
+    internal_width:  round2(intW),
+    internal_height: round2(intH),
+    external_length: round2(intL + HORIZ_END_FRAME),
+    external_width:  round2(intW + HORIZ_WALL * 2),
+    external_height: round2(intH + HORIZ_LID),
   };
 }
 
@@ -418,8 +420,8 @@ export function buildDraftCrate(id, selectedBundles) {
     bundles:                 [...selectedBundles],
     bundle_count:            selectedBundles.length,
     part_count:              partCount,
-    total_weight_kg:         totalWeightKg,
-    total_sqft:              totalSqft,
+    total_weight_kg:         round2(totalWeightKg),
+    total_sqft:              round2(totalSqft),
     part_type_mix:           partTypeMix,
     crate_class:             crateClass,
     island_splash_violation: islandSplashViolation,

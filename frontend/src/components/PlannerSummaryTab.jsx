@@ -1,9 +1,9 @@
 import React, { useMemo } from 'react';
-import axios from 'axios';
 import { usePlannerStore } from '../store/plannerStore';
-import { buildRecommendationReasons, formatNumber, summarizeWarnings, API_BASE } from '../utils/plannerUtils';
+import { buildRecommendationReasons, formatNumber, summarizeWarnings, downloadPersistedDraftCratePlan } from '../utils/plannerUtils';
 import { printCratePlan, printContainerPlan } from '../utils/printUtils';
 import { CratePlanSummary } from './DraftCrateWorkspace';
+
 const KpiCard = ({ label, value, accent = 'text-[#0f172a]' }) => (
   <div className="rounded-[24px] border border-[#e2e8f0] bg-white px-4 py-4 shadow-sm">
     <div className="text-xs uppercase tracking-[0.18em] text-[#64748b]">{label}</div>
@@ -11,141 +11,32 @@ const KpiCard = ({ label, value, accent = 'text-[#0f172a]' }) => (
   </div>
 );
 
-const STATUS_FLOW = [
-  { key: 'draft',                label: 'Draft',                 desc: 'Project created, pieces being entered.' },
-  { key: 'review_pending',       label: 'Review Pending',        desc: 'Submitted for manager review.' },
-  { key: 'approved_for_packing', label: 'Approved for Packing',  desc: 'Approved. Ready to generate crate plan.' },
-  { key: 'crate_planned',        label: 'Crate Planned',         desc: 'Crate plan generated. Under review.' },
-  { key: 'packing_approved',     label: 'Packing Approved',      desc: 'Packing plan signed off.' },
-  { key: 'container_planned',    label: 'Container Planned',     desc: 'Container loading plan finalised.' },
-];
-
-const STATUS_ORDER = STATUS_FLOW.map((s) => s.key);
-
-const StatusFlowStrip = ({ currentStatus, onApprove, isRefreshing }) => {
-  const currentIdx = STATUS_ORDER.indexOf(currentStatus) ?? 0;
-
-  return (
-    <div className="rounded-[32px] border border-[#dbe4f0] bg-white p-6 shadow-sm">
-      <div className="text-xs uppercase tracking-[0.22em] text-[#64748b]">Project Workflow</div>
-      <div className="mt-1 text-xl font-semibold text-[#0f172a]">Approval gates</div>
-
-      {/* Progress bar */}
-      <div className="mt-5 flex items-center gap-0">
-        {STATUS_FLOW.map((step, idx) => {
-          const done = idx < currentIdx;
-          const active = idx === currentIdx;
-          const upcoming = idx > currentIdx;
-          return (
-            <React.Fragment key={step.key}>
-              <div className="flex flex-col items-center flex-1 min-w-0">
-                <div
-                  className={`h-6 w-6 rounded-full border-2 flex items-center justify-center text-[10px] font-bold transition-all ${
-                    done    ? 'border-emerald-500 bg-emerald-500 text-white'
-                    : active ? 'border-blue-600 bg-blue-600 text-white'
-                    : 'border-slate-300 bg-white text-slate-400'
-                  }`}
-                >
-                  {done ? '✓' : idx + 1}
-                </div>
-                <div
-                  className={`mt-1 text-center text-[10px] leading-tight max-w-[70px] ${
-                    active ? 'font-semibold text-blue-700' : done ? 'text-emerald-600' : 'text-slate-400'
-                  }`}
-                >
-                  {step.label}
-                </div>
-              </div>
-              {idx < STATUS_FLOW.length - 1 && (
-                <div
-                  className={`h-0.5 flex-1 mt-[-16px] transition-colors ${
-                    idx < currentIdx ? 'bg-emerald-400' : 'bg-slate-200'
-                  }`}
-                />
-              )}
-            </React.Fragment>
-          );
-        })}
-      </div>
-
-      {/* Action buttons */}
-      <div className="mt-5 flex flex-wrap gap-3">
-        {currentStatus === 'draft' && (
-          <button
-            type="button"
-            disabled={isRefreshing}
-            onClick={() => onApprove('review_pending')}
-            className="rounded-full border border-amber-300 bg-amber-50 px-5 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-100 transition-colors"
-          >
-            Submit for Review
-          </button>
-        )}
-        {currentStatus === 'review_pending' && (
-          <button
-            type="button"
-            disabled={isRefreshing}
-            onClick={() => onApprove('approved_for_packing')}
-            className="rounded-full bg-emerald-600 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-700 transition-colors"
-          >
-            Approve for Packing
-          </button>
-        )}
-        {currentStatus === 'crate_planned' && (
-          <button
-            type="button"
-            disabled={isRefreshing}
-            onClick={() => onApprove('packing_approved')}
-            className="rounded-full bg-blue-600 px-5 py-2 text-sm font-semibold text-white hover:bg-blue-700 transition-colors"
-          >
-            Approve Packing Plan
-          </button>
-        )}
-      </div>
-    </div>
-  );
-};
-
-const PlannerSummaryTab = ({ draftCratePlan = null }) => {
-  const project    = usePlannerStore((s) => s.project);
+const PlannerSummaryTab = ({ draftCratePlan = null, onEditPlan = null }) => {
   const insights   = usePlannerStore((s) => s.insights);
   const crates       = usePlannerStore((s) => s.crates);
   const isWorkspaceLoading  = usePlannerStore((s) => s.isWorkspaceLoading);
-  const isRefreshing        = usePlannerStore((s) => s.isRefreshing);
   const setActiveTab        = usePlannerStore((s) => s.setActiveTab);
   const setPreferredContainerMode = usePlannerStore((s) => s.setPreferredContainerMode);
   const exportWorkbook      = usePlannerStore((s) => s.exportWorkbook);
-  const approveProject      = usePlannerStore((s) => s.approveProject);
+  const project    = usePlannerStore((s) => s.project);
+
   const warningSummary = useMemo(
     () => summarizeWarnings(insights?.exceptions || []),
-    [insights]
+    [insights],
   );
   const recommendationReasons = useMemo(
     () => buildRecommendationReasons(insights),
-    [insights]
+    [insights],
   );
 
-  const projectStatus = project?.status || 'draft';
   const projectId     = project?.id;
   const hasDraftPlan  = (draftCratePlan?.draft_crates?.length ?? 0) > 0;
-  const hasCratePlan  =
+  const hasLegacyCratePlan  =
     Boolean(insights?.crate_count > 0) || (Array.isArray(crates) && crates.length > 0);
 
   const handleDownload = () => {
-    if (!projectId || !draftCratePlan) return;
-    axios.post(
-      `${API_BASE}/projects/${projectId}/draft-crate-plan/export`,
-      { draft_crates: draftCratePlan.draft_crates },
-      { responseType: 'blob' },
-    ).then((res) => {
-      const url = URL.createObjectURL(res.data);
-      const a = document.createElement('a');
-      a.href = url;
-      const disp = res.headers['content-disposition'] || '';
-      const match = disp.match(/filename="([^"]+)"/);
-      a.download = match ? match[1] : 'CratePlan.xlsx';
-      document.body.appendChild(a); a.click();
-      document.body.removeChild(a); URL.revokeObjectURL(url);
-    }).catch(() => alert('Download failed'));
+    if (!projectId) return;
+    downloadPersistedDraftCratePlan(projectId).catch(() => alert('Download failed — save a crate plan first.'));
   };
 
   if (isWorkspaceLoading) {
@@ -158,18 +49,17 @@ const PlannerSummaryTab = ({ draftCratePlan = null }) => {
 
   return (
     <div className="space-y-6">
-      {/* Workflow status strip — hidden from UI; backend logic preserved */}
-      {/* <StatusFlowStrip currentStatus={projectStatus} onApprove={approveProject} isRefreshing={isRefreshing} /> */}
-
-      {/* Saved crate plan dashboard — shown when a plan exists */}
       {hasDraftPlan && (
         <div className="space-y-4">
+          <div className="rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-semibold text-emerald-900">
+            Saved Draft Plan Mode — totals and exports use your manually saved crate plan from Dispatch &amp; build.
+          </div>
           <div className="rounded-[32px] border border-[#dbe4f0] bg-white p-6 shadow-sm">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
-                <div className="text-xs uppercase tracking-[0.22em] text-[#64748b]">Crate Plan — Saved</div>
+                <div className="text-xs uppercase tracking-[0.22em] text-[#64748b]">Saved crate plan</div>
                 <div className="mt-1 text-xl font-semibold text-[#0f172a]">
-                  {draftCratePlan.draft_crates.length} crate{draftCratePlan.draft_crates.length !== 1 ? 's' : ''} saved
+                  {draftCratePlan.draft_crates.length} crate{draftCratePlan.draft_crates.length !== 1 ? 's' : ''}
                   {draftCratePlan.saved_at && (
                     <span className="ml-3 text-sm font-normal text-[#64748b]">
                       · Saved {new Date(draftCratePlan.saved_at).toLocaleString('en-AU', { dateStyle: 'medium', timeStyle: 'short' })}
@@ -183,21 +73,21 @@ const PlannerSummaryTab = ({ draftCratePlan = null }) => {
                   onClick={() => setActiveTab('crate-plan')}
                   className="rounded-full border border-[#1d4ed8] bg-[#eff6ff] px-5 py-2 text-sm font-semibold text-[#1d4ed8] hover:bg-[#dbeafe] transition-colors"
                 >
-                  View Crates
+                  View Crate Plan
                 </button>
                 <button
                   type="button"
-                  onClick={() => setActiveTab('build-plan')}
+                  onClick={() => (onEditPlan ? onEditPlan() : setActiveTab('build-plan'))}
                   className="rounded-full border border-[#64748b] bg-white px-5 py-2 text-sm font-semibold text-[#334155] hover:bg-[#f1f5f9] transition-colors"
                 >
-                  Edit Crate Plan
+                  Edit Plan
                 </button>
                 <button
                   type="button"
                   onClick={handleDownload}
                   className="rounded-full border border-[#059669] bg-[#f0fdf4] px-5 py-2 text-sm font-semibold text-[#059669] hover:bg-[#dcfce7] transition-colors"
                 >
-                  Download Crate Plan
+                  Download Plan
                 </button>
               </div>
             </div>
@@ -209,12 +99,14 @@ const PlannerSummaryTab = ({ draftCratePlan = null }) => {
         </div>
       )}
 
-      {/* Shipping recommendation — shown after a plan exists */}
-      {hasCratePlan && insights && (
+      {!hasDraftPlan && hasLegacyCratePlan && insights && (
         <>
+          <div className="rounded-full border border-violet-200 bg-violet-50 px-4 py-2 text-xs font-semibold text-violet-900">
+            Legacy Auto Planner Mode — automatic packing engine only (no saved draft plan). Use Dispatch &amp; build to create a saved plan.
+          </div>
           <div className="grid gap-6 xl:grid-cols-[1.3fr,0.7fr]">
             <div className="rounded-[36px] border border-[#dbe4f0] bg-[radial-gradient(circle_at_top_left,_rgba(37,99,235,0.12),_transparent_30%),linear-gradient(135deg,_#ffffff,_#f8fbff)] p-7 shadow-sm">
-              <div className="text-xs uppercase tracking-[0.26em] text-[#64748b]">Step 3</div>
+              <div className="text-xs uppercase tracking-[0.26em] text-[#64748b]">Legacy auto planner</div>
               <div className="mt-2 text-3xl font-semibold text-[#0f172a]">Recommended Shipping Plan</div>
               <div className="mt-4 inline-flex items-center rounded-full bg-[#dbeafe] px-4 py-2 text-xl font-semibold text-[#1d4ed8]">
                 {insights.summary?.recommended_containers || 'No plan'}
@@ -251,15 +143,14 @@ const PlannerSummaryTab = ({ draftCratePlan = null }) => {
 
             <div className="space-y-4">
               <KpiCard label="Total Parts"         value={insights.efficiency_kpis?.piece_count || 0} />
-              <KpiCard label="Total Weight"        value={`${formatNumber(insights.summary?.shipment_weight, 0)} kg`} />
+              <KpiCard label="Total Weight"        value={`${formatNumber(insights.summary?.shipment_weight)} kg`} />
               <KpiCard label="Crates Created"      value={insights.summary?.crates_created || 0} />
-              <KpiCard label="Avg Crate Fill"      value={`${formatNumber(insights.efficiency_kpis?.average_fill_percent, 1)}%`} />
+              <KpiCard label="Avg Crate Fill"      value={`${formatNumber(insights.efficiency_kpis?.average_fill_percent)}%`} />
               <KpiCard label="Underloaded Crates"  value={insights.underfilled_crates?.length || 0} accent="text-[#b45309]" />
               <KpiCard label="Containers Needed"   value={insights.container_loading_plan?.summary?.total_containers || 0} />
             </div>
           </div>
 
-          {/* Container options */}
           <div className="rounded-[32px] border border-[#dbe4f0] bg-white p-6 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
@@ -296,9 +187,9 @@ const PlannerSummaryTab = ({ draftCratePlan = null }) => {
                       )}
                     </div>
                     <div className="mt-3 grid gap-2 text-sm text-[#475569]">
-                      <div>Weight utilization: {formatNumber(option.average_weight_utilization, 0)}%</div>
-                      <div>Floor utilization: {formatNumber(option.average_length_utilization, 0)}%</div>
-                      <div>Cost index: {formatNumber(option.cost_index, 2)}</div>
+                      <div>Weight utilization: {formatNumber(option.average_weight_utilization)}%</div>
+                      <div>Floor utilization: {formatNumber(option.average_length_utilization)}%</div>
+                      <div>Cost index: {formatNumber(option.cost_index)}</div>
                       <div>Status: {option.feasible ? 'Feasible' : 'Not feasible'}</div>
                     </div>
                   </button>
@@ -307,7 +198,6 @@ const PlannerSummaryTab = ({ draftCratePlan = null }) => {
             </div>
           </div>
 
-          {/* Warnings */}
           <div className="rounded-[32px] border border-[#dbe4f0] bg-white p-6 shadow-sm">
             <div className="text-xs uppercase tracking-[0.22em] text-[#64748b]">Top Warnings</div>
             <div className="mt-2 text-2xl font-semibold text-[#0f172a]">What needs attention before release</div>
@@ -328,34 +218,15 @@ const PlannerSummaryTab = ({ draftCratePlan = null }) => {
         </>
       )}
 
-      {/* Empty state — only shown when NO saved crate plan exists */}
-      {!hasDraftPlan && !hasCratePlan && projectStatus !== 'approved_for_packing' && projectStatus !== 'crate_planned' && (
-        <div className="rounded-[32px] border border-dashed border-[#cbd5e1] bg-white px-6 py-16 text-center shadow-sm">
-          <div className="text-xl font-semibold text-[#0f172a]">No crate plan yet</div>
-          <div className="mt-2 text-sm text-[#64748b]">
-            {projectStatus === 'draft' || projectStatus === 'review_pending'
-              ? 'Go to Dispatch & build to create a crate plan.'
-              : 'Open Dispatch & build to generate the crate layout.'}
-          </div>
-          <button
-            type="button"
-            className="mt-5 rounded-full border border-[#1d4ed8] bg-[#eff6ff] px-6 py-2.5 text-sm font-semibold text-[#1d4ed8] hover:bg-[#dbeafe] transition-colors"
-            onClick={() => setActiveTab('build-plan')}
-          >
-            Go to Dispatch &amp; build
-          </button>
-        </div>
-      )}
-
-      {!hasDraftPlan && projectStatus === 'approved_for_packing' && !hasCratePlan && (
-        <div className="rounded-[32px] border border-[#bfdbfe] bg-[#f8fafc] px-6 py-8 text-center shadow-sm">
-          <div className="text-lg font-semibold text-[#0f172a]">Ready to generate</div>
+      {!hasDraftPlan && (
+        <div className="rounded-[32px] border border-[#bfdbfe] bg-[#f8fafc] px-6 py-12 text-center shadow-sm">
+          <div className="text-xl font-semibold text-[#0f172a]">Ready to generate</div>
           <p className="mt-2 text-sm text-[#64748b]">
-            Open <strong className="text-[#334155]">Dispatch &amp; build</strong> to run the planner.
+            Open <strong className="text-[#334155]">Dispatch &amp; build</strong> to create and save a crate plan.
           </p>
           <button
             type="button"
-            className="btn-primary mt-5"
+            className="mt-5 rounded-full border border-[#1d4ed8] bg-[#1d4ed8] px-6 py-2.5 text-sm font-semibold text-white hover:bg-[#1e40af] transition-colors"
             onClick={() => setActiveTab('build-plan')}
           >
             Go to Dispatch &amp; build

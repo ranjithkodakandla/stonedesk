@@ -271,10 +271,10 @@ const PlannerContainerTab = () => {
 
             <div className="flex flex-wrap gap-3">
               <div className="rounded-2xl border border-[#e2e8f0] bg-[#f8fafc] px-4 py-3 text-sm text-[#334155]">
-                Weight {formatNumber(selectedContainer.used_weight, 0)} / {formatNumber(selectedContainer.max_weight, 0)} kg
+                Weight {formatNumber(selectedContainer.used_weight)} / {formatNumber(selectedContainer.max_weight)} kg
               </div>
               <div className="rounded-2xl border border-[#e2e8f0] bg-[#f8fafc] px-4 py-3 text-sm text-[#334155]">
-                Floor {formatNumber(selectedContainer.used_length, 1)} / {formatNumber(selectedContainer.max_length, 1)} in
+                Floor {formatNumber(selectedContainer.used_length)} / {formatNumber(selectedContainer.max_length)} in
               </div>
             </div>
           </div>
@@ -288,7 +288,7 @@ const PlannerContainerTab = () => {
               <option value="">Add or move crate into this container...</option>
               {availableCrates.map((crate) => (
                 <option key={crate.id} value={crate.crate_id}>
-                  {crate.crate_id} · {crate.destination_group} · {formatNumber(crate.gross_weight, 0)} kg
+                  {crate.crate_id} · {crate.destination_group} · {formatNumber(crate.gross_weight)} kg
                 </option>
               ))}
             </select>
@@ -318,7 +318,7 @@ const PlannerContainerTab = () => {
                   >
                     {selectedContainer.placements.map((p) => (
                       <option key={p.crate_id} value={p.crate_id}>
-                        {p.crate_id} @ ({formatNumber(p.x, 1)}, {formatNumber(p.y, 1)})
+                        {p.crate_id} @ ({formatNumber(p.x)}, {formatNumber(p.y)})
                       </option>
                     ))}
                   </select>
@@ -466,19 +466,19 @@ const PlannerContainerTab = () => {
             <div className="mt-4 grid gap-3">
               <div className="rounded-2xl border border-[#e2e8f0] bg-[#f8fafc] px-4 py-4">
                 <div className="text-xs uppercase tracking-[0.14em] text-[#64748b]">Weight Utilization</div>
-                <div className="mt-2 text-xl font-semibold text-[#0f172a]">{formatNumber(selectedContainer.weight_utilization, 1)}%</div>
+                <div className="mt-2 text-xl font-semibold text-[#0f172a]">{formatNumber(selectedContainer.weight_utilization)}%</div>
               </div>
               <div className="rounded-2xl border border-[#e2e8f0] bg-[#f8fafc] px-4 py-4">
                 <div className="text-xs uppercase tracking-[0.14em] text-[#64748b]">Floor Utilization</div>
-                <div className="mt-2 text-xl font-semibold text-[#0f172a]">{formatNumber(selectedContainer.length_utilization, 1)}%</div>
+                <div className="mt-2 text-xl font-semibold text-[#0f172a]">{formatNumber(selectedContainer.length_utilization)}%</div>
               </div>
               <div className="rounded-2xl border border-[#e2e8f0] bg-[#f8fafc] px-4 py-4">
                 <div className="text-xs uppercase tracking-[0.14em] text-[#64748b]">Left / Right Balance</div>
-                <div className="mt-2 text-xl font-semibold text-[#0f172a]">{formatNumber(selectedContainer.balance.left_right_delta_pct, 1)}%</div>
+                <div className="mt-2 text-xl font-semibold text-[#0f172a]">{formatNumber(selectedContainer.balance.left_right_delta_pct)}%</div>
               </div>
               <div className="rounded-2xl border border-[#e2e8f0] bg-[#f8fafc] px-4 py-4">
                 <div className="text-xs uppercase tracking-[0.14em] text-[#64748b]">Front / Rear Balance</div>
-                <div className="mt-2 text-xl font-semibold text-[#0f172a]">{formatNumber(selectedContainer.balance.front_rear_delta_pct, 1)}%</div>
+                <div className="mt-2 text-xl font-semibold text-[#0f172a]">{formatNumber(selectedContainer.balance.front_rear_delta_pct)}%</div>
               </div>
             </div>
           </div>

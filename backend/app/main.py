@@ -1724,14 +1724,49 @@ def _family_split_reason(
     return "Split across crates — inspect packing_warnings / planner_notes on the listed crates for details."
 
 
+def _round_plan_numbers(crate: Dict) -> Dict:
+    """Normalize persisted crate metrics to two decimal places."""
+    def _r2(v):
+        try:
+            return round(float(v or 0), 2)
+        except (TypeError, ValueError):
+            return 0.0
+
+    out = dict(crate)
+    out["total_weight_kg"] = _r2(crate.get("total_weight_kg"))
+    out["total_sqft"] = _r2(crate.get("total_sqft"))
+    dims = dict(crate.get("dimensions") or {})
+    for key in list(dims.keys()):
+        if key.endswith("_length") or key.endswith("_width") or key.endswith("_height"):
+            dims[key] = _r2(dims[key])
+    out["dimensions"] = dims
+    bundles = []
+    for group in crate.get("bundles") or []:
+        g = dict(group)
+        g["total_weight_kg"] = _r2(group.get("total_weight_kg"))
+        g["total_sqft"] = _r2(group.get("total_sqft"))
+        pieces = []
+        for piece in group.get("pieces") or []:
+            p = dict(piece)
+            for field in ("weight_kg", "sqft", "length", "width"):
+                if field in p and p[field] not in (None, ""):
+                    p[field] = _r2(p[field])
+            pieces.append(p)
+        g["pieces"] = pieces
+        bundles.append(g)
+    out["bundles"] = bundles
+    return out
+
+
 @app.post("/api/projects/{project_id}/draft-crate-plan")
 def save_draft_crate_plan(project_id: int, body: Dict):
     """Persist the current manual crate plan (draft crates + filters) to the project document."""
     now = utc_now()
+    raw_crates = body.get("draft_crates") or []
     plan = {
-        "target_weight_kg": body.get("target_weight_kg", 1900),
+        "target_weight_kg": round(float(body.get("target_weight_kg", 1900) or 1900), 2),
         "dispatch_selection": body.get("dispatch_selection") or {},
-        "draft_crates": body.get("draft_crates") or [],
+        "draft_crates": [_round_plan_numbers(c) for c in raw_crates],
         "saved_at": now,
     }
     projects_col.update_one(
@@ -1759,17 +1794,28 @@ def delete_draft_crate_plan(project_id: int):
     return {"deleted": True}
 
 
-@app.post("/api/projects/{project_id}/draft-crate-plan/export")
-def export_draft_crate_plan_xlsx(project_id: int, body: Dict):
-    """Export the current draft crate plan as a 3-sheet XLSX workbook."""
+def _load_saved_draft_crates_for_export(project_id: int):
+    """Return (project_name, draft_crates) from persisted planner_v3_draft_crate_plan."""
+    doc = projects_col.find_one(
+        {"id": project_id},
+        {"name": 1, "job_number": 1, "planner_v3_draft_crate_plan": 1, "_id": 0},
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Project not found")
+    plan = doc.get("planner_v3_draft_crate_plan")
+    draft_crates = (plan or {}).get("draft_crates") or []
+    if not draft_crates:
+        raise HTTPException(status_code=404, detail="No saved crate plan to export.")
+    project_name = doc.get("name") or doc.get("job_number") or f"Project {project_id}"
+    return project_name, draft_crates
+
+
+def _build_draft_crate_plan_xlsx_response(project_name: str, draft_crates: List):
+    """Build a 4-sheet XLSX workbook from draft crates (part/crate based, no bundle columns)."""
     import openpyxl
-    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.styles import Font, PatternFill
     from openpyxl.utils import get_column_letter
-
-    doc = projects_col.find_one({"id": project_id}, {"name": 1, "job_number": 1, "_id": 0})
-    project_name = (doc or {}).get("name") or (doc or {}).get("job_number") or f"Project {project_id}"
-
-    draft_crates = body.get("draft_crates") or []
+    from collections import Counter
 
     def _bold(ws, row_num):
         for cell in ws[row_num]:
@@ -1787,8 +1833,7 @@ def export_draft_crate_plan_xlsx(project_id: int, body: Dict):
             max_len = max((len(str(cell.value or "")) for cell in col), default=8)
             ws.column_dimensions[get_column_letter(col[0].column)].width = min(max_len + 2, 50)
 
-    def _num_fmt(ws, col_indices, number_format="0.00"):
-        """Set number format on specified 1-based column indices of the last row."""
+    def _num_fmt_row(ws, col_indices, number_format="0.00"):
         row = ws.max_row
         for col in col_indices:
             ws.cell(row=row, column=col).number_format = number_format
@@ -1800,128 +1845,165 @@ def export_draft_crate_plan_xlsx(project_id: int, body: Dict):
         "misc":             "Misc",
     }
 
+    def _round2(val):
+        try:
+            return round(float(val or 0), 2)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _dim_str(dims, prefix):
+        l = _round2(dims.get(f"{prefix}length") or 0)
+        w = _round2(dims.get(f"{prefix}width") or 0)
+        h = _round2(dims.get(f"{prefix}height") or 0)
+        return f"{l:.2f} × {w:.2f} × {h:.2f}" if l else ""
+
+    def _crate_dimensions_str(dims):
+        ext = _dim_str(dims, "external_")
+        if not ext:
+            return _dim_str(dims, "internal_")
+        internal = _dim_str(dims, "internal_")
+        if internal:
+            return f"Ext {ext} | Int {internal}"
+        return f"Ext {ext}"
+
+    def _iter_crate_pieces(crate):
+        """Flatten internal bundle groupings into part rows for export only."""
+        for group in crate.get("bundles") or []:
+            for piece in group.get("pieces") or []:
+                yield piece
+
+    # Pre-compute totals
+    total_parts_all  = sum(c.get("part_count", 0) for c in draft_crates)
+    total_weight_all = _round2(sum(c.get("total_weight_kg", 0) for c in draft_crates))
+    total_sqft_all   = _round2(sum(c.get("total_sqft", 0) for c in draft_crates))
+
     wb = openpyxl.Workbook()
 
-    # ── Sheet 1: Crate Summary ─────────────────────────────────────────────────
+    # ── Sheet 1: Project Summary ───────────────────────────────────────────────
     ws1 = wb.active
-    ws1.title = "Crate Summary"
-    ws1.append([project_name, "", f"Exported {date.today().isoformat()}"])
+    ws1.title = "Project Summary"
+    ws1.append([project_name])
+    ws1.cell(row=1, column=1).font = Font(bold=True, size=14)
+    ws1.append([f"Exported {date.today().isoformat()}"])
     ws1.append([])
-    ws1.append([
-        "Crate ID", "Type", "Bundles", "Parts",
-        "Weight (kg)", "Sq Ft",
-        "Int L×W×H (in)", "Ext L×W×H (in)",
-        "Warnings",
-    ])
-    _header_fill(ws1, 3)
-
-    total_parts_all = 0
-    total_weight_all = 0.0
-    total_sqft_all = 0.0
-
-    for crate in draft_crates:
-        cid = crate.get("id", "")
-        crate_class = crate.get("crate_class", "misc")
-        dims = crate.get("dimensions") or {}
-        il = dims.get("internal_length", "")
-        iw = dims.get("internal_width", "")
-        ih = dims.get("internal_height", "")
-        el = dims.get("external_length", "")
-        ew = dims.get("external_width", "")
-        eh = dims.get("external_height", "")
-        int_dim = f"{il} × {iw} × {ih}" if il else ""
-        ext_dim = f"{el} × {ew} × {eh}" if el else ""
-        warnings_str = " | ".join(crate.get("warnings") or [])
-        wt = crate.get("total_weight_kg", 0)
-        sq = crate.get("total_sqft", 0)
-        total_parts_all += crate.get("part_count", 0)
-        total_weight_all += wt
-        total_sqft_all += sq
-        ws1.append([
-            cid,
-            STATUS_MAP.get(crate_class, crate_class),
-            crate.get("bundle_count", 0),
-            crate.get("part_count", 0),
-            wt,
-            sq,
-            int_dim,
-            ext_dim,
-            warnings_str,
-        ])
-        _num_fmt(ws1, [5, 6])
-
-    ws1.append([])
-    ws1.append(["TOTAL", "", "", total_parts_all, total_weight_all, total_sqft_all])
+    ws1.append(["PLAN TOTALS"])
     _bold(ws1, ws1.max_row)
-    _num_fmt(ws1, [5, 6])
-    _auto_width(ws1)
+    ws1.append(["Total crates", len(draft_crates)])
+    ws1.append(["Total parts", total_parts_all])
+    ws1.append(["Total weight (kg)", total_weight_all])
+    _num_fmt_row(ws1, [2])
+    ws1.append(["Total sq ft", total_sqft_all])
+    _num_fmt_row(ws1, [2])
+    ws1.append([])
 
-    # ── Sheet 2: Crate Contents ────────────────────────────────────────────────
-    ws2 = wb.create_sheet("Crate Contents")
-    ws2.append([
-        "Crate ID", "Bundle ID", "Role",
-        "Part Type", "Part #", "Drawing", "Unit",
-        "Length (in)", "Width (in)", "Thickness",
-        "Weight (kg)", "Sq Ft",
-    ])
-    _header_fill(ws2, 1)
-
-    for crate in draft_crates:
-        cid = crate.get("id", "")
-        for bundle in crate.get("bundles") or []:
-            bid = bundle.get("family_id") or bundle.get("unit_id", "")
-            for piece in bundle.get("pieces") or []:
-                ws2.append([
-                    cid,
-                    bid,
-                    piece.get("role", "main"),
-                    piece.get("part", ""),
-                    piece.get("part_no", ""),
-                    piece.get("drawing", ""),
-                    piece.get("unit", ""),
-                    piece.get("length", ""),
-                    piece.get("width", ""),
-                    piece.get("thickness", ""),
-                    piece.get("weight_kg", ""),
-                    piece.get("sqft", ""),
-                ])
-                _num_fmt(ws2, [11, 12])
-
-    _auto_width(ws2)
-
-    # ── Sheet 3: Plan Summary ──────────────────────────────────────────────────
-    ws3 = wb.create_sheet("Plan Summary")
-    ws3.append([project_name])
-    ws3.append([f"Exported {date.today().isoformat()}"])
-    ws3.append([])
-    ws3.append(["Total crates", len(draft_crates)])
-    ws3.append(["Total parts", total_parts_all])
-    ws3.append(["Total weight (kg)", total_weight_all])
-    _num_fmt(ws3, [2])
-    ws3.append(["Total sq ft", total_sqft_all])
-    _num_fmt(ws3, [2])
-    ws3.append([])
-
-    # Crate type distribution
-    ws3.append(["Crate type distribution"])
-    _bold(ws3, ws3.max_row)
-    from collections import Counter
-    type_counts = Counter(STATUS_MAP.get(c.get("crate_class", "misc"), c.get("crate_class", "misc")) for c in draft_crates)
+    ws1.append(["CRATE TYPE DISTRIBUTION"])
+    _bold(ws1, ws1.max_row)
+    type_counts = Counter(
+        STATUS_MAP.get(c.get("crate_class", "misc"), c.get("crate_class", "misc"))
+        for c in draft_crates
+    )
     for t, n in type_counts.most_common():
-        ws3.append([t, n])
-    ws3.append([])
+        ws1.append([t, n])
+    ws1.append([])
 
-    # Part Type distribution
-    ws3.append(["Part type distribution"])
-    _bold(ws3, ws3.max_row)
+    ws1.append(["PART TYPE DISTRIBUTION"])
+    _bold(ws1, ws1.max_row)
     pt_counts: Dict[str, int] = {}
     for crate in draft_crates:
         for k, v in (crate.get("part_type_mix") or {}).items():
             pt_counts[k] = pt_counts.get(k, 0) + v
     for pt, n in sorted(pt_counts.items(), key=lambda x: -x[1]):
-        ws3.append([pt, n])
+        ws1.append([pt, n])
+
+    _auto_width(ws1)
+
+    # ── Sheet 2: Crate Summary ─────────────────────────────────────────────────
+    ws2 = wb.create_sheet("Crate Summary")
+    ws2.append([
+        "Crate ID", "Crate Type", "Part Count",
+        "Weight", "SqFt",
+        "Dimensions",
+        "Warnings",
+    ])
+    _header_fill(ws2, 1)
+
+    for crate in draft_crates:
+        cid = crate.get("id", "")
+        crate_class = crate.get("crate_class", "misc")
+        dims = crate.get("dimensions") or {}
+        wt = _round2(crate.get("total_weight_kg", 0))
+        sq = _round2(crate.get("total_sqft", 0))
+        ws2.append([
+            cid,
+            STATUS_MAP.get(crate_class, crate_class),
+            crate.get("part_count", 0),
+            wt,
+            sq,
+            _crate_dimensions_str(dims),
+            " | ".join(crate.get("warnings") or []),
+        ])
+        _num_fmt_row(ws2, [4, 5])
+
+    ws2.append([])
+    ws2.append(["TOTAL", "", total_parts_all, total_weight_all, total_sqft_all])
+    _bold(ws2, ws2.max_row)
+    _num_fmt_row(ws2, [4, 5])
+    _auto_width(ws2)
+
+    # ── Sheet 3: Crate Contents ────────────────────────────────────────────────
+    ws3 = wb.create_sheet("Crate Contents")
+    ws3.append([
+        "Crate ID", "Role",
+        "Part Type", "Part #", "Drawing", "Unit",
+        "Length (in)", "Width (in)", "Thickness (in)",
+        "Weight (kg)", "Sq Ft",
+    ])
+    _header_fill(ws3, 1)
+
+    for crate in draft_crates:
+        cid = crate.get("id", "")
+        for piece in _iter_crate_pieces(crate):
+            length = piece.get("length")
+            width = piece.get("width")
+            thickness = piece.get("thickness")
+            weight = piece.get("weight_kg")
+            sqft = piece.get("sqft")
+            ws3.append([
+                cid,
+                piece.get("role", "main"),
+                piece.get("part", ""),
+                piece.get("part_no", ""),
+                piece.get("drawing", ""),
+                piece.get("unit", ""),
+                _round2(length) if length not in (None, "") else "",
+                _round2(width) if width not in (None, "") else "",
+                thickness if thickness not in (None, "") else "",
+                _round2(weight) if weight not in (None, "") else "",
+                _round2(sqft) if sqft not in (None, "") else "",
+            ])
+            _num_fmt_row(ws3, [7, 8, 10, 11])
 
     _auto_width(ws3)
+
+    # ── Sheet 4: Warnings / Insights ──────────────────────────────────────────
+    ws4 = wb.create_sheet("Warnings / Insights")
+    ws4.append(["Crate ID", "Type", "Warning"])
+    _header_fill(ws4, 1)
+
+    any_warnings = False
+    for crate in draft_crates:
+        for w in (crate.get("warnings") or []):
+            ws4.append([
+                crate.get("id", ""),
+                STATUS_MAP.get(crate.get("crate_class", "misc"), crate.get("crate_class", "misc")),
+                w,
+            ])
+            any_warnings = True
+
+    if not any_warnings:
+        ws4.append(["—", "—", "No warnings — plan is clean."])
+
+    _auto_width(ws4)
 
     output = BytesIO()
     wb.save(output)
@@ -1933,6 +2015,25 @@ def export_draft_crate_plan_xlsx(project_id: int, body: Dict):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@app.get("/api/projects/{project_id}/draft-crate-plan/export")
+def export_saved_draft_crate_plan_xlsx(project_id: int):
+    """Export the persisted saved crate plan (single source of truth — Mongo only)."""
+    project_name, draft_crates = _load_saved_draft_crates_for_export(project_id)
+    return _build_draft_crate_plan_xlsx_response(project_name, draft_crates)
+
+
+@app.post("/api/projects/{project_id}/draft-crate-plan/export")
+def export_draft_crate_plan_xlsx_post(project_id: int, body: Dict):
+    """Legacy POST export — prefers persisted plan when body omits draft_crates."""
+    if body.get("draft_crates"):
+        doc = projects_col.find_one({"id": project_id}, {"name": 1, "job_number": 1, "_id": 0})
+        project_name = (doc or {}).get("name") or (doc or {}).get("job_number") or f"Project {project_id}"
+        draft_crates = body.get("draft_crates") or []
+    else:
+        project_name, draft_crates = _load_saved_draft_crates_for_export(project_id)
+    return _build_draft_crate_plan_xlsx_response(project_name, draft_crates)
 
 
 @app.get("/api/projects/{project_id}/families")

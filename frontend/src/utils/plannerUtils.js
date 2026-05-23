@@ -1,3 +1,5 @@
+import axios from 'axios';
+
 export const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
 /** Set true to show SVG / canvas 2D planner views again. */
@@ -39,7 +41,32 @@ export const CONTAINER_SPECS = {
   '40ft': { max_length: 470, max_width: 92, max_weight: 28750 },
 };
 
-export const formatNumber = (value, digits = 1) => Number(value || 0).toFixed(digits);
+/** Round to exactly two decimal places (display + persistence). */
+export const round2 = (value) => {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.round(n * 100) / 100;
+};
+
+export const formatNumber = (value, digits = 2) => round2(value).toFixed(digits);
+
+/** Download persisted draft crate plan XLSX (GET — reads Mongo saved plan only). */
+export const downloadPersistedDraftCratePlan = async (projectId) => {
+  const res = await axios.get(
+    `${API_BASE}/projects/${projectId}/draft-crate-plan/export`,
+    { responseType: 'blob' },
+  );
+  const url = URL.createObjectURL(res.data);
+  const a = document.createElement('a');
+  a.href = url;
+  const disp = res.headers['content-disposition'] || '';
+  const match = disp.match(/filename="([^"]+)"/);
+  a.download = match ? match[1] : 'CratePlan.xlsx';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+};
 
 const _COLOR_DENSITIES = {
   Granite: {

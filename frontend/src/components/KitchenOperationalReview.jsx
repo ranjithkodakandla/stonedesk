@@ -291,7 +291,7 @@ export default function KitchenOperationalReview({ projectId, project, embedded 
           <div className="font-semibold text-[#0f172a]">Batching mode: {meta.batching.mode}</div>
           <p className="mt-1 leading-relaxed text-[#64748b]">{meta.batching.explanation}</p>
           <p className="mt-1 text-[#475569]">
-            Scope: <span className="font-medium">{meta.batching.scope_label}</span> · Kitchen bundles in scope:{' '}
+            Scope: <span className="font-medium">{meta.batching.scope_label}</span> · Kitchen part groups in scope:{' '}
             {meta.batching.scoped_kitchen_bundle_count}
           </p>
         </div>
@@ -303,7 +303,7 @@ export default function KitchenOperationalReview({ projectId, project, embedded 
             Crates: <strong>{crates.length}</strong>
           </span>
           <span>
-            Total weight: <strong>{totalWeight.toFixed(0)} kg</strong>
+            Total weight: <strong>{totalWeight.toFixed(2)} kg</strong>
           </span>
           <span className="text-emerald-700">
             Optimal: <strong>{optimalCount}</strong>
@@ -333,7 +333,7 @@ export default function KitchenOperationalReview({ projectId, project, embedded 
                     Dimensions: <strong>{c.dimensions_in?.label || '—'}</strong> in
                   </div>
                   <div className="mt-1.5 flex flex-wrap gap-3 text-sm text-[#64748b]">
-                    <span>Bundles: {c.bundle_count}</span>
+                    <span>Part groups: {c.bundle_count}</span>
                     <span>Main tops: {c.main_top_count}</span>
                     <span>Splashes: {c.splash_count}</span>
                   </div>
@@ -404,10 +404,10 @@ export default function KitchenOperationalReview({ projectId, project, embedded 
               {expanded[idx] && (
                 <div className="mt-5 border-t border-[#f1f5f9] pt-4">
                   <div className="text-xs font-semibold uppercase tracking-wide text-[#64748b]">
-                    Bundle assemblies — vertical groupings
+                    Part group assemblies — vertical groupings
                   </div>
                   <p className="mt-1 text-xs text-[#94a3b8]">
-                    Each block = one family (main top + its splash set). All pieces stand vertically inside the crate.
+                    Each block = one family assignment (main top + its splash set). All pieces stand vertically inside the crate.
                   </p>
                   <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                     {(c.bundles || []).map((b) => (
