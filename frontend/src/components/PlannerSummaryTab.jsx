@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
+import axios from 'axios';
 import { usePlannerStore } from '../store/plannerStore';
-import { buildRecommendationReasons, formatNumber, summarizeWarnings } from '../utils/plannerUtils';
+import { buildRecommendationReasons, formatNumber, summarizeWarnings, API_BASE } from '../utils/plannerUtils';
 import { printCratePlan, printContainerPlan } from '../utils/printUtils';
 import { CratePlanSummary } from './DraftCrateWorkspace';
 const KpiCard = ({ label, value, accent = 'text-[#0f172a]' }) => (
@@ -125,8 +126,27 @@ const PlannerSummaryTab = ({ draftCratePlan = null }) => {
 
   const projectStatus = project?.status || 'draft';
   const projectId     = project?.id;
-  const hasCratePlan =
+  const hasDraftPlan  = (draftCratePlan?.draft_crates?.length ?? 0) > 0;
+  const hasCratePlan  =
     Boolean(insights?.crate_count > 0) || (Array.isArray(crates) && crates.length > 0);
+
+  const handleDownload = () => {
+    if (!projectId || !draftCratePlan) return;
+    axios.post(
+      `${API_BASE}/projects/${projectId}/draft-crate-plan/export`,
+      { draft_crates: draftCratePlan.draft_crates },
+      { responseType: 'blob' },
+    ).then((res) => {
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url;
+      const disp = res.headers['content-disposition'] || '';
+      const match = disp.match(/filename="([^"]+)"/);
+      a.download = match ? match[1] : 'CratePlan.xlsx';
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a); URL.revokeObjectURL(url);
+    }).catch(() => alert('Download failed'));
+  };
 
   if (isWorkspaceLoading) {
     return (
@@ -138,25 +158,48 @@ const PlannerSummaryTab = ({ draftCratePlan = null }) => {
 
   return (
     <div className="space-y-6">
-      {/* Workflow status strip */}
-      <StatusFlowStrip
-        currentStatus={projectStatus}
-        onApprove={approveProject}
-        isRefreshing={isRefreshing}
-      />
+      {/* Workflow status strip — hidden from UI; backend logic preserved */}
+      {/* <StatusFlowStrip currentStatus={projectStatus} onApprove={approveProject} isRefreshing={isRefreshing} /> */}
 
-      {/* Draft crate plan summary — shown when a plan has been saved in Step 2 */}
-      {draftCratePlan?.draft_crates?.length > 0 && (
+      {/* Saved crate plan dashboard — shown when a plan exists */}
+      {hasDraftPlan && (
         <div className="space-y-4">
           <div className="rounded-[32px] border border-[#dbe4f0] bg-white p-6 shadow-sm">
-            <div className="text-xs uppercase tracking-[0.22em] text-[#64748b]">Draft Crate Plan</div>
-            <div className="mt-1 text-xl font-semibold text-[#0f172a]">
-              {draftCratePlan.draft_crates.length} crate{draftCratePlan.draft_crates.length !== 1 ? 's' : ''} saved
-              {draftCratePlan.saved_at && (
-                <span className="ml-3 text-sm font-normal text-[#64748b]">
-                  · Saved {new Date(draftCratePlan.saved_at).toLocaleString('en-AU', { dateStyle: 'medium', timeStyle: 'short' })}
-                </span>
-              )}
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <div className="text-xs uppercase tracking-[0.22em] text-[#64748b]">Crate Plan — Saved</div>
+                <div className="mt-1 text-xl font-semibold text-[#0f172a]">
+                  {draftCratePlan.draft_crates.length} crate{draftCratePlan.draft_crates.length !== 1 ? 's' : ''} saved
+                  {draftCratePlan.saved_at && (
+                    <span className="ml-3 text-sm font-normal text-[#64748b]">
+                      · Saved {new Date(draftCratePlan.saved_at).toLocaleString('en-AU', { dateStyle: 'medium', timeStyle: 'short' })}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('crate-plan')}
+                  className="rounded-full border border-[#1d4ed8] bg-[#eff6ff] px-5 py-2 text-sm font-semibold text-[#1d4ed8] hover:bg-[#dbeafe] transition-colors"
+                >
+                  View Crates
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('build-plan')}
+                  className="rounded-full border border-[#64748b] bg-white px-5 py-2 text-sm font-semibold text-[#334155] hover:bg-[#f1f5f9] transition-colors"
+                >
+                  Edit Crate Plan
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownload}
+                  className="rounded-full border border-[#059669] bg-[#f0fdf4] px-5 py-2 text-sm font-semibold text-[#059669] hover:bg-[#dcfce7] transition-colors"
+                >
+                  Download Crate Plan
+                </button>
+              </div>
             </div>
           </div>
           <CratePlanSummary
@@ -285,31 +328,37 @@ const PlannerSummaryTab = ({ draftCratePlan = null }) => {
         </>
       )}
 
-      {/* Empty state */}
-      {!hasCratePlan && projectStatus !== 'approved_for_packing' && projectStatus !== 'crate_planned' && (
+      {/* Empty state — only shown when NO saved crate plan exists */}
+      {!hasDraftPlan && !hasCratePlan && projectStatus !== 'approved_for_packing' && projectStatus !== 'crate_planned' && (
         <div className="rounded-[32px] border border-dashed border-[#cbd5e1] bg-white px-6 py-16 text-center shadow-sm">
           <div className="text-xl font-semibold text-[#0f172a]">No crate plan yet</div>
           <div className="mt-2 text-sm text-[#64748b]">
             {projectStatus === 'draft' || projectStatus === 'review_pending'
-              ? 'Approve the project for packing to unlock crate generation.'
-              : 'Open Planning Workspace → Dispatch & build to generate the v3 crate and container layout.'}
+              ? 'Go to Dispatch & build to create a crate plan.'
+              : 'Open Dispatch & build to generate the crate layout.'}
           </div>
+          <button
+            type="button"
+            className="mt-5 rounded-full border border-[#1d4ed8] bg-[#eff6ff] px-6 py-2.5 text-sm font-semibold text-[#1d4ed8] hover:bg-[#dbeafe] transition-colors"
+            onClick={() => setActiveTab('build-plan')}
+          >
+            Go to Dispatch &amp; build
+          </button>
         </div>
       )}
 
-      {projectStatus === 'approved_for_packing' && !hasCratePlan && (
+      {!hasDraftPlan && projectStatus === 'approved_for_packing' && !hasCratePlan && (
         <div className="rounded-[32px] border border-[#bfdbfe] bg-[#f8fafc] px-6 py-8 text-center shadow-sm">
           <div className="text-lg font-semibold text-[#0f172a]">Ready to generate</div>
           <p className="mt-2 text-sm text-[#64748b]">
-            Open <strong className="text-[#334155]">Planning Workspace</strong>, then the{' '}
-            <strong className="text-[#334155]">Dispatch & build</strong> tab to run the planner.
+            Open <strong className="text-[#334155]">Dispatch &amp; build</strong> to run the planner.
           </p>
           <button
             type="button"
             className="btn-primary mt-5"
             onClick={() => setActiveTab('build-plan')}
           >
-            Go to Dispatch & build
+            Go to Dispatch &amp; build
           </button>
         </div>
       )}
