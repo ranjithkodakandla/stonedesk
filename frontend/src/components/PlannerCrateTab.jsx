@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import axios from 'axios';
 import { API_BASE, downloadPersistedDraftCratePlan } from '../utils/plannerUtils';
-import { DraftCrateCard, fmt } from './DraftCrateWorkspace';
+import { fmt } from './DraftCrateWorkspace';
+import CrateOptimizationViewer from './CrateOptimizationViewer';
 import { getCrateOperationalStatus } from '../utils/crateEstimator';
 import { usePlannerStore } from '../store/plannerStore';
 
@@ -287,19 +288,20 @@ const PlannerCrateTab = ({
       </div>
 
       {viewCrate && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <div className="text-sm font-semibold text-[#0f172a]">Crate inspection — {viewCrate.id}</div>
-            <button
-              type="button"
-              onClick={() => setViewCrateId(null)}
-              className="rounded-full border border-[#e2e8f0] bg-white px-4 py-1.5 text-xs font-semibold text-[#475569] hover:bg-[#f8fafc]"
-            >
-              Close details
-            </button>
-          </div>
-          <DraftCrateCard crate={viewCrate} onRemoveBundle={null} onDeleteCrate={null} readOnly />
-        </div>
+        <CrateOptimizationViewer
+          crate={viewCrate}
+          allCrates={crates}
+          targetWeightKg={draftCratePlan?.target_weight_kg || 1900}
+          busy={busy}
+          onClose={() => setViewCrateId(null)}
+          onCrateDeleted={(deletedId) => {
+            if (viewCrateId === deletedId) setViewCrateId(null);
+          }}
+          onApplyPlan={async (nextCrates) => {
+            const plan = await persistCrates(nextCrates);
+            return plan != null;
+          }}
+        />
       )}
     </div>
   );
