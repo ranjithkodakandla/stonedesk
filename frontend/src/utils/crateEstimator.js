@@ -21,9 +21,9 @@ const THICKNESS_INCH = {
 
 // ─── Part Type → crate class ──────────────────────────────────────────────────
 // island_vertical: Kitchen - Island Tops ONLY — leaned cassette geometry
-// kitchen_vertical: Kitchen perimeter/range tops + splashes — horizontal layered
-// vanity_vertical: Vanity tops + splashes — horizontal layered
-// misc: everything else — horizontal layered
+// kitchen_vertical: Kitchen perimeter/range tops + splashes — leaning family bundle
+// vanity_vertical: Vanity tops + splashes — leaning family bundle (compact)
+// misc: everything else — horizontal layered (legacy flat-lay)
 
 const PART_TYPE_TO_CRATE_CLASS = {
   'Kitchen - Island Tops':     'island_vertical',
@@ -241,24 +241,7 @@ export function estimateVerticalCassetteDimensions(pieces) {
   return estimateLeanedCassetteDimensions(pieces);
 }
 
-// ─── Horizontal layered crate geometry ───────────────────────────────────────
-// Kitchen and Vanity crates pack flat — NOT upright, NOT leaned.
-//
-// Physical stack (bottom → top):
-//   pallet frame
-//   main tops  (Perimeter Tops / Range Tops / Vanity Top)
-//   1″ separator
-//   back splashes
-//   1″ separator
-//   side splashes
-//   lid framing
-//
-// Axis model:
-//   internal_length = max long edge of all pieces + length clearance  [L]
-//   internal_width  = max short edge of all pieces + side padding      [W]
-//   internal_height = accumulated layer thicknesses + separators + framing [H]
-
-const HORIZ_PALLET_BASE   = 4.0;   // pallet / sled base
+const HORIZ_PALLET_BASE   = 4.0;   // pallet / sled base (flat-lay misc only)
 const HORIZ_LID           = 3.0;   // top cap framing
 const HORIZ_WALL          = 3.0;   // side wall timber
 const HORIZ_END_FRAME     = 4.0;   // end boards (2" each end)
@@ -273,6 +256,103 @@ function isBackSplashPiece(piece) {
 function isSideSplashPiece(piece) {
   return /side.?splash/i.test(piece.part || '');
 }
+
+// ─── Leaning family bundle geometry (Kitchen / Vanity) ─────────────────────
+// Warehouse model: tops stand on edge, leaning into A-frame support (~15°).
+// Splashes and multi-top separation accumulate on DEPTH — not crate HEIGHT.
+//
+//   L (length):  max slab long edge + end clearance  [long edge on pallet]
+//   H (height):  max TOP short edge × cos(15°) + pallet + headroom  [standing lean]
+//   D (depth):   Σ top thicknesses + inter-top foam + splash depths + framing
+//
+// Build sequence preserved: tops → foam → back splash → foam → side splash (depth order).
+
+function pieceLongShort(piece) {
+  const L = parseFloat(piece.length) || 0;
+  const W = parseFloat(piece.width) || 0;
+  const long = Math.max(L, W) || 0;
+  const short = L > 0 && W > 0 ? Math.min(L, W) : long;
+  return { long, short };
+}
+
+export function estimateLeaningFamilyBundleDimensions(pieces, layerGapIn = HORIZ_LAYER_SEP) {
+  const gap = Number(layerGapIn) > 0 ? Number(layerGapIn) : HORIZ_LAYER_SEP;
+  if (!pieces || pieces.length === 0) {
+    return {
+      internal_length: 0, internal_width: 0, internal_height: 0,
+      external_length: 0, external_width: 0, external_height: 0,
+    };
+  }
+
+  const mainTops = pieces.filter((p) => !isBackSplashPiece(p) && !isSideSplashPiece(p));
+  const backSplash = pieces.filter(isBackSplashPiece);
+  const sideSplash = pieces.filter(isSideSplashPiece);
+  const heightRef = mainTops.length > 0 ? mainTops : pieces;
+
+  let maxLong = 0;
+  for (const p of pieces) {
+    maxLong = Math.max(maxLong, pieceLongShort(p).long);
+  }
+
+  let maxTopShort = 0;
+  for (const p of heightRef) {
+    maxTopShort = Math.max(maxTopShort, pieceLongShort(p).short);
+  }
+
+  const intL = maxLong + HORIZ_LENGTH_CLEAR;
+  const intH = maxTopShort * LEAN_FACTOR + PALLET_BASE + LEAN_HEADROOM;
+
+  let depth = DEPTH_FRAME;
+  if (mainTops.length > 0) {
+    mainTops.forEach((p, i) => {
+      depth += parseThicknessIn(p.thickness);
+      if (i > 0) depth += gap;
+    });
+  }
+  if (backSplash.length > 0) {
+    depth += gap + Math.max(...backSplash.map((p) => parseThicknessIn(p.thickness)));
+  }
+  if (sideSplash.length > 0) {
+    depth += gap + Math.max(...sideSplash.map((p) => parseThicknessIn(p.thickness)));
+  }
+
+  const intW = depth;
+
+  return {
+    internal_length: round2(intL),
+    internal_width: round2(intW),
+    internal_height: round2(intH),
+    external_length: round2(intL + HORIZ_END_FRAME),
+    external_width: round2(intW + HORIZ_WALL * 2),
+    external_height: round2(intH + HEIGHT_CAP_TBR + FORKLIFT_TINE),
+  };
+}
+
+/** Draft-crate display geometry — islands unchanged; kitchen/vanity use family bundle. */
+export function estimateDraftCrateDimensions(crateClass, pieces, layerGapIn = HORIZ_LAYER_SEP) {
+  if (crateClass === 'island_vertical') return estimateLeanedCassetteDimensions(pieces);
+  if (crateClass === 'kitchen_vertical' || crateClass === 'vanity_vertical') {
+    return estimateLeaningFamilyBundleDimensions(pieces, layerGapIn);
+  }
+  return estimateHorizontalLayeredDimensions(pieces, layerGapIn);
+}
+
+// ─── Horizontal layered crate geometry (misc / legacy) ───────────────────────
+// Flat-lay model retained for misc class only — NOT used for kitchen/vanity.
+//
+// Physical stack (bottom → top):
+//   pallet frame
+//   main tops  (Perimeter Tops / Range Tops / Vanity Top)
+//   1″ separator
+//   back splashes
+//   1″ separator
+//   side splashes
+//   lid framing
+//
+// Axis model:
+//   internal_length = max long edge of all pieces + length clearance  [L]
+//   internal_width  = max short edge of all pieces + side padding      [W]
+//   internal_height = accumulated layer thicknesses + separators + framing [H]
 
 export function estimateHorizontalLayeredDimensions(pieces, layerGapIn = HORIZ_LAYER_SEP) {
   const gap = Number(layerGapIn) > 0 ? Number(layerGapIn) : HORIZ_LAYER_SEP;
@@ -401,10 +481,8 @@ export function buildDraftCrate(id, selectedBundles) {
   });
   const hadSplashStripped = selectedBundles.some((b) => (b.splash_stripped || 0) > 0);
 
-  // Select geometry: island → leaned cassette; kitchen/vanity/misc → horizontal layered.
-  const dimensions = isIslandCrate
-    ? estimateLeanedCassetteDimensions(allPieces)
-    : estimateHorizontalLayeredDimensions(allPieces);
+  // Select geometry: island → leaned cassette; kitchen/vanity → family bundle; misc → flat-lay.
+  const dimensions = estimateDraftCrateDimensions(crateClass, allPieces);
 
   const warnings = generateCrateWarnings({
     totalWeightKg,
