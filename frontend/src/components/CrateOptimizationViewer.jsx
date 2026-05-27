@@ -229,6 +229,7 @@ export default function CrateOptimizationViewer({
         crateId={crate.id}
         gapIn={gapIn}
         island={island}
+        crateClass={activeCrate?.crate_class}
         footprint={footprint}
         stackSteps={stackSteps}
         validation={validation}

@@ -144,9 +144,10 @@ def island_cassette_dimensions_operational(
 # DO NOT use for optimizer/container-packing calculations — see
 # island_cassette_dimensions_operational() for the optimizer coordinate system.
 
-_LEAN_FACTOR      = 0.966   # cos(15°) — 15° operational lean from vertical
-_SEPARATOR_IN     = 0.75    # foam separator per slab gap
-_DEPTH_FRAME      = 4.0     # framing on depth axis
+_LEAN_FACTOR          = 0.966   # cos(15°) — 15° operational lean from vertical
+_SEPARATOR_IN         = 0.75    # kitchen/vanity layer foam (depth stack)
+_ISLAND_SEPARATOR_IN  = 0.04    # island cassette: 100µm poly-film face separator
+_DEPTH_FRAME          = 4.0     # framing on depth axis
 _LENGTH_CLEARANCE = 2.0     # internal end clearance (1" each end)
 _END_FRAME        = 2.0     # external end-board thickness (1" each end)
 _PALLET_BASE      = 6.0     # pallet / sled base height
@@ -168,8 +169,8 @@ def leaned_operational_cassette_dimensions(
       internal_height = max slab SHORT edge × cos(15°) + pallet + headroom  [H]
 
     Example — 10× 96"×32" @ 3CM:
-      internal:  98" × 19.5" × 40.9"
-      external: 100" × 25.5" × 53.9"   ← operationally realistic
+      internal:  98" × 16.2" × 40.9"
+      external: 100" × 22.2" × 53.9"   ← operationally realistic
 
     vs optimizer coordinates for the same slabs:
       internal:  15.8" × 38" × 104"    ← small footprint, tall (for packing solver)
@@ -208,8 +209,8 @@ def leaned_operational_cassette_dimensions(
     # L — primary length (fixed by slab footprint, not slab count)
     internal_length = max_long + _LENGTH_CLEARANCE
 
-    # D — cassette depth (grows with slab count + foam separators)
-    separators = max(0, n - 1) * _SEPARATOR_IN
+    # D — cassette depth (grows with slab count + poly-film separators)
+    separators = max(0, n - 1) * _ISLAND_SEPARATOR_IN
     internal_width = stack_depth + separators + _DEPTH_FRAME
 
     # H — height from leaned geometry (short edge drives height, not long edge)

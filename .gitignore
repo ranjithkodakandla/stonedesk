@@ -6,3 +6,7 @@ __pycache__/
 data/
 dist/
 *.log
+venv/
+.venv/
+backend/venv/
+backend/.venv/

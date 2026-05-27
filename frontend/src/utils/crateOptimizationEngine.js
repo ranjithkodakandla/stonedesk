@@ -4,8 +4,7 @@
  */
 import {
   buildDraftCrate,
-  estimateHorizontalLayeredDimensions,
-  estimateLeanedCassetteDimensions,
+  estimateDraftCrateDimensions,
   getCrateClass,
   getCrateOperationalStatus,
   recomputeCrate,
@@ -313,9 +312,7 @@ export function previewCrateFromEdits(crate, flatPieces, gapIn = 1, targetWeight
   const bundles = piecesToBundles(flatPieces);
   const draft = buildDraftCrate(crate.id, bundles);
   const island = draft.crate_class === 'island_vertical';
-  const dimensions = island
-    ? estimateLeanedCassetteDimensions(flatPieces)
-    : estimateHorizontalLayeredDimensions(flatPieces, gapIn);
+  const dimensions = estimateDraftCrateDimensions(draft.crate_class, flatPieces, gapIn);
 
   const slabWeightKg = draft.total_weight_kg || 0;
   const estimatedCrateWeightKg = CRATE_TARE_KG;
@@ -379,12 +376,12 @@ function buildPackingNotes(crate, gapIn, island) {
   } else {
     const cls = crate.crate_class;
     if (cls === 'kitchen_vertical') {
-      notes.push('Kitchen stack: tops → spacer → back splash → side splash.');
+      notes.push('Kitchen family bundle — tops lean on edge; splashes pack in depth behind tops.');
       notes.push('Keep family units together — do not split splashes from their tops.');
     } else if (cls === 'vanity_vertical') {
-      notes.push('Vanity stack: top → spacer → back splash → side splash.');
+      notes.push('Vanity family bundle — dominant top on edge; splashes grouped in depth.');
     }
-    notes.push(`Spacer policy: ${gapIn}″ foam between layers (viewer override — factory default 1″).`);
+    notes.push(`Spacer policy: ${gapIn}″ foam between tops and splash groups (depth axis).`);
     notes.push('Length driven by longest top long edge — not splash run totals.');
   }
   if (crate.island_splash_violation) {

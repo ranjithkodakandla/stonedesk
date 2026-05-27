@@ -24,11 +24,29 @@ All three figures share the same board background, title band, typography, and e
 
 ## Rendering principles
 
+- **Leaning supported load (all categories)** — stone leans ~15° into A-frame rear support; pallet base, perimeter foam, bottom foam bed. Nothing stands unsupported.
+- **Packing patterns** — island = slab cassette; kitchen = top-centric family bundle; vanity = compact family bundle.
 - **Hero crate dominance** — crate occupies ~72–75% of the hero zone; shrink secondary elements first on narrow viewports.
-- **Contents inside crate** — kitchen/vanity flat-lay and island vertical slabs are drawn inside crate geometry, not as external lists.
+- **Contents inside crate** — parts drawn inside crate geometry with lean contact, not as external lists or flat horizontal layer cakes.
 - **Embedded metrics panel** — spec block is SVG-native (monospace, formulas), not a floating React widget.
 - **Engineering annotations** — dimension arrows, forklift clearance, load axis, operational callouts.
 - **Bottom dock editing** — FIG switch, spacer, collapsed parts editor, Apply / Discard; visualization stays primary.
+
+## Estimator ↔ compositor axis mapping (locked)
+
+All figures consume `preview.dimensions` from `estimateDraftCrateDimensions` — the compositor does not recompute crate math.
+
+| Estimator axis | Physical meaning | Compositor (FIG A isometric) |
+|----------------|------------------|------------------------------|
+| **L** (`internal_length`) | Long edge on pallet / crate length | Slab span along **x**; pallet length arrows |
+| **H** (`internal_height`) | Short edge standing height × cos(15°) + pallet + headroom | Leaning panel **y** height; external height arrows |
+| **D** (`internal_width`) | Tops + inter-slab foam + splash depths | **z** depth accumulation (family) or cassette stack (island) |
+| **Lean ~15°** | A-frame supported contact | Top of slab shifts +z via `slabH × tan(15°)` |
+
+**Kitchen / vanity:** long edge horizontal; short edge drives load height; splashes add depth behind tops.  
+**Island:** unchanged cassette model — depth-stacked slabs leaning into rear support with poly film between faces.
+
+FIG B family section shows a **leaning depth section** (not a horizontal layer cake). FIG C is labeled **sequence view — not physical elevation**.
 
 ## Why dashboard/card layout was avoided
 
