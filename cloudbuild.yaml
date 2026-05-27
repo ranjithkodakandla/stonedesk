@@ -1,0 +1,70 @@
+steps:
+  # --- Backend ---
+  - name: 'gcr.io/cloud-builders/docker'
+    id: build-backend
+    args:
+      - build
+      - -t
+      - gcr.io/$PROJECT_ID/stonedesk-backend:$SHORT_SHA
+      - ./backend
+
+  - name: 'gcr.io/cloud-builders/docker'
+    id: push-backend
+    waitFor: [build-backend]
+    args:
+      - push
+      - gcr.io/$PROJECT_ID/stonedesk-backend:$SHORT_SHA
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: deploy-backend
+    waitFor: [push-backend]
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - stonedesk-backend
+      - --image=gcr.io/$PROJECT_ID/stonedesk-backend:$SHORT_SHA
+      - --region=us-central1
+      - --platform=managed
+      - --allow-unauthenticated
+      - --set-env-vars=MONGODB_DB=virgin
+      # Set MONGODB_URI and CORS_ORIGINS via Cloud Run Secret Manager or substitutions
+
+  # --- Frontend ---
+  - name: 'gcr.io/cloud-builders/docker'
+    id: build-frontend
+    waitFor: [deploy-backend]
+    args:
+      - build
+      - -t
+      - gcr.io/$PROJECT_ID/stonedesk-frontend:$SHORT_SHA
+      - --build-arg
+      - VITE_API_URL=$_BACKEND_URL/api
+      - ./frontend
+
+  - name: 'gcr.io/cloud-builders/docker'
+    id: push-frontend
+    waitFor: [build-frontend]
+    args:
+      - push
+      - gcr.io/$PROJECT_ID/stonedesk-frontend:$SHORT_SHA
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: deploy-frontend
+    waitFor: [push-frontend]
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - stonedesk-frontend
+      - --image=gcr.io/$PROJECT_ID/stonedesk-frontend:$SHORT_SHA
+      - --region=us-central1
+      - --platform=managed
+      - --allow-unauthenticated
+
+substitutions:
+  _BACKEND_URL: https://stonedesk-backend-xxxxxxxxxx-uc.a.run.app
+
+images:
+  - gcr.io/$PROJECT_ID/stonedesk-backend:$SHORT_SHA
+  - gcr.io/$PROJECT_ID/stonedesk-frontend:$SHORT_SHA

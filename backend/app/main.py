@@ -31,7 +31,7 @@ from .services.planning_engine import (
 
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
 
-MONGODB_URI = os.getenv("MONGODB_URI", "mongodb+srv://virgin_db_user:iddh38iXtoKpt1We@cluster0.t9reftj.mongodb.net/?appName=Cluster0")
+MONGODB_URI = os.getenv("MONGODB_URI")
 MONGODB_DB = os.getenv("MONGODB_DB", "virgin")
 ALLOW_MEMORY_FALLBACK = os.getenv("ALLOW_MEMORY_FALLBACK", "false").lower() in {"1", "true", "yes"}
 
@@ -721,6 +721,11 @@ app.add_middleware(
         "X-Perf-Backend-Total",
     ],
 )
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 
 @app.get("/")
