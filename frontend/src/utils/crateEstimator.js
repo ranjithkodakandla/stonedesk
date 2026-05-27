@@ -181,7 +181,8 @@ function parseThicknessIn(t) {
 // operationally impossible. The leaned model gives realistic 50–65" heights.
 
 const LEAN_FACTOR      = 0.966;  // cos(15°) — 15° lean from vertical
-const SEPARATOR_IN     = 0.75;   // foam separator per slab gap
+const SEPARATOR_IN        = 0.75;   // kitchen/vanity layer foam (depth stack)
+const ISLAND_SEPARATOR_IN = 0.04;   // island cassette: 100µm poly-film face separator
 const DEPTH_FRAME      = 4.0;    // total framing allowance on depth axis
 const LENGTH_CLEARANCE = 2.0;    // internal end clearance (1" each end)
 const END_FRAME        = 2.0;    // external end-board thickness (1" each end)
@@ -221,7 +222,7 @@ export function estimateLeanedCassetteDimensions(pieces) {
   const intL = maxLongEdge + LENGTH_CLEARANCE;
 
   // D — cassette depth: grows with slab count and foam separators
-  const intD = stackDepth + Math.max(0, pieces.length - 1) * SEPARATOR_IN + DEPTH_FRAME;
+  const intD = stackDepth + Math.max(0, pieces.length - 1) * ISLAND_SEPARATOR_IN + DEPTH_FRAME;
 
   // H — height from leaned geometry: short edge projected at lean angle
   const intH = maxShortEdge * LEAN_FACTOR + PALLET_BASE + LEAN_HEADROOM;
