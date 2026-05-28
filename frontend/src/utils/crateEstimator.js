@@ -2,7 +2,7 @@ import { round2 } from './plannerUtils';
 
 /**
  * Frontend port of backend operational dimension helpers.
- * Mirrors island_cassette_dimensions_operational() and related logic in
+ * Mirrors leaned_operational_cassette_dimensions() and related logic in
  * services/planner_v3/dimensions.py — kept in sync manually.
  *
  * All dimensions are in inches. All weights are in kg.
@@ -20,9 +20,9 @@ const THICKNESS_INCH = {
 };
 
 // ─── Part Type → crate class ──────────────────────────────────────────────────
-// island_vertical: Kitchen - Island Tops ONLY — leaned cassette geometry
-// kitchen_vertical: Kitchen perimeter/range tops + splashes — leaning family bundle
-// vanity_vertical: Vanity tops + splashes — leaning family bundle (compact)
+// island_vertical: Kitchen - Island Tops ONLY — upright cassette geometry
+// kitchen_vertical: Kitchen perimeter/range tops + splashes — upright family bundle
+// vanity_vertical: Vanity tops + splashes — upright family bundle (compact)
 // misc: everything else — horizontal layered (legacy flat-lay)
 
 const PART_TYPE_TO_CRATE_CLASS = {
@@ -167,27 +167,23 @@ function parseThicknessIn(t) {
   return isNaN(n) ? 1.18 : n;
 }
 
-// ─── Leaned cassette geometry ─────────────────────────────────────────────────
-// Mirrors island_cassette_dimensions_operational() in Python (dimensions.py).
+// ─── Rectangular upright cassette geometry ────────────────────────────────────
+// Mirrors leaned_operational_cassette_dimensions() in Python (dimensions.py).
 //
-// Real operational model: slabs lean backward at ~15° from vertical inside an
-// A-frame cassette. This changes which slab dimension drives each crate axis:
+// Physical model: slabs stand upright, flush against internal wall supports.
+// No lean angle. No cosine correction.
 //
 //   L (primary, fixed): max slab LONG edge  + end clearance
 //   D (depth, dynamic): Σ thicknesses + foam separators + framing
-//   H (lean-corrected): slab SHORT edge × cos(15°) + pallet + headroom
-//
-// The old "height = slab long edge" model produced 106"+–131"+ external heights —
-// operationally impossible. The leaned model gives realistic 50–65" heights.
+//   H (direct):         slab SHORT edge + pallet + headroom
 
-const LEAN_FACTOR      = 0.966;  // cos(15°) — 15° lean from vertical
 const SEPARATOR_IN        = 0.75;   // kitchen/vanity layer foam (depth stack)
 const ISLAND_SEPARATOR_IN = 0.04;   // island cassette: 100µm poly-film face separator
 const DEPTH_FRAME      = 4.0;    // total framing allowance on depth axis
 const LENGTH_CLEARANCE = 2.0;    // internal end clearance (1" each end)
 const END_FRAME        = 2.0;    // external end-board thickness (1" each end)
 const PALLET_BASE      = 6.0;    // pallet / sled base height
-const LEAN_HEADROOM    = 4.0;    // head clearance above leaned slabs
+const HEADROOM         = 4.0;    // head clearance above slabs
 const WALL_TIMBER      = 3.0;    // structural timber wall each side (depth axis)
 const HEIGHT_CAP_TBR   = 6.0;    // top cap timber
 const FORKLIFT_TINE    = 7.0;    // forklift tine clearance
@@ -224,8 +220,8 @@ export function estimateLeanedCassetteDimensions(pieces) {
   // D — cassette depth: grows with slab count and foam separators
   const intD = stackDepth + Math.max(0, pieces.length - 1) * ISLAND_SEPARATOR_IN + DEPTH_FRAME;
 
-  // H — height from leaned geometry: short edge projected at lean angle
-  const intH = maxShortEdge * LEAN_FACTOR + PALLET_BASE + LEAN_HEADROOM;
+  // H — height: short edge upright (no lean correction)
+  const intH = maxShortEdge + PALLET_BASE + HEADROOM;
 
   return {
     internal_length: round2(intL),
@@ -237,7 +233,7 @@ export function estimateLeanedCassetteDimensions(pieces) {
   };
 }
 
-// Kept for any legacy callers; delegates to the leaned model.
+// Kept for any legacy callers; delegates to the upright cassette model.
 export function estimateVerticalCassetteDimensions(pieces) {
   return estimateLeanedCassetteDimensions(pieces);
 }
@@ -258,12 +254,12 @@ function isSideSplashPiece(piece) {
   return /side.?splash/i.test(piece.part || '');
 }
 
-// ─── Leaning family bundle geometry (Kitchen / Vanity) ─────────────────────
-// Warehouse model: tops stand on edge, leaning into A-frame support (~15°).
-// Splashes and multi-top separation accumulate on DEPTH — not crate HEIGHT.
+// ─── Rectangular family bundle geometry (Kitchen / Vanity) ─────────────────
+// Warehouse model: tops stand upright, flush against internal wall supports.
+// No lean angle. Splashes and multi-top separation accumulate on DEPTH — not HEIGHT.
 //
 //   L (length):  max slab long edge + end clearance  [long edge on pallet]
-//   H (height):  max TOP short edge × cos(15°) + pallet + headroom  [standing lean]
+//   H (height):  max TOP short edge + pallet + headroom  [upright, no correction]
 //   D (depth):   Σ top thicknesses + inter-top foam + splash depths + framing
 //
 // Build sequence preserved: tops → foam → back splash → foam → side splash (depth order).
@@ -301,7 +297,7 @@ export function estimateLeaningFamilyBundleDimensions(pieces, layerGapIn = HORIZ
   }
 
   const intL = maxLong + HORIZ_LENGTH_CLEAR;
-  const intH = maxTopShort * LEAN_FACTOR + PALLET_BASE + LEAN_HEADROOM;
+  const intH = maxTopShort + PALLET_BASE + HEADROOM;
 
   let depth = DEPTH_FRAME;
   if (mainTops.length > 0) {
@@ -482,7 +478,7 @@ export function buildDraftCrate(id, selectedBundles) {
   });
   const hadSplashStripped = selectedBundles.some((b) => (b.splash_stripped || 0) > 0);
 
-  // Select geometry: island → leaned cassette; kitchen/vanity → family bundle; misc → flat-lay.
+  // Select geometry: island → upright cassette; kitchen/vanity → family bundle; misc → flat-lay.
   const dimensions = estimateDraftCrateDimensions(crateClass, allPieces);
 
   const warnings = generateCrateWarnings({
