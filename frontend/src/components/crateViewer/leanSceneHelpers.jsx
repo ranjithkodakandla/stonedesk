@@ -1,12 +1,8 @@
 /**
- * Shared leaning-supported load geometry for engineering compositor (presentation only).
- * Matches operational lean model: ~15° from vertical into A-frame support.
+ * Shared upright load geometry for engineering compositor (presentation only).
+ * Rectangular crate model: slabs upright, parallel to crate walls.
  */
 import React from 'react';
-
-export const LEAN_DEG = 15;
-export const LEAN_TAN = Math.tan((LEAN_DEG * Math.PI) / 180);
-export const LEAN_COS = Math.cos((LEAN_DEG * Math.PI) / 180);
 
 export const COS30 = 0.866;
 export const SIN30 = 0.5;
@@ -22,18 +18,18 @@ export function packingPattern(island, crateClass) {
 }
 
 export function patternSubtitle(pattern) {
-  if (pattern === 'island') return 'LEANING SUPPORTED LOAD · ISLAND CASSETTE';
-  if (pattern === 'vanity') return 'LEANING SUPPORTED LOAD · VANITY FAMILY';
-  return 'LEANING SUPPORTED LOAD · KITCHEN FAMILY';
+  if (pattern === 'island') return 'UPRIGHT SUPPORTED LOAD · ISLAND CASSETTE';
+  if (pattern === 'vanity') return 'UPRIGHT SUPPORTED LOAD · VANITY FAMILY';
+  return 'UPRIGHT SUPPORTED LOAD · KITCHEN FAMILY';
 }
 
 export function patternBanner(pattern, pieceCount) {
-  if (pattern === 'island') return `LEANING SUPPORTED CASSETTE · ${pieceCount} SLABS`;
+  if (pattern === 'island') return `UPRIGHT SUPPORTED CASSETTE · ${pieceCount} SLABS`;
   if (pattern === 'vanity') return `COMPACT FAMILY BUNDLE · ${pieceCount} PARTS`;
   return `TOP-CENTRIC FAMILY BUNDLE · ${pieceCount} PARTS`;
 }
 
-/** Draw one leaning slab panel in isometric (face toward opening). */
+/** Draw one upright slab panel in isometric (face toward opening). */
 export function drawLeaningSlab(g, cx, cy, k, x, y, z, slabW, slabH, thickZ, opts = {}) {
   const {
     fill = 'url(#granite)',
@@ -44,7 +40,7 @@ export function drawLeaningSlab(g, cx, cy, k, x, y, z, slabW, slabH, thickZ, opt
     opacity = 1,
     keyPrefix = 'slab',
   } = opts;
-  const leanOff = slabH * LEAN_TAN;
+  const leanOff = 0;
   const zBack = z + leanOff;
 
   const bl = iso(cx, cy, x, y, z, k);
@@ -82,10 +78,10 @@ export function drawFoamSheet(g, cx, cy, k, x, y, z, w, h, depth, gapIn, key) {
   });
 }
 
-/** 2D depth-section leaning panel (side elevation looking along crate length). */
+/** 2D depth-section upright panel (side elevation looking along crate length). */
 export function drawLeanSectionPanel(g, x, baseY, z, w, h, thick, opts = {}) {
   const { fill = 'url(#granite)', stroke = '#334155', label, foam = false, key = 'sp' } = opts;
-  const leanOff = h * LEAN_TAN;
+  const leanOff = 0;
   const pts = `${x},${baseY} ${x + w},${baseY} ${x + w + leanOff},${baseY - h} ${x + leanOff},${baseY - h}`;
   g.push(
     <g key={key}>

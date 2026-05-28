@@ -134,24 +134,23 @@ def island_cassette_dimensions_operational(
     }
 
 
-# ─── Leaned operational cassette geometry ────────────────────────────────────
+# ─── Rectangular upright cassette geometry ────────────────────────────────────
 # Physical orientation of island slabs in transport:
 #   Long edge  → runs horizontally along cassette primary length axis
-#   Short edge → becomes effective standing height (lean-adjusted)
+#   Short edge → becomes effective standing height (upright, no lean correction)
 #   Thickness  → accumulates into cassette depth
 #
 # This is the DISPLAY geometry for Draft Crate UI and operational planning cards.
 # DO NOT use for optimizer/container-packing calculations — see
 # island_cassette_dimensions_operational() for the optimizer coordinate system.
 
-_LEAN_FACTOR          = 0.966   # cos(15°) — 15° operational lean from vertical
 _SEPARATOR_IN         = 0.75    # kitchen/vanity layer foam (depth stack)
 _ISLAND_SEPARATOR_IN  = 0.04    # island cassette: 100µm poly-film face separator
 _DEPTH_FRAME          = 4.0     # framing on depth axis
 _LENGTH_CLEARANCE = 2.0     # internal end clearance (1" each end)
 _END_FRAME        = 2.0     # external end-board thickness (1" each end)
 _PALLET_BASE      = 6.0     # pallet / sled base height
-_LEAN_HEADROOM    = 4.0     # head clearance above leaned slabs
+_HEADROOM         = 4.0     # head clearance above slabs
 
 
 def leaned_operational_cassette_dimensions(
@@ -163,14 +162,14 @@ def leaned_operational_cassette_dimensions(
     OPERATIONAL DISPLAY geometry — mirrors estimateLeanedCassetteDimensions()
     in frontend/src/utils/crateEstimator.js. Keep both in sync manually.
 
-    Physical model (slabs lean at 15° from vertical):
+    Physical model (slabs upright, flush against wall supports — no lean angle):
       internal_length = max slab LONG edge + end clearance   [L, fixed primary axis]
       internal_width  = Σ thicknesses + separators + framing  [D, grows with slab count]
-      internal_height = max slab SHORT edge × cos(15°) + pallet + headroom  [H]
+      internal_height = max slab SHORT edge + pallet + headroom  [H, no cosine correction]
 
     Example — 10× 96"×32" @ 3CM:
-      internal:  98" × 16.2" × 40.9"
-      external: 100" × 22.2" × 53.9"   ← operationally realistic
+      internal:  98" × 16.2" × 42.0"
+      external: 100" × 22.2" × 55.0"
 
     vs optimizer coordinates for the same slabs:
       internal:  15.8" × 38" × 104"    ← small footprint, tall (for packing solver)
@@ -213,8 +212,8 @@ def leaned_operational_cassette_dimensions(
     separators = max(0, n - 1) * _ISLAND_SEPARATOR_IN
     internal_width = stack_depth + separators + _DEPTH_FRAME
 
-    # H — height from leaned geometry (short edge drives height, not long edge)
-    internal_height = max_short * _LEAN_FACTOR + _PALLET_BASE + _LEAN_HEADROOM
+    # H — height: short edge upright (no lean correction)
+    internal_height = max_short + _PALLET_BASE + _HEADROOM
 
     return {
         "internal_length": round(internal_length, 1),

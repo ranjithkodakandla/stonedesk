@@ -1,14 +1,12 @@
 /**
  * ONE SVG engineering compositor — single poster board (Figures A / B / C).
- * Presentation only. Leaning-supported load geometry for all categories.
+ * Presentation only. Upright rectangular crate geometry for all categories.
  */
 import React from 'react';
 import { fmt } from '../DraftCrateWorkspace';
 import { islandDepthStack, parseThicknessIn } from '../../utils/cratePhysicalLayout';
 import { pieceKey } from '../../utils/crateOptimizationEngine';
 import {
-  LEAN_DEG,
-  LEAN_TAN,
   iso,
   packingPattern,
   patternBanner,
@@ -80,7 +78,7 @@ function drawPalletAndForklift(nodes, cx, cy, k, intL, intW, forkH) {
   return pal;
 }
 
-/** Shared physical world: pallet, foam bed, A-frame, rear support, perimeter foam. */
+/** Shared physical world: pallet, foam bed, rear support wall, perimeter foam. */
 function drawSupportedLeanFoundation(nodes, cx, cy, k, intL, intW, intH, y0) {
   drawLeaningSlab(nodes, cx, cy, k, 8, y0 - 0.4, 2, intL * 0.9, 1.4, intW * 0.88, {
     foam: true,
@@ -100,11 +98,8 @@ function drawSupportedLeanFoundation(nodes, cx, cy, k, intL, intW, intH, y0) {
 
   [[8, 0], [intL * 0.9, 0]].forEach(([ax, az], i) => {
     const foot = iso(cx, cy, ax, y0, az, k);
-    const head = iso(cx, cy, ax, y0 + intH * 0.88, rearZ * 0.55, k);
-    nodes.push(<line key={`brace-${i}`} x1={foot.x} y1={foot.y} x2={head.x} y2={head.y} stroke={WOOD_D} strokeWidth="4" />);
-    const mid = iso(cx, cy, ax + intL * 0.06, y0 + intH * 0.42, rearZ * 0.35, k);
-    nodes.push(<line key={`diag-${i}`} x1={foot.x} y1={foot.y} x2={mid.x} y2={mid.y} stroke={WOOD_D} strokeWidth="2.5" opacity="0.85" />);
-    nodes.push(<line key={`diag2-${i}`} x1={head.x} y1={head.y} x2={mid.x} y2={mid.y} stroke={WOOD_D} strokeWidth="2" opacity="0.7" />);
+    const head = iso(cx, cy, ax, y0 + intH * 0.88, az, k);
+    nodes.push(<line key={`post-wall-${i}`} x1={foot.x} y1={foot.y} x2={head.x} y2={head.y} stroke={WOOD_D} strokeWidth="4" />);
   });
 
   drawLeaningSlab(nodes, cx, cy, k, 6, y0, 0.5, 1.8, intH * 0.78, 1.2, { foam: true, keyPrefix: 'side-foam-l', opacity: 0.75 });
@@ -230,9 +225,9 @@ function MetricsPanelSvg({ preview, crateId, gapIn, pattern, stackSteps, layers 
       <text x={x + w / 2} y={y + 151} textAnchor="middle" fontSize="10" fontWeight="800" fill="#fff">WEIGHT OPTIMIZATION: {met ? 'MET' : 'REVIEW'}</text>
       <text x={x + 10} y={y + 172} fontSize="8.5" fontFamily="monospace" fill={INK2}>INT {fmt(d.internal_length)} × {fmt(d.internal_width)} × {fmt(d.internal_height)}″</text>
       <text x={x + 10} y={y + 184} fontSize="8.5" fontFamily="monospace" fill={INK2}>EXT {fmt(d.external_length)} × {fmt(d.external_width)} × {fmt(d.external_height)}″</text>
-      <text x={x + 10} y={y + 196} fontSize="8.5" fontFamily="monospace" fill={INK2}>LOAD HEIGHT: {fmt(d.internal_height)}″ · LEAN ~{LEAN_DEG}°</text>
+      <text x={x + 10} y={y + 196} fontSize="8.5" fontFamily="monospace" fill={INK2}>LOAD HEIGHT: {fmt(d.internal_height)}″ · UPRIGHT</text>
       <text x={x + 10} y={y + 208} fontSize="8.5" fontFamily="monospace" fill={INK2}>{isIsland ? 'SEPARATOR: 100µm poly film' : `SPACER: ${fmt(gapIn)}″ foam between groups`}</text>
-      <text x={x + 10} y={y + 220} fontSize="8.5" fontFamily="monospace" fill={INK2}>FORKLIFT: 7″ clearance · A-frame supported load</text>
+      <text x={x + 10} y={y + 220} fontSize="8.5" fontFamily="monospace" fill={INK2}>FORKLIFT: 7″ clearance · vertical wall support</text>
       {!isIsland && layers?.length > 0 && (
         <g>
           <text x={x + 10} y={y + 238} fontSize="8" fontWeight="700" fill={INK}>FACTORY BUILD ORDER:</text>
@@ -244,7 +239,7 @@ function MetricsPanelSvg({ preview, crateId, gapIn, pattern, stackSteps, layers 
         </g>
       )}
       {isIsland && (
-        <text x={x + 10} y={y + 238} fontSize="8" fontFamily="monospace" fill={INK2}>Leaning supported cassette · poly film between faces</text>
+        <text x={x + 10} y={y + 238} fontSize="8" fontFamily="monospace" fill={INK2}>Upright supported cassette · poly film between faces</text>
       )}
     </g>
   );
@@ -282,7 +277,7 @@ function HeroCrateFigure({ layers, pieces, gapIn, pattern, dims }) {
   );
 
   const leanPt = iso(cx, cy, intL * 0.08, y0 + intH * 0.55, intW * 0.2, k);
-  nodes.push(leaderCallout(leanPt.x, leanPt.y, leanPt.x - 62, leanPt.y - 48, [`${LEAN_DEG}° LEAN`, 'into A-frame support', 'bottom foam contact'], 'lean'));
+  nodes.push(leaderCallout(leanPt.x, leanPt.y, leanPt.x - 62, leanPt.y - 48, ['UPRIGHT SUPPORT', 'parallel wall contact', 'bottom foam bed'], 'lean'));
 
   if (pattern === 'island') {
     const callPt = iso(cx, cy, intL * 0.12, y0 + 20, intW * 0.12, k);
@@ -293,12 +288,12 @@ function HeroCrateFigure({ layers, pieces, gapIn, pattern, dims }) {
   return (
     <g>
       {nodes}
-      <text x={open.x} y={open.y} fontSize="10.5" fontWeight="800" fill="#1d4ed8">LONG {fmt(dims.internal_length)}″ SIDE OPEN · LEANING LOAD AXIS →</text>
+      <text x={open.x} y={open.y} fontSize="10.5" fontWeight="800" fill="#1d4ed8">LONG {fmt(dims.internal_length)}″ SIDE OPEN · UPRIGHT LOAD AXIS →</text>
       {dimArrow(36, VB_H - 128, 36 + intL * k * 0.6, VB_H - 128, `PALLET LENGTH: ${fmt(dims.external_length)}″`, `supported load · ${fmt(dims.internal_length)}″`, 'dL', 240)}
-      {dimArrow(748, 118, 748, 268, `EXTERNAL CRATE HEIGHT: ${fmt(dims.external_height)}″`, `lean load + A-frame`, 'dH', 220)}
+      {dimArrow(748, 118, 748, 268, `EXTERNAL CRATE HEIGHT: ${fmt(dims.external_height)}″`, `upright load + wall support`, 'dH', 220)}
       {dimArrow(580, 318, 680, 358, `INTERNAL WIDTH: ${fmt(dims.internal_width)}″`, pattern === 'island' ? 'cassette depth' : 'tops + splash depth', 'dW', 210)}
       {dimArrow(pal[0].x - 28, pal[0].y + 14, pal[0].x - 28, pal[0].y - forkH * k, '7″ FORKLIFT SPACE', 'mandatory tine clearance', 'dF', 180)}
-      {dimArrow(500, 88, 600, 88, `LOAD HEIGHT: ${fmt(dims.internal_height)}″`, `${LEAN_DEG}° lean into rear support`, 'dS', 210)}
+      {dimArrow(500, 88, 600, 88, `LOAD HEIGHT: ${fmt(dims.internal_height)}″`, `upright into rear support`, 'dS', 210)}
     </g>
   );
 }
@@ -318,7 +313,7 @@ function BottomInsets({ dims, pattern, pieceCount, layers, gapIn }) {
 
       <rect x={312} y={y} width={300} height={152} fill="#dddfe3" stroke="#555" strokeWidth="1.2" />
       <text x={324} y={y + 16} fontSize="9.5" fontWeight="800" fill={INK}>OPERATIONAL NOTES</text>
-      <text x={324} y={y + 36} fontSize="8.5" fill={INK2}>• All stone leans into A-frame · never unsupported</text>
+      <text x={324} y={y + 36} fontSize="8.5" fill={INK2}>• All stone upright against wall support · never unsupported</text>
       <text x={324} y={y + 50} fontSize="8.5" fill={INK2}>• 7″ forklift clearance · bottom foam bed</text>
       <text x={324} y={y + 64} fontSize="8.5" fill={INK2}>
         {isIsland ? '• Island cassette · poly film between slab faces' : `• Family load: Tops → ${fmt(gapIn)}″ foam → Back → Side (same lean)`}
@@ -330,19 +325,19 @@ function BottomInsets({ dims, pattern, pieceCount, layers, gapIn }) {
       ))}
 
       <rect x={628} y={y} width={544} height={152} fill="#dddfe3" stroke="#555" strokeWidth="1.2" />
-      <text x={640} y={y + 16} fontSize="9.5" fontWeight="800" fill={INK}>SECONDARY DETAIL · LEAN LOAD SUMMARY</text>
+      <text x={640} y={y + 16} fontSize="9.5" fontWeight="800" fill={INK}>SECONDARY DETAIL · UPRIGHT LOAD SUMMARY</text>
       <text x={640} y={y + 38} fontSize="8.5" fontFamily="monospace" fill={INK2}>INT {fmt(dims.internal_length)} × {fmt(dims.internal_width)} × {fmt(dims.internal_height)}″</text>
       <text x={640} y={y + 52} fontSize="8.5" fontFamily="monospace" fill={INK2}>EXT {fmt(dims.external_length)} × {fmt(dims.external_width)} × {fmt(dims.external_height)}″</text>
       <text x={640} y={y + 70} fontSize="9" fontWeight="700" fill={INK}>{patternBanner(pattern, pieceCount)}</text>
       <g transform={`translate(900, ${y + 24})`}>
         <rect x={0} y={0} width={120} height={76} fill="none" stroke={WOOD_D} strokeWidth="1.5" />
         <rect x={8} y={58} width={104} height={8} fill={WOOD} stroke={WOOD_D} />
-        <line x1={12} y1={58} x2={28} y2={18} stroke={WOOD_D} strokeWidth="2" />
-        <line x1={108} y1={58} x2={92} y2={18} stroke={WOOD_D} strokeWidth="2" />
-        <polygon points="24,52 36,20 44,52" fill="#94a3b8" stroke="#475569" opacity="0.85" />
-        <polygon points="52,52 64,22 72,52" fill="#64748b" stroke="#475569" opacity="0.75" />
+        <line x1={12} y1={58} x2={12} y2={10} stroke={WOOD_D} strokeWidth="2" />
+        <line x1={108} y1={58} x2={108} y2={10} stroke={WOOD_D} strokeWidth="2" />
+        <rect x={24} y={18} width={16} height={34} fill="#94a3b8" stroke="#475569" opacity="0.85" />
+        <rect x={52} y={18} width={16} height={34} fill="#64748b" stroke="#475569" opacity="0.75" />
         <rect x={78} y={28} width={6} height={24} fill={FOAM} stroke={FOAM_EDGE} />
-        <text x={60} y={72} textAnchor="middle" fontSize="7" fill={INK2}>lean ref ~{LEAN_DEG}°</text>
+        <text x={60} y={72} textAnchor="middle" fontSize="7" fill={INK2}>upright · 0° lean</text>
       </g>
     </g>
   );
@@ -357,11 +352,9 @@ function FigureSection({ layers, pieces, pattern, footprint, gapIn, dims }) {
   const blocks = [];
 
   blocks.push(
-    <g key="aframe">
+    <g key="support-wall">
       <line x1={pad + 40} y1={baseY} x2={pad + 40} y2={frameY + 30} stroke={WOOD_D} strokeWidth="4" />
       <line x1={pad + innerW + 40} y1={baseY} x2={pad + innerW + 40} y2={frameY + 30} stroke={WOOD_D} strokeWidth="4" />
-      <line x1={pad + 40} y1={baseY} x2={pad + 70} y2={frameY + 80} stroke={WOOD_D} strokeWidth="2.5" />
-      <line x1={pad + innerW + 40} y1={baseY} x2={pad + innerW + 10} y2={frameY + 80} stroke={WOOD_D} strokeWidth="2.5" />
       <rect x={pad + 36} y={baseY} width={innerW + 8} height={8} fill={FOAM} stroke={FOAM_EDGE} />
       <line x1={pad + innerW + 58} y1={frameY + 100} x2={pad + innerW + 58} y2={baseY - 20} stroke={WOOD_D} strokeWidth="3" strokeDasharray="4 3" />
       <text x={pad + innerW + 66} y={frameY + 200} fontSize="8" fill={INK2}>rear support</text>
@@ -384,10 +377,10 @@ function FigureSection({ layers, pieces, pattern, footprint, gapIn, dims }) {
     });
     return (
       <g>
-        <text x={pad} y={118} fontSize="14" fontWeight="800" fill={INK} letterSpacing="0.06em">FIGURE B — LEANING CASSETTE · DEPTH SECTION</text>
-        <text x={pad} y={134} fontSize="9" fill={INK2}>{LEAN_DEG}° lean · support contact · foam bed · poly film between slabs</text>
+        <text x={pad} y={118} fontSize="14" fontWeight="800" fill={INK} letterSpacing="0.06em">FIGURE B — UPRIGHT CASSETTE · DEPTH SECTION</text>
+        <text x={pad} y={134} fontSize="9" fill={INK2}>upright slabs · support contact · foam bed · poly film between slabs</text>
         {blocks}
-        {dimArrow(pad, frameY + frameH + 36, pad + innerW * 0.55, frameY + frameH + 36, `CASSETTE DEPTH: ${fmt(footprint.intW)}″`, `${ordered.length} leaning slabs`, 'sD', 220)}
+        {dimArrow(pad, frameY + frameH + 36, pad + innerW * 0.55, frameY + frameH + 36, `CASSETTE DEPTH: ${fmt(footprint.intW)}″`, `${ordered.length} upright slabs`, 'sD', 220)}
       </g>
     );
   }
@@ -420,10 +413,10 @@ function FigureSection({ layers, pieces, pattern, footprint, gapIn, dims }) {
 
   return (
     <g>
-      <text x={pad} y={118} fontSize="14" fontWeight="800" fill={INK} letterSpacing="0.06em">FIGURE B — LEANING FAMILY LOAD · DEPTH SECTION</text>
-      <text x={pad} y={134} fontSize="9" fill={INK2}>{LEAN_DEG}° lean · tops forward · splashes behind · same support direction</text>
+      <text x={pad} y={118} fontSize="14" fontWeight="800" fill={INK} letterSpacing="0.06em">FIGURE B — UPRIGHT FAMILY LOAD · DEPTH SECTION</text>
+      <text x={pad} y={134} fontSize="9" fill={INK2}>upright · tops forward · splashes behind · parallel wall support</text>
       {blocks}
-      {dimArrow(pad + 24, frameY + 50, pad + 24, baseY - 10, `LEAN ${LEAN_DEG}°`, 'into rear support', 'sL', 120)}
+      {dimArrow(pad + 24, frameY + 50, pad + 24, baseY - 10, 'UPRIGHT', 'parallel wall support', 'sL', 120)}
       {dimArrow(pad, frameY + frameH + 36, pad + innerW * 0.5, frameY + frameH + 36, `DEPTH: ${fmt(footprint.intW)}″`, `${fmt(gapIn)}″ foam between groups`, 'sD', 210)}
     </g>
   );
