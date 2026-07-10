@@ -106,23 +106,44 @@ def thickness_inches(thickness: str) -> float:
 _THICKNESS_M = {"2CM": 0.02, "3CM": 0.03, "Mixed": 0.025}
 _SQFT_TO_SQM = 0.0929
 
-# User-added colors (via the "Add color" flow) — merged with COLOR_DENSITIES at lookup time.
-# Populated at startup and on each new save by main.py, which owns the Mongo-backed store.
+# Config-screen-managed colors and crate wood types, backed by Mongo (main.py owns the store).
+# These are rebuilt fully from the DB after any add/edit/delete so renames and deletions
+# take effect immediately, not just new additions.
 _CUSTOM_COLOR_DENSITIES: Dict[str, Dict[str, float]] = {}
+_CUSTOM_WOOD_DENSITY_FACTORS: Dict[str, float] = {}
 
 
 def register_custom_color_density(material: str, color: str, density: float) -> None:
     _CUSTOM_COLOR_DENSITIES.setdefault(material, {})[color] = density
 
 
+def reset_custom_color_densities(entries: List[Dict[str, Any]]) -> None:
+    _CUSTOM_COLOR_DENSITIES.clear()
+    for entry in entries:
+        _CUSTOM_COLOR_DENSITIES.setdefault(entry["material"], {})[entry["name"]] = entry["density_kg_m3"]
+
+
 def get_color_density(material: str, color: str) -> Optional[float]:
     if not color:
         return None
-    if material in COLOR_DENSITIES and color in COLOR_DENSITIES[material]:
-        return COLOR_DENSITIES[material][color]
     if material in _CUSTOM_COLOR_DENSITIES and color in _CUSTOM_COLOR_DENSITIES[material]:
         return _CUSTOM_COLOR_DENSITIES[material][color]
+    if material in COLOR_DENSITIES and color in COLOR_DENSITIES[material]:
+        return COLOR_DENSITIES[material][color]
     return None
+
+
+def reset_wood_density_factors(entries: List[Dict[str, Any]]) -> None:
+    _CUSTOM_WOOD_DENSITY_FACTORS.clear()
+    for entry in entries:
+        _CUSTOM_WOOD_DENSITY_FACTORS[str(entry["name"]).strip().lower()] = entry["density_factor"]
+
+
+def get_wood_density_factor(wood_type: str) -> float:
+    key = str(wood_type or "").strip().lower()
+    if key in _CUSTOM_WOOD_DENSITY_FACTORS:
+        return _CUSTOM_WOOD_DENSITY_FACTORS[key]
+    return WOOD_DENSITY_FACTORS.get(key, 1.0)
 
 
 def weight_factor(material: str, thickness: str, color: str = "") -> float:
@@ -415,7 +436,7 @@ def build_crate_metrics(
     dimension_mode = str(crate_doc.get("dimension_mode", "auto") or "auto")
     preferred_wood_thickness = parse_float(project_settings.get("crate_wood_thickness"), 0.0)
     wood_type = str(project_settings.get("crate_wood_type", "Pine") or "Pine")
-    wood_density_factor = WOOD_DENSITY_FACTORS.get(wood_type.strip().lower(), 1.0)
+    wood_density_factor = get_wood_density_factor(wood_type)
     color = str(project_settings.get("stone_color", "") or "")
 
     total_weight = sum(piece_weight(piece, material, thickness, color) for piece in pieces)

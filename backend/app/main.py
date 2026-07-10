@@ -23,12 +23,14 @@ from .services.planner_v3.dispatch_units import build_dispatch_units_from_pieces
 from .services.planner_v3.container_layout import linear_manual_sort_placements
 from .services.planning_engine import (
     COLOR_DENSITIES,
+    WOOD_DENSITY_FACTORS,
     build_planning_snapshot,
     get_color_density,
     piece_area_sqft,
     piece_destination_key,
     piece_weight as planning_piece_weight,
-    register_custom_color_density,
+    reset_custom_color_densities,
+    reset_wood_density_factors,
     weight_factor as planning_weight_factor,
 )
 
@@ -135,6 +137,7 @@ def build_store():
             "counters": mongo_db["counters"],
             "upload_drafts": mongo_db["upload_drafts"],
             "custom_colors": mongo_db["custom_colors"],
+            "crate_wood_types": mongo_db["crate_wood_types"],
         }
         return store, "mongo"
     except Exception as e:
@@ -149,6 +152,7 @@ def build_store():
             "counters": InMemoryCollection(),
             "upload_drafts": InMemoryCollection(),
             "custom_colors": InMemoryCollection(),
+            "crate_wood_types": InMemoryCollection(),
         }, "memory"
 
 
@@ -160,6 +164,7 @@ assignments_col = store["assignments"]
 counters_col = store["counters"]
 upload_drafts_col = store["upload_drafts"]
 custom_colors_col = store["custom_colors"]
+crate_wood_types_col = store["crate_wood_types"]
 
 
 def ensure_indexes() -> None:
@@ -175,15 +180,45 @@ def ensure_indexes() -> None:
     assignments_col.create_index([("project_id", 1), ("piece_id", 1)])
     assignments_col.create_index([("project_id", 1), ("crate_id", 1)])
     custom_colors_col.create_index([("material", 1), ("name", 1)])
+    crate_wood_types_col.create_index("name")
 
 
-def load_custom_colors_into_registry() -> None:
-    for doc in custom_colors_col.find({}, {"_id": 0}):
-        register_custom_color_density(doc["material"], doc["name"], doc["density_kg_m3"])
+def seed_config_defaults() -> None:
+    """One-time seed so the config screen has editable rows for every built-in
+    color/wood-type. Idempotent — only inserts names that aren't already present."""
+    for material, colors in COLOR_DENSITIES.items():
+        existing_names = {d["name"].lower() for d in custom_colors_col.find({"material": material}, {"_id": 0, "name": 1})}
+        for name, density in colors.items():
+            if name.lower() in existing_names:
+                continue
+            custom_colors_col.insert_one({
+                "id": next_sequence("stone_color"),
+                "material": material,
+                "name": name,
+                "density_kg_m3": float(density),
+                "builtin": True,
+                "created_at": utc_now(),
+            })
+
+    existing_wood_names = {d["name"].lower() for d in crate_wood_types_col.find({}, {"_id": 0, "name": 1})}
+    for name, factor in WOOD_DENSITY_FACTORS.items():
+        if name.lower() in existing_wood_names:
+            continue
+        crate_wood_types_col.insert_one({
+            "id": next_sequence("crate_wood_type"),
+            "name": name.capitalize(),
+            "density_factor": float(factor),
+            "builtin": True,
+            "created_at": utc_now(),
+        })
+
+
+def load_config_registries() -> None:
+    reset_custom_color_densities(list(custom_colors_col.find({}, {"_id": 0})))
+    reset_wood_density_factors(list(crate_wood_types_col.find({}, {"_id": 0})))
 
 
 ensure_indexes()
-load_custom_colors_into_registry()
 
 
 def next_sequence(name: str) -> int:
@@ -219,6 +254,10 @@ def as_iso(value: Any) -> Any:
     if isinstance(value, date):
         return value.isoformat()
     return value
+
+
+seed_config_defaults()
+load_config_registries()
 
 
 def _json_safe_floats(obj: Any) -> Any:
@@ -866,19 +905,45 @@ class StoneColorCreate(BaseModel):
     density_kg_m3: float
 
 
+class StoneColorUpdate(BaseModel):
+    name: str
+    density_kg_m3: float
+
+
+class CrateWoodTypeCreate(BaseModel):
+    name: str
+    density_factor: float
+
+
+class CrateWoodTypeUpdate(BaseModel):
+    name: str
+    density_factor: float
+
+
+def reload_color_registry() -> None:
+    entries = list(custom_colors_col.find({}, {"_id": 0}))
+    reset_custom_color_densities(entries)
+
+
+def reload_wood_type_registry() -> None:
+    entries = list(crate_wood_types_col.find({}, {"_id": 0}))
+    reset_wood_density_factors(entries)
+
+
+def _color_name_exists(material: str, name_lower: str, exclude_id: Optional[int] = None) -> bool:
+    for doc in custom_colors_col.find({"material": material}, {"_id": 0, "id": 1, "name": 1}):
+        if doc["name"].lower() == name_lower and doc.get("id") != exclude_id:
+            return True
+    return False
+
+
 @app.get("/api/stone-colors")
 def get_stone_colors(material: Optional[str] = None):
-    materials = [material] if material else list(COLOR_DENSITIES.keys())
-    custom_docs = list(custom_colors_col.find({}, {"_id": 0}))
+    query = {"material": material} if material else {}
+    docs = sorted(custom_colors_col.find(query, {"_id": 0}), key=lambda d: d["name"].lower())
     result: Dict[str, List[Dict[str, Any]]] = {}
-    for mat in materials:
-        builtin = [{"name": name, "density_kg_m3": density, "builtin": True} for name, density in COLOR_DENSITIES.get(mat, {}).items()]
-        custom = [
-            {"name": doc["name"], "density_kg_m3": doc["density_kg_m3"], "builtin": False}
-            for doc in custom_docs
-            if doc.get("material") == mat
-        ]
-        result[mat] = sorted(builtin + custom, key=lambda c: c["name"].lower())
+    for doc in docs:
+        result.setdefault(doc["material"], []).append(doc)
     return result
 
 
@@ -890,25 +955,97 @@ def create_stone_color(data: StoneColorCreate):
         raise HTTPException(status_code=400, detail="Material and color name are required.")
     if data.density_kg_m3 <= 0:
         raise HTTPException(status_code=400, detail="Density must be greater than zero.")
-
-    name_lower = name.lower()
-    builtin_names = {n.lower() for n in COLOR_DENSITIES.get(material, {}).keys()}
-    if name_lower in builtin_names:
+    if _color_name_exists(material, name.lower()):
         raise HTTPException(status_code=409, detail=f'"{name}" already exists for {material}.')
 
-    for doc in custom_colors_col.find({"material": material}, {"_id": 0, "name": 1}):
-        if doc["name"].lower() == name_lower:
-            raise HTTPException(status_code=409, detail=f'"{name}" already exists for {material}.')
-
     doc = {
+        "id": next_sequence("stone_color"),
         "material": material,
         "name": name,
         "density_kg_m3": float(data.density_kg_m3),
+        "builtin": False,
         "created_at": utc_now(),
     }
     custom_colors_col.insert_one(doc)
-    register_custom_color_density(material, name, float(data.density_kg_m3))
-    return {"material": material, "name": name, "density_kg_m3": float(data.density_kg_m3), "builtin": False}
+    reload_color_registry()
+    return {"id": doc["id"], "material": material, "name": name, "density_kg_m3": doc["density_kg_m3"], "builtin": False}
+
+
+@app.put("/api/stone-colors/{color_id}")
+def update_stone_color(color_id: int, data: StoneColorUpdate):
+    existing = custom_colors_col.find_one({"id": color_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Color not found.")
+    name = data.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Color name is required.")
+    if data.density_kg_m3 <= 0:
+        raise HTTPException(status_code=400, detail="Density must be greater than zero.")
+    if _color_name_exists(existing["material"], name.lower(), exclude_id=color_id):
+        raise HTTPException(status_code=409, detail=f'"{name}" already exists for {existing["material"]}.')
+
+    custom_colors_col.update_one({"id": color_id}, {"$set": {"name": name, "density_kg_m3": float(data.density_kg_m3)}})
+    reload_color_registry()
+    return {"id": color_id, "material": existing["material"], "name": name, "density_kg_m3": float(data.density_kg_m3)}
+
+
+@app.delete("/api/stone-colors/{color_id}")
+def delete_stone_color(color_id: int):
+    custom_colors_col.delete_one({"id": color_id})
+    reload_color_registry()
+    return {"message": "ok"}
+
+
+@app.get("/api/crate-wood-types")
+def get_crate_wood_types():
+    return sorted(crate_wood_types_col.find({}, {"_id": 0}), key=lambda d: d["name"].lower())
+
+
+@app.post("/api/crate-wood-types")
+def create_crate_wood_type(data: CrateWoodTypeCreate):
+    name = data.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Wood type name is required.")
+    if data.density_factor <= 0:
+        raise HTTPException(status_code=400, detail="Density factor must be greater than zero.")
+    if any(d["name"].lower() == name.lower() for d in crate_wood_types_col.find({}, {"_id": 0, "name": 1})):
+        raise HTTPException(status_code=409, detail=f'"{name}" already exists.')
+
+    doc = {
+        "id": next_sequence("crate_wood_type"),
+        "name": name,
+        "density_factor": float(data.density_factor),
+        "builtin": False,
+        "created_at": utc_now(),
+    }
+    crate_wood_types_col.insert_one(doc)
+    reload_wood_type_registry()
+    return {"id": doc["id"], "name": name, "density_factor": doc["density_factor"], "builtin": False}
+
+
+@app.put("/api/crate-wood-types/{wood_type_id}")
+def update_crate_wood_type(wood_type_id: int, data: CrateWoodTypeUpdate):
+    existing = crate_wood_types_col.find_one({"id": wood_type_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Wood type not found.")
+    name = data.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Wood type name is required.")
+    if data.density_factor <= 0:
+        raise HTTPException(status_code=400, detail="Density factor must be greater than zero.")
+    if any(d["name"].lower() == name.lower() and d.get("id") != wood_type_id for d in crate_wood_types_col.find({}, {"_id": 0, "id": 1, "name": 1})):
+        raise HTTPException(status_code=409, detail=f'"{name}" already exists.')
+
+    crate_wood_types_col.update_one({"id": wood_type_id}, {"$set": {"name": name, "density_factor": float(data.density_factor)}})
+    reload_wood_type_registry()
+    return {"id": wood_type_id, "name": name, "density_factor": float(data.density_factor)}
+
+
+@app.delete("/api/crate-wood-types/{wood_type_id}")
+def delete_crate_wood_type(wood_type_id: int):
+    crate_wood_types_col.delete_one({"id": wood_type_id})
+    reload_wood_type_registry()
+    return {"message": "ok"}
 
 
 @app.get("/api/projects/{project_id}/pieces/")

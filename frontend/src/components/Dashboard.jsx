@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import Logo from './Logo';
+import ConfigurationScreen from './ConfigurationScreen';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
 const Dashboard = ({ onOpenProject }) => {
+  const [view, setView] = useState('projects'); // 'projects' | 'config'
   const [projects, setProjects] = useState([]);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newProject, setNewProject] = useState({
@@ -79,10 +81,35 @@ const Dashboard = ({ onOpenProject }) => {
 
   return (
     <div className="min-h-screen bg-[#f8fafc] text-[#1e293b] font-sans p-6 max-w-[1000px] mx-auto">
-      <div className="flex justify-between items-center mb-8 border-b border-[#e2e8f0] pb-6 mt-4">
+      <div className="flex justify-between items-center mb-6 border-b border-[#e2e8f0] pb-6 mt-4">
         <Logo />
-        <button onClick={() => setShowCreateForm((prev) => !prev)} className="btn-primary">+ Create New Project</button>
+        {view === 'projects' && (
+          <button onClick={() => setShowCreateForm((prev) => !prev)} className="btn-primary">+ Create New Project</button>
+        )}
       </div>
+      <div className="flex gap-2 mb-6">
+        <button
+          onClick={() => setView('projects')}
+          className={`rounded-full px-5 py-2.5 text-sm font-semibold transition-all ${
+            view === 'projects' ? 'bg-[#1d4ed8] text-white shadow-sm' : 'bg-[#f1f5f9] text-[#334155] hover:bg-[#e2e8f0]'
+          }`}
+        >
+          Projects
+        </button>
+        <button
+          onClick={() => setView('config')}
+          className={`rounded-full px-5 py-2.5 text-sm font-semibold transition-all ${
+            view === 'config' ? 'bg-[#1d4ed8] text-white shadow-sm' : 'bg-[#f1f5f9] text-[#334155] hover:bg-[#e2e8f0]'
+          }`}
+        >
+          Configuration
+        </button>
+      </div>
+
+      {view === 'config' && <ConfigurationScreen />}
+
+      {view === 'projects' && (
+      <>
       <h1 className="text-2xl font-bold text-[#1e293b] mb-6">Projects</h1>
       {showCreateForm && (
         <div className="bg-white border border-[#e2e8f0] rounded-lg shadow-sm p-5 mb-6">
@@ -133,6 +160,8 @@ const Dashboard = ({ onOpenProject }) => {
           </tbody>
         </table>
       </div>
+      </>
+      )}
     </div>
   );
 };

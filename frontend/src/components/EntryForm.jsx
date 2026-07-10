@@ -346,6 +346,14 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
   const [mirrorMessage, setMirrorMessage] = useState('');
   const [editBanner, setEditBanner] = useState('');
 
+  // ── Crate wood types (managed on the Configuration screen) ──
+  const [woodTypes, setWoodTypes] = useState([]);
+  useEffect(() => {
+    axios.get(`${API_BASE}/crate-wood-types`)
+      .then(res => setWoodTypes(res.data || []))
+      .catch(() => setWoodTypes([]));
+  }, []);
+
   // ── UI state ──
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSpinner, setShowSpinner] = useState(false);
@@ -841,7 +849,7 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
               onSelect={handleStoneColorSelect}
             />
           </div>
-          <div><label className="label-text">Crate Wood</label><select name="crate_wood_type" value={project.crate_wood_type || 'Pine'} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field"><option>Pine</option><option>Rubberwood</option><option>Plywood</option><option>Hardwood</option></select></div>
+          <div><label className="label-text">Crate Wood</label><select name="crate_wood_type" value={project.crate_wood_type || 'Pine'} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field">{woodTypes.map(w => <option key={w.id} value={w.name}>{w.name}</option>)}</select></div>
           <div><label className="label-text">Wood Thick. (in)</label><input type="number" step="0.125" min="0.5" name="crate_wood_thickness" value={project.crate_wood_thickness ?? 1.25} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
           <div><label className="label-text">Customer</label><input name="customer" value={project.customer || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
           <div><label className="label-text">Job #</label><input name="job_number" value={project.job_number || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
