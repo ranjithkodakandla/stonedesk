@@ -1,9 +1,10 @@
+import math
 from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
 
 WEIGHT_FACTORS = {
-    "Granite": {"2CM": 5.5, "3CM": 7.5, "Mixed": 6.5},
+    "Granite": {"2CM": 5.5, "3CM": 7.75, "Mixed": 6.5},
     "Quartz": {"2CM": 4.75, "3CM": 6.75, "Mixed": 5.75},
     "Marble": {"2CM": 6.0, "3CM": 8.0, "Mixed": 7.0},
     "Other": {"2CM": 5.5, "3CM": 7.5, "Mixed": 6.5},
@@ -105,17 +106,36 @@ def thickness_inches(thickness: str) -> float:
 _THICKNESS_M = {"2CM": 0.02, "3CM": 0.03, "Mixed": 0.025}
 _SQFT_TO_SQM = 0.0929
 
+# User-added colors (via the "Add color" flow) — merged with COLOR_DENSITIES at lookup time.
+# Populated at startup and on each new save by main.py, which owns the Mongo-backed store.
+_CUSTOM_COLOR_DENSITIES: Dict[str, Dict[str, float]] = {}
+
+
+def register_custom_color_density(material: str, color: str, density: float) -> None:
+    _CUSTOM_COLOR_DENSITIES.setdefault(material, {})[color] = density
+
+
+def get_color_density(material: str, color: str) -> Optional[float]:
+    if not color:
+        return None
+    if material in COLOR_DENSITIES and color in COLOR_DENSITIES[material]:
+        return COLOR_DENSITIES[material][color]
+    if material in _CUSTOM_COLOR_DENSITIES and color in _CUSTOM_COLOR_DENSITIES[material]:
+        return _CUSTOM_COLOR_DENSITIES[material][color]
+    return None
+
 
 def weight_factor(material: str, thickness: str, color: str = "") -> float:
-    if color and material in COLOR_DENSITIES and color in COLOR_DENSITIES[material]:
-        density = COLOR_DENSITIES[material][color]
+    density = get_color_density(material, color)
+    if density is not None:
         t_m = _THICKNESS_M.get(thickness, 0.025)
         return round(density * t_m * _SQFT_TO_SQM, 3)
     return WEIGHT_FACTORS.get(material, WEIGHT_FACTORS["Other"]).get(thickness, 6.5)
 
 
 def piece_area_sqft(piece: Dict[str, Any]) -> float:
-    return (parse_float(piece.get("length")) * parse_float(piece.get("width"))) / 144.0
+    raw = (parse_float(piece.get("length")) * parse_float(piece.get("width"))) / 144.0
+    return math.ceil(raw * 10) / 10
 
 
 def piece_weight(piece: Dict[str, Any], material: str, thickness: str, color: str = "") -> float:

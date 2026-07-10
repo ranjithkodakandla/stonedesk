@@ -390,6 +390,15 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
                   <span className="ml-2 text-[10px] text-[#64748b]">(Dispatch & build)</span>
                 )}
               </button>
+              {!planningUnlocked && pieces.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => handleApprove('approved_for_packing')}
+                  className="rounded-full px-5 py-2.5 text-sm font-semibold bg-[#ecfdf5] text-[#047857] border border-[#6ee7b7] hover:bg-[#d1fae5] transition-all"
+                >
+                  Approve for Packing
+                </button>
+              )}
             </div>
           </div>
 

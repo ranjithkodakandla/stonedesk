@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback, useEffect } from 'react';
+import React, { Suspense, useMemo, useState, useCallback, useEffect } from 'react';
 import axios from 'axios';
 import { API_BASE } from '../utils/plannerUtils';
 import DispatchSelectionPanel from './DispatchSelectionPanel';
@@ -7,7 +7,9 @@ import DraftCrateWorkspace from './DraftCrateWorkspace';
 import { buildDraftCrate, recomputeCrate, getNextDraftCrateId, batchBundlesIntoCrates, getCrateClass } from '../utils/crateEstimator';
 import IslandOperationalReview from './IslandOperationalReview';
 import KitchenOperationalReview from './KitchenOperationalReview';
-import Container3DPreview from './planner3d/Container3DPreview';
+// three.js/@react-three are the heaviest deps in the bundle — load them only
+// when this screen actually renders a 3D preview, not on every page view.
+const Container3DPreview = React.lazy(() => import('./planner3d/Container3DPreview'));
 import CrateOperationalDiagram2D from './planner2d/CrateOperationalDiagram2D';
 import ContainerTopDown2D from './planner2d/ContainerTopDown2D';
 import PlannerManualMovePanel from './PlannerManualMovePanel';
@@ -494,21 +496,23 @@ const PlannerV3Screen = ({
             <div className="mt-8 rounded-[32px] border border-[#dbe4f0] bg-white p-6 shadow-sm">
               <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[#64748b]">3D — crates inside 20ft container</div>
               <div className="mt-4">
-                <Container3DPreview
-                  placements={placements3d}
-                  lengthIn={containerSpec.max_length}
-                  widthIn={containerSpec.max_width}
-                  clearHeightIn={Number(interior.max_clear_height) || 100}
-                  islandZoneDepthIn={layout?.island_zone_depth_in}
-                  horizontalZoneStartX={layout?.horizontal_zone_start_x}
-                  linearHorizEndX={layout?.linear_horiz_block_end_x_in}
-                  linearIslandStartX={layout?.linear_island_strip_start_x_in}
-                  maxWeightKg={payloadCapKg}
-                  totalWeightKg={layout?.total_weight_kg}
-                  selectedCrateId={selectedCrate?.crate_id}
-                  onSelectCrate={(code) => { const c = crates.find((x) => x.crate_id === code); if (c) setSelectedCrateId(c.id); }}
-                  hudTitle={`${manualContainerDraft?.type || '20ft'} load · ${containerSpec.max_length}" × ${containerSpec.max_width}"`}
-                />
+                <Suspense fallback={<div className="p-8 text-sm text-slate-500">Loading 3D preview…</div>}>
+                  <Container3DPreview
+                    placements={placements3d}
+                    lengthIn={containerSpec.max_length}
+                    widthIn={containerSpec.max_width}
+                    clearHeightIn={Number(interior.max_clear_height) || 100}
+                    islandZoneDepthIn={layout?.island_zone_depth_in}
+                    horizontalZoneStartX={layout?.horizontal_zone_start_x}
+                    linearHorizEndX={layout?.linear_horiz_block_end_x_in}
+                    linearIslandStartX={layout?.linear_island_strip_start_x_in}
+                    maxWeightKg={payloadCapKg}
+                    totalWeightKg={layout?.total_weight_kg}
+                    selectedCrateId={selectedCrate?.crate_id}
+                    onSelectCrate={(code) => { const c = crates.find((x) => x.crate_id === code); if (c) setSelectedCrateId(c.id); }}
+                    hudTitle={`${manualContainerDraft?.type || '20ft'} load · ${containerSpec.max_length}" × ${containerSpec.max_width}"`}
+                  />
+                </Suspense>
               </div>
             </div>
           )}

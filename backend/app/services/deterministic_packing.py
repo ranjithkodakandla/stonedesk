@@ -304,7 +304,7 @@ def sort_by_dispatch(
 # ──────────────── Weight Calculation ────────────────────────────────────────
 
 _WEIGHT_FACTORS: Dict[str, Dict[str, float]] = {
-    "Granite": {"2CM": 5.5, "3CM": 7.5, "Mixed": 6.5},
+    "Granite": {"2CM": 5.5, "3CM": 7.75, "Mixed": 6.5},
     "Quartz":  {"2CM": 4.75, "3CM": 6.75, "Mixed": 5.75},
     "Marble":  {"2CM": 6.0, "3CM": 8.0, "Mixed": 7.0},
     "Other":   {"2CM": 5.5, "3CM": 7.5, "Mixed": 6.5},

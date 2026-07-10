@@ -24,8 +24,11 @@ from .services.planner_v3.container_layout import linear_manual_sort_placements
 from .services.planning_engine import (
     COLOR_DENSITIES,
     build_planning_snapshot,
+    get_color_density,
+    piece_area_sqft,
     piece_destination_key,
     piece_weight as planning_piece_weight,
+    register_custom_color_density,
     weight_factor as planning_weight_factor,
 )
 
@@ -131,6 +134,7 @@ def build_store():
             "assignments": mongo_db["assignments"],
             "counters": mongo_db["counters"],
             "upload_drafts": mongo_db["upload_drafts"],
+            "custom_colors": mongo_db["custom_colors"],
         }
         return store, "mongo"
     except Exception as e:
@@ -144,6 +148,7 @@ def build_store():
             "assignments": InMemoryCollection(),
             "counters": InMemoryCollection(),
             "upload_drafts": InMemoryCollection(),
+            "custom_colors": InMemoryCollection(),
         }, "memory"
 
 
@@ -154,6 +159,7 @@ crates_col = store["crates"]
 assignments_col = store["assignments"]
 counters_col = store["counters"]
 upload_drafts_col = store["upload_drafts"]
+custom_colors_col = store["custom_colors"]
 
 
 def ensure_indexes() -> None:
@@ -168,9 +174,16 @@ def ensure_indexes() -> None:
     assignments_col.create_index("id")
     assignments_col.create_index([("project_id", 1), ("piece_id", 1)])
     assignments_col.create_index([("project_id", 1), ("crate_id", 1)])
+    custom_colors_col.create_index([("material", 1), ("name", 1)])
+
+
+def load_custom_colors_into_registry() -> None:
+    for doc in custom_colors_col.find({}, {"_id": 0}):
+        register_custom_color_density(doc["material"], doc["name"], doc["density_kg_m3"])
 
 
 ensure_indexes()
+load_custom_colors_into_registry()
 
 
 def next_sequence(name: str) -> int:
@@ -181,6 +194,19 @@ def next_sequence(name: str) -> int:
         return_document=ReturnDocument.AFTER,
     )
     return int(counter["seq"])
+
+
+def next_sequence_batch(name: str, count: int) -> int:
+    """Atomically reserve `count` sequential ids in one round trip; returns the first id."""
+    if count <= 0:
+        return next_sequence(name)
+    counter = counters_col.find_one_and_update(
+        {"_id": name},
+        {"$inc": {"seq": count}},
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+    )
+    return int(counter["seq"]) - count + 1
 
 
 def utc_now() -> datetime:
@@ -225,7 +251,7 @@ def project_response(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         "crate_wood_thickness": doc.get("crate_wood_thickness", 1.25),
         "preferred_container_mode": doc.get("preferred_container_mode", "recommended"),
         "date": doc.get("date", date.today().isoformat()),
-        "flat_format": doc.get("flat_format", "3-digit"),
+        "flat_format": doc.get("flat_format", "manual"),
         "description_thickness_map": doc.get("description_thickness_map", {}),
         "status": doc.get("status", "draft"),
         "dispatch_selection": doc.get("dispatch_selection", {}),
@@ -354,7 +380,7 @@ def clear_manual_container_plan(project_id: int) -> None:
 _THICKNESS_M = {"2CM": 0.02, "3CM": 0.03, "Mixed": 0.025}
 _SQFT_TO_SQM = 0.0929
 _WEIGHT_FACTORS_FALLBACK = {
-    "Granite": {"2CM": 5.5, "3CM": 7.5, "Mixed": 6.5},
+    "Granite": {"2CM": 5.5, "3CM": 7.75, "Mixed": 6.5},
     "Quartz": {"2CM": 4.75, "3CM": 6.75, "Mixed": 5.75},
     "Marble": {"2CM": 6.0, "3CM": 8.0, "Mixed": 7.0},
     "Other": {"2CM": 5.5, "3CM": 7.5, "Mixed": 6.5},
@@ -362,8 +388,8 @@ _WEIGHT_FACTORS_FALLBACK = {
 
 
 def weight_factor(material: str, thickness: str, color: str = "") -> float:
-    if color and material in COLOR_DENSITIES and color in COLOR_DENSITIES[material]:
-        density = COLOR_DENSITIES[material][color]
+    density = get_color_density(material, color)
+    if density is not None:
         t_m = _THICKNESS_M.get(thickness, 0.025)
         return round(density * t_m * _SQFT_TO_SQM, 3)
     return _WEIGHT_FACTORS_FALLBACK.get(material, _WEIGHT_FACTORS_FALLBACK["Other"]).get(thickness, 6.5)
@@ -687,7 +713,7 @@ class ProjectUpdate(BaseModel):
     customer: str
     job_number: str
     date: str
-    flat_format: str = "3-digit"
+    flat_format: str = "manual"
     description_thickness_map: Dict[str, str] = {}
 
 
@@ -834,6 +860,57 @@ def delete_project(project_id: int):
     return {"message": "ok"}
 
 
+class StoneColorCreate(BaseModel):
+    material: str
+    name: str
+    density_kg_m3: float
+
+
+@app.get("/api/stone-colors")
+def get_stone_colors(material: Optional[str] = None):
+    materials = [material] if material else list(COLOR_DENSITIES.keys())
+    custom_docs = list(custom_colors_col.find({}, {"_id": 0}))
+    result: Dict[str, List[Dict[str, Any]]] = {}
+    for mat in materials:
+        builtin = [{"name": name, "density_kg_m3": density, "builtin": True} for name, density in COLOR_DENSITIES.get(mat, {}).items()]
+        custom = [
+            {"name": doc["name"], "density_kg_m3": doc["density_kg_m3"], "builtin": False}
+            for doc in custom_docs
+            if doc.get("material") == mat
+        ]
+        result[mat] = sorted(builtin + custom, key=lambda c: c["name"].lower())
+    return result
+
+
+@app.post("/api/stone-colors")
+def create_stone_color(data: StoneColorCreate):
+    material = data.material.strip()
+    name = data.name.strip()
+    if not material or not name:
+        raise HTTPException(status_code=400, detail="Material and color name are required.")
+    if data.density_kg_m3 <= 0:
+        raise HTTPException(status_code=400, detail="Density must be greater than zero.")
+
+    name_lower = name.lower()
+    builtin_names = {n.lower() for n in COLOR_DENSITIES.get(material, {}).keys()}
+    if name_lower in builtin_names:
+        raise HTTPException(status_code=409, detail=f'"{name}" already exists for {material}.')
+
+    for doc in custom_colors_col.find({"material": material}, {"_id": 0, "name": 1}):
+        if doc["name"].lower() == name_lower:
+            raise HTTPException(status_code=409, detail=f'"{name}" already exists for {material}.')
+
+    doc = {
+        "material": material,
+        "name": name,
+        "density_kg_m3": float(data.density_kg_m3),
+        "created_at": utc_now(),
+    }
+    custom_colors_col.insert_one(doc)
+    register_custom_color_density(material, name, float(data.density_kg_m3))
+    return {"material": material, "name": name, "density_kg_m3": float(data.density_kg_m3), "builtin": False}
+
+
 @app.get("/api/projects/{project_id}/pieces/")
 def get_pieces(project_id: int):
     pieces = sorted(pieces_col.find({"project_id": project_id}, {"_id": 0}), key=lambda doc: doc["id"])
@@ -882,8 +959,9 @@ def create_piece(project_id: int, piece: PieceCreate):
 @app.post("/api/projects/{project_id}/pieces/batch")
 def create_pieces_batch(project_id: int, pieces_data: List[PieceCreate]):
     docs = []
-    for piece in pieces_data:
-        piece_id = next_sequence("piece")
+    start_id = next_sequence_batch("piece", len(pieces_data))
+    for offset, piece in enumerate(pieces_data):
+        piece_id = start_id + offset
         edge_polish_machine = piece.edge_polish_machine or calculate_edge_polish_machine(piece.length, piece.width, piece.edge_area)
         docs.append(
             {
@@ -2277,6 +2355,12 @@ def auto_generate(project_id: int, data: Dict[str, Any]):
     next_serial = crate_serial_for_project(project_id)
     _wood_thick = float(project.get("crate_wood_thickness", 1.5) or 1.5)
 
+    # Reserve id blocks in one round trip each instead of one Mongo call per crate/assignment —
+    # large jobs (thousands of pieces) were making thousands of sequential DB round trips here.
+    next_crate_id = next_sequence_batch("crate", len(specs))
+    total_assignments = sum(len(spec["pieces"]) for spec in specs)
+    next_assignment_id = next_sequence_batch("assignment", total_assignments)
+
     for dispatch_seq, spec in enumerate(specs, start=1):
         dims = spec["dimensions"]
         sqft = sum(
@@ -2287,7 +2371,7 @@ def auto_generate(project_id: int, data: Dict[str, Any]):
         wt = float(spec["total_weight_kg"])
 
         crate_doc = {
-            "id": next_sequence("crate"),
+            "id": next_crate_id,
             "project_id": project_id,
             "crate_id": f"CR{next_serial:04d}",
             "name": spec["name"],
@@ -2330,15 +2414,17 @@ def auto_generate(project_id: int, data: Dict[str, Any]):
             "created_at": utc_now(),
         }
         next_serial += 1
+        next_crate_id += 1
         crate_docs.append(crate_doc)
         for piece in spec["pieces"]:
             assignment_docs.append({
-                "id": next_sequence("assignment"),
+                "id": next_assignment_id,
                 "project_id": project_id,
                 "piece_id": piece["id"],
                 "crate_id": crate_doc["id"],
                 "assigned_at": utc_now(),
             })
+            next_assignment_id += 1
 
     if crate_docs:
         crates_col.insert_many(crate_docs)
@@ -2791,9 +2877,9 @@ def export_source_data(project_id: int):
         ws1.append(["Export Date", date.today().isoformat()])
         ws1.append([])
         total_qty = sum(int(p.get("qty", 1) or 1) for p in pieces)
-        total_sqft = sum((float(p.get("length", 0)) * float(p.get("width", 0)) / 144.0) * int(p.get("qty", 1) or 1) for p in pieces)
+        total_sqft = sum(piece_area_sqft(p) * int(p.get("qty", 1) or 1) for p in pieces)
         total_weight = sum(
-            planning_piece_weight(p, project.get("material", "Granite"), project.get("thickness", "3CM"), project.get("stone_color", "") or "") * int(p.get("qty", 1) or 1)
+            planning_piece_weight(p, project.get("material", "Granite"), project.get("thickness", "3CM"), project.get("stone_color", "") or "")
             for p in pieces
         )
         ws1.append(["Total Parts", total_qty])
@@ -2824,8 +2910,8 @@ def export_source_data(project_id: int):
         _color = project.get("stone_color", "") or ""
         for p in pieces:
             qty = int(p.get("qty", 1) or 1)
-            sqft = round((float(p.get("length", 0)) * float(p.get("width", 0)) / 144.0) * qty, 2)
-            wt = round(planning_piece_weight(p, mat, thick, _color) * qty, 2)
+            sqft = round(piece_area_sqft(p) * qty, 2)
+            wt = round(planning_piece_weight(p, mat, thick, _color), 2)
             rc = p.get("radius_corners") or {}
             active_corners = sum(1 for v in rc.values() if v)
             ws2.append([

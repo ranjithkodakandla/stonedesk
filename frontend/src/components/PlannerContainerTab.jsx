@@ -1,6 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { usePlannerStore } from '../store/plannerStore';
-import Container3DPreview from './planner3d/Container3DPreview';
+
+// three.js/@react-three are the heaviest deps in the bundle — load them only
+// when this tab actually renders a 3D preview, not on every page view.
+const Container3DPreview = React.lazy(() => import('./planner3d/Container3DPreview'));
 import {
   buildContainerPreview,
   CONTAINER_SPECS,
@@ -185,21 +188,23 @@ const PlannerContainerTab = () => {
             Click a box here to highlight it on the plan.
           </p>
           <div className="mt-4">
-            <Container3DPreview
-              placements={placements3d}
-              lengthIn={containerSpec.max_length}
-              widthIn={containerSpec.max_width}
-              clearHeightIn={clearHeightIn}
-              islandZoneDepthIn={project?.planner_v3_layout?.island_zone_depth_in}
-              horizontalZoneStartX={project?.planner_v3_layout?.horizontal_zone_start_x}
-              linearHorizEndX={project?.planner_v3_layout?.linear_horiz_block_end_x_in}
-              linearIslandStartX={project?.planner_v3_layout?.linear_island_strip_start_x_in}
-              maxWeightKg={payloadCapKg}
-              totalWeightKg={selectedContainer?.used_weight}
-              selectedCrateId={selectedPlacementCrateId}
-              onSelectCrate={(code) => setSelectedPlacementCrateId(code || null)}
-              hudTitle={`${selectedContainerDraft?.type || '20ft'} · interior (in)`}
-            />
+            <Suspense fallback={<div className="p-8 text-sm text-slate-500">Loading 3D preview…</div>}>
+              <Container3DPreview
+                placements={placements3d}
+                lengthIn={containerSpec.max_length}
+                widthIn={containerSpec.max_width}
+                clearHeightIn={clearHeightIn}
+                islandZoneDepthIn={project?.planner_v3_layout?.island_zone_depth_in}
+                horizontalZoneStartX={project?.planner_v3_layout?.horizontal_zone_start_x}
+                linearHorizEndX={project?.planner_v3_layout?.linear_horiz_block_end_x_in}
+                linearIslandStartX={project?.planner_v3_layout?.linear_island_strip_start_x_in}
+                maxWeightKg={payloadCapKg}
+                totalWeightKg={selectedContainer?.used_weight}
+                selectedCrateId={selectedPlacementCrateId}
+                onSelectCrate={(code) => setSelectedPlacementCrateId(code || null)}
+                hudTitle={`${selectedContainerDraft?.type || '20ft'} · interior (in)`}
+              />
+            </Suspense>
           </div>
         </div>
       )}

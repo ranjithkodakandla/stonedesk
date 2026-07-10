@@ -64,8 +64,10 @@ export const usePlannerStore = create((set, get) => ({
   refreshWorkspace: async ({ firstLoad = false } = {}) => {
     const projectId = get().projectId;
     if (!projectId) return;
-    set(firstLoad ? { isWorkspaceLoading: true } : { isRefreshing: true });
+    set(firstLoad ? { isWorkspaceLoading: true, insights: null } : { isRefreshing: true });
     try {
+      // Project/pieces/crates/assignments are cheap reads — paint the workspace
+      // as soon as these land instead of waiting on the heavy insights recompute below.
       const [projectRes, piecesRes, cratesRes, assignmentsRes] = await Promise.all([
         axios.get(`${API_BASE}/projects/${projectId}`),
         axios.get(`${API_BASE}/projects/${projectId}/pieces/`),
@@ -73,35 +75,37 @@ export const usePlannerStore = create((set, get) => ({
         axios.get(`${API_BASE}/projects/${projectId}/crates/assignments`),
       ]);
 
-      // Insights fetch is non-fatal — workspace must still load if this fails
-      let insightsData = null;
-      try {
-        const insightsRes = await axios.get(`${API_BASE}/projects/${projectId}/crates/insights`);
-        insightsData = insightsRes.data;
-      } catch (err) {
-        console.warn('Insights fetch failed (non-fatal):', err.message);
-      }
-
-      const manualContainers = buildEditableContainersFromPlan(
-        insightsData?.container_loading_plan?.containers || []
-      );
-
       set((state) => ({
         project: { ...emptyProject, ...projectRes.data },
         pieces: piecesRes.data || [],
         crates: cratesRes.data || [],
         assignments: buildAssignmentMap(assignmentsRes.data || []),
-        insights: insightsData,
-        manualContainers,
         manualContainerDirty: false,
-        selectedContainerId: withSelectedContainer(manualContainers, state.selectedContainerId),
         selectedPlacementCrateId: null,
-        selectedCrateId: withSelectedCrate(cratesRes.data || [], insightsData?.crates || [], state.selectedCrateId),
+        selectedCrateId: withSelectedCrate(cratesRes.data || [], state.insights?.crates || [], state.selectedCrateId),
       }));
     } catch (err) {
       console.error('Workspace refresh failed:', err);
     } finally {
       set({ isWorkspaceLoading: false, isRefreshing: false });
+    }
+
+    // Insights re-run full container packing on the backend — expensive on large
+    // projects. Fetch it separately so it never blocks the initial paint above.
+    try {
+      const insightsRes = await axios.get(`${API_BASE}/projects/${projectId}/crates/insights`);
+      const insightsData = insightsRes.data;
+      const manualContainers = buildEditableContainersFromPlan(
+        insightsData?.container_loading_plan?.containers || []
+      );
+      set((state) => ({
+        insights: insightsData,
+        manualContainers,
+        selectedContainerId: withSelectedContainer(manualContainers, state.selectedContainerId),
+        selectedCrateId: withSelectedCrate(state.crates, insightsData?.crates || [], state.selectedCrateId),
+      }));
+    } catch (err) {
+      console.warn('Insights fetch failed (non-fatal):', err.message);
     }
   },
 

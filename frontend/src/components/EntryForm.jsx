@@ -18,29 +18,9 @@ const parseFlatTokens = (text) =>
     .map(s => s.trim())
     .filter(Boolean);
 
-const formatFlatDraft = (text, format = '3-digit') => {
-  if (format === 'manual') {
-    return String(text || '').replace(/[\r\n\t]+/g, ',').replace(/\s+/g, '');
-  }
-  const digitWidth = format === '4-digit' ? 4 : 3;
-  const raw = String(text || '').replace(/[\r\n\t]+/g, ',').replace(/\s+/g, '');
-  const segments = raw.split(',').filter(Boolean);
-  const tokens = [];
-  for (const seg of segments) {
-    if (/^\d+$/.test(seg) && seg.length > digitWidth) {
-      for (let i = 0; i < seg.length; i += digitWidth) tokens.push(seg.slice(i, i + digitWidth));
-    } else {
-      tokens.push(seg);
-    }
-  }
-  const deduped = [];
-  const seen = new Set();
-  tokens.forEach(token => { if (!token || seen.has(token)) return; seen.add(token); deduped.push(token); });
-  let next = deduped.join(',');
-  const lastToken = deduped[deduped.length - 1] || '';
-  if (/^\d+$/.test(lastToken) && lastToken.length === digitWidth && !raw.endsWith(',')) next += ',';
-  return next;
-};
+// Flat # entry is always free-form (manual): 3-digit, 4-digit, or alphanumeric —
+// no auto-chopping. Only delimiter normalization happens here, comma stays the separator.
+const formatFlatDraft = (text) => String(text || '').replace(/[\r\n\t]+/g, ',').replace(/\s+/g, '');
 
 const getThicknessHint = (part = '', category = '') => {
   const text = `${part || ''} ${category || ''}`.trim();
@@ -79,7 +59,7 @@ const getNextNumericPartNo = (rows = [], drawingNo = '') => {
 };
 
 // ── Matrix Cell with bulk comma entry ──────────────────────────────────────
-const MatrixCell = ({ cellKey, entries, onSetEntries, onUpdateEntry, onRemoveEntry, buildingIdx, floorIdx, onMatrixPaste, flatFormat }) => {
+const MatrixCell = ({ cellKey, entries, onSetEntries, onUpdateEntry, onRemoveEntry, buildingIdx, floorIdx, onMatrixPaste }) => {
   const [bulkText, setBulkText] = useState('');
   const [bulkQty, setBulkQty] = useState(1);
 
@@ -122,7 +102,7 @@ const MatrixCell = ({ cellKey, entries, onSetEntries, onUpdateEntry, onRemoveEnt
       <div className="flex items-center gap-1">
         <input
           value={bulkText}
-          onChange={e => setBulkText(formatFlatDraft(e.target.value, flatFormat || '3-digit'))}
+          onChange={e => setBulkText(formatFlatDraft(e.target.value))}
           onBlur={commit}
           onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } }}
           onPaste={e => {
@@ -133,7 +113,7 @@ const MatrixCell = ({ cellKey, entries, onSetEntries, onUpdateEntry, onRemoveEnt
               return;
             }
             e.preventDefault();
-            setBulkText(formatFlatDraft(t, flatFormat || '3-digit'));
+            setBulkText(formatFlatDraft(t));
           }}
           className="input-field py-0.5 text-xs flex-1 min-w-0 font-mono"
           placeholder={entries.length ? 'Add more…' : '101,102,103'}
@@ -145,6 +125,106 @@ const MatrixCell = ({ cellKey, entries, onSetEntries, onUpdateEntry, onRemoveEnt
           title="Default qty for new entries"
         />
       </div>
+    </div>
+  );
+};
+
+// ── Searchable stone color picker with inline "add new color" ─────────────
+const StoneColorPicker = ({ material, value, onSelect }) => {
+  const [options, setOptions] = useState([]);
+  const [query, setQuery] = useState(value || '');
+  const [open, setOpen] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [newDensity, setNewDensity] = useState('');
+  const [error, setError] = useState('');
+  const wrapRef = useRef(null);
+
+  useEffect(() => { setQuery(value || ''); }, [value]);
+
+  useEffect(() => {
+    let cancelled = false;
+    axios.get(`${API_BASE}/stone-colors`, { params: { material } })
+      .then(res => { if (!cancelled) setOptions(res.data?.[material] || []); })
+      .catch(() => { if (!cancelled) setOptions([]); });
+    return () => { cancelled = true; };
+  }, [material]);
+
+  useEffect(() => {
+    const onDocClick = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) { setOpen(false); setAdding(false); }
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, []);
+
+  const trimmedQuery = query.trim();
+  const filtered = options.filter(o => o.name.toLowerCase().includes(trimmedQuery.toLowerCase()));
+  const exactMatch = options.some(o => o.name.toLowerCase() === trimmedQuery.toLowerCase());
+
+  const pick = (name) => {
+    onSelect(name);
+    setQuery(name);
+    setOpen(false);
+    setAdding(false);
+  };
+
+  const submitNewColor = async () => {
+    if (!trimmedQuery) return;
+    const density = Number(newDensity);
+    if (!density || density <= 0) { setError('Enter a valid density (kg/m³).'); return; }
+    try {
+      const res = await axios.post(`${API_BASE}/stone-colors`, { material, name: trimmedQuery, density_kg_m3: density });
+      setOptions(prev => [...prev, res.data].sort((a, b) => a.name.localeCompare(b.name)));
+      pick(res.data.name);
+      setNewDensity('');
+      setError('');
+    } catch (err) {
+      setError(err?.response?.data?.detail || 'Failed to add color.');
+    }
+  };
+
+  return (
+    <div className="relative" ref={wrapRef}>
+      <input
+        className="input-field"
+        value={query}
+        placeholder="Search or select color…"
+        onChange={e => { setQuery(e.target.value); setOpen(true); setAdding(false); setError(''); }}
+        onFocus={() => setOpen(true)}
+      />
+      {open && (
+        <div className="absolute z-20 mt-1 w-full max-h-56 overflow-y-auto bg-white border border-[#e2e8f0] rounded-md shadow-lg text-sm">
+          {filtered.map(o => (
+            <button key={o.name} type="button"
+              onClick={() => pick(o.name)}
+              className={`block w-full text-left px-3 py-1.5 hover:bg-blue-50 ${o.name === value ? 'bg-blue-50 font-semibold' : ''}`}>
+              {o.name}
+            </button>
+          ))}
+          {filtered.length === 0 && !trimmedQuery && (
+            <div className="px-3 py-2 text-xs text-slate-400">No colors for {material}</div>
+          )}
+          {trimmedQuery && !exactMatch && !adding && (
+            <button type="button" onClick={() => setAdding(true)}
+              className="block w-full text-left px-3 py-1.5 text-blue-600 font-medium hover:bg-blue-50 border-t border-[#f1f5f9]">
+              + Add "{trimmedQuery}" as new color
+            </button>
+          )}
+          {adding && (
+            <div className="p-3 border-t border-[#f1f5f9] space-y-2">
+              <label className="text-xs text-slate-500">Density (kg/m³) for "{trimmedQuery}"</label>
+              <input type="number" min="1" step="1" value={newDensity}
+                onChange={e => setNewDensity(e.target.value)}
+                className="input-field text-sm" placeholder="e.g., 2650" autoFocus />
+              {error && <p className="text-xs text-rose-600">{error}</p>}
+              <div className="flex gap-2">
+                <button type="button" onClick={submitNewColor} className="btn-primary text-xs px-2 py-1">Save color</button>
+                <button type="button" onClick={() => { setAdding(false); setError(''); }} className="text-xs text-slate-500 px-2 py-1">Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };
@@ -408,14 +488,6 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
       });
       return { ...prev, cells: nextCells };
     });
-  };
-
-  const handleFlatFormatChange = async (e) => {
-    const value = e.target.value;
-    setProject(prev => ({ ...prev, flat_format: value }));
-    if (!project.id) return;
-    try { await axios.put(`${API_BASE}/projects/${project.id}`, { ...project, flat_format: value }); }
-    catch (err) { console.error('Failed to save flat format', err); }
   };
 
   const handleDescriptionThicknessChange = async (description, newThickness) => {
@@ -733,23 +805,14 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
     onLoadedDrawingClear?.();
   };
 
-  // ── Stone color options by material ──
-  const STONE_COLORS = {
-    Granite: [
-      'Kashmir White', 'Moon White', 'River White', 'Colonial White', 'Bianco Romano', 'White Galaxy', 'Crystal White',
-      'Giallo Ornamental', 'Venetian Gold', 'Santa Cecilia', 'Caledonia', 'Crema Pearl', 'Tiger Skin',
-      'Tan Brown', 'Silver Pearl', 'Verde Butterfly', 'Uba Tuba', 'Steel Grey', 'Sapphire Blue', 'Vizag Blue', 'New Kashmir White',
-      'Baltic Brown', 'Imperial Red', 'Labrador Antique', 'Volga Blue', 'Impala', 'Dakota Mahogany', 'Black Pearl',
-      'Absolute Black', 'Black Galaxy', 'Angola Black', 'Zimbabwe Black', 'Star Galaxy',
-    ],
-    Marble: [
-      'Carrara White', 'Calacatta Gold', 'Statuario', 'Bianco Venatino', 'Volakas', 'White Onyx',
-      'Crema Marfil', 'Botticino', 'Emperador Light', 'Ottoman Grey', 'Grey Armani', 'Panda White',
-      'Nero Marquina', 'Emperador Dark', 'Forest Green', 'Bardiglio', 'Black & Gold', 'Portoro',
-    ],
-    Quartz: [],
+  const handleStoneColorSelect = async (colorName) => {
+    setProject(prev => ({ ...prev, stone_color: colorName }));
+    if (!project.id) return;
+    try {
+      await axios.put(`${API_BASE}/projects/${project.id}`, { ...project, stone_color: colorName });
+      onDataChange?.();
+    } catch (err) { console.error('Failed to save stone color', err); }
   };
-  const colorOptions = STONE_COLORS[project.material] || [];
 
   // ── Render ──
   return (
@@ -772,11 +835,11 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
           <div><label className="label-text">Material</label><select name="material" value={project.material} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field"><option>Granite</option><option>Quartz</option><option>Marble</option></select></div>
           <div>
             <label className="label-text">Stone Color</label>
-            <select name="stone_color" value={project.stone_color || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field">
-              <option value="">— Select Color —</option>
-              {colorOptions.map(c => <option key={c} value={c}>{c}</option>)}
-              {colorOptions.length === 0 && <option value="" disabled>No colors for {project.material}</option>}
-            </select>
+            <StoneColorPicker
+              material={project.material}
+              value={project.stone_color || ''}
+              onSelect={handleStoneColorSelect}
+            />
           </div>
           <div><label className="label-text">Crate Wood</label><select name="crate_wood_type" value={project.crate_wood_type || 'Pine'} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field"><option>Pine</option><option>Rubberwood</option><option>Plywood</option><option>Hardwood</option></select></div>
           <div><label className="label-text">Wood Thick. (in)</label><input type="number" step="0.125" min="0.5" name="crate_wood_thickness" value={project.crate_wood_thickness ?? 1.25} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
@@ -785,23 +848,9 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
           <div><label className="label-text">Date</label><input type="date" name="date" value={project.date || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
         </div>
 
-        {/* ── Flat Format & Thickness Mapping ── */}
+        {/* ── Thickness Mapping ── */}
         <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-1 md:grid-cols-8 gap-4">
-          <div className="md:col-span-2">
-            <label className="label-text">Flat # Format</label>
-            <div className="flex gap-3 mt-1.5">
-              {[['3-digit', '3-digit'], ['4-digit', '4-digit'], ['manual', 'Manual']].map(([v, l]) => (
-                <label key={v} className="flex items-center gap-1 cursor-pointer select-none">
-                  <input type="radio" name="flat_format" value={v}
-                    checked={(project.flat_format || '3-digit') === v}
-                    onChange={handleFlatFormatChange}
-                    className="text-blue-600" />
-                  <span className="text-xs text-slate-600">{l}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-          <div className="md:col-span-6">
+          <div className="md:col-span-8">
             <label className="label-text">Default Thickness per Part Type</label>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-1.5 mt-1.5">
               {MASTER_DESCRIPTIONS.map(desc => {
@@ -980,7 +1029,6 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
                                     buildingIdx={matrixConfig.buildings.indexOf(building)}
                                     floorIdx={matrixConfig.floors.indexOf(floor)}
                                     onMatrixPaste={handleMatrixPaste}
-                                    flatFormat={project.flat_format || '3-digit'}
                                   />
                                 </td>
                               );
