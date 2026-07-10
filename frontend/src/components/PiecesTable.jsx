@@ -1,8 +1,118 @@
 import React, { useMemo, useState } from 'react';
+import { FixedSizeList as List } from 'react-window';
 import axios from 'axios';
 import { formatNumber } from '../utils/plannerUtils';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+
+// Fixed column widths so the (non-virtualized) header and the virtualized
+// rows below it line up pixel-for-pixel.
+const COLUMNS = [
+  { key: 'select', width: 40 },
+  { key: 'part_no', label: 'Part #', width: 130 },
+  { key: 'part', label: 'Part', width: 140 },
+  { key: 'category', label: 'Category', width: 90 },
+  { key: 'drawing', label: 'Drawing', width: 90 },
+  { key: 'unit', label: 'Unit', width: 100 },
+  { key: 'length', label: 'Length"', width: 70 },
+  { key: 'width', label: 'Depth"', width: 70 },
+  { key: 'qty', label: 'Qty', width: 55 },
+  { key: 'sink_type', label: 'Sink', width: 100 },
+  { key: 'sink_cut', label: 'Cuts', width: 55 },
+  { key: 'tap_holes', label: 'Tap', width: 55 },
+  { key: 'edge', label: 'Edge Finish', width: 90 },
+  { key: 'edge_area', label: 'Edge Polish area', width: 130 },
+  { key: 'sqft', label: 'SqFt ea', width: 70 },
+  { key: 'weight', label: 'kg ea', width: 70 },
+  { key: 'building', label: 'Building', width: 90 },
+  { key: 'floor', label: 'Floor', width: 70 },
+  { key: 'flat', label: 'Flat', width: 70 },
+  { key: 'planner', label: 'Planner', width: 150 },
+  { key: 'actions', label: 'Actions', width: 150 },
+];
+const TOTAL_WIDTH = COLUMNS.reduce((sum, c) => sum + c.width, 0);
+const ROW_HEIGHT = 58;
+const LIST_HEIGHT = 460;
+
+const PieceRow = React.memo(({ index, style, data }) => {
+  const {
+    filteredPieces, selectedIds, toggleSelection, editingPartNo, setEditingPartNo,
+    savePartNo, onLoadDrawing, openEdit, onDelete, getWeight,
+  } = data;
+  const p = filteredPieces[index];
+  const sqft = (p.length * p.width) / 144;
+  const wt = getWeight(p);
+  const isSelected = selectedIds.includes(p.id);
+  const cellBg = isSelected ? 'bg-[#eff6ff]' : 'bg-white';
+
+  return (
+    <div
+      style={{ ...style, width: TOTAL_WIDTH }}
+      className={`flex border-b border-[#f1f5f9] transition-colors text-sm text-[#475569] ${isSelected ? 'bg-[#eff6ff]' : 'hover:bg-[#f8fafc]'}`}
+    >
+      <div className={`flex items-center p-3 sticky left-0 z-[2] border-r border-[#f1f5f9] ${cellBg}`} style={{ width: COLUMNS[0].width }}>
+        <input type="checkbox" className="h-4 w-4" checked={isSelected} onChange={() => toggleSelection(p.id)} />
+      </div>
+      <div className={`flex items-center p-2 sticky border-r border-[#e2e8f0] ${cellBg}`} style={{ width: COLUMNS[1].width, left: COLUMNS[0].width }}>
+        {editingPartNo?.id === p.id ? (
+          <input
+            autoFocus
+            value={editingPartNo.value}
+            onChange={e => setEditingPartNo({ id: p.id, value: e.target.value })}
+            onBlur={() => savePartNo(p.id, editingPartNo.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') savePartNo(p.id, editingPartNo.value);
+              if (e.key === 'Escape') setEditingPartNo(null);
+            }}
+            className="font-mono text-xs border border-[#2563eb] rounded px-1.5 py-0.5 w-full outline-none bg-white"
+          />
+        ) : (
+          <span
+            className="font-mono text-xs font-semibold text-[#1e293b] cursor-text hover:bg-[#f1f5f9] rounded px-1 py-0.5 block truncate w-full"
+            onClick={() => setEditingPartNo({ id: p.id, value: p.part_no || '' })}
+            title="Click to edit Part #"
+          >
+            {p.part_no || <span className="text-[#cbd5e1] font-normal not-italic">—</span>}
+          </span>
+        )}
+      </div>
+      <div className="flex items-center p-3 font-semibold text-[#1e293b] truncate" style={{ width: COLUMNS[2].width }}>{p.part}</div>
+      <div className="flex items-center p-3 truncate" style={{ width: COLUMNS[3].width }}>{p.category}</div>
+      <div className="flex items-center p-3 truncate" style={{ width: COLUMNS[4].width }}>{p.drawing}</div>
+      <div className="flex items-center p-3 truncate" style={{ width: COLUMNS[5].width }}>{p.unit}</div>
+      <div className="flex items-center justify-end p-3" style={{ width: COLUMNS[6].width }}>{Number(p.length || 0).toFixed(2)}</div>
+      <div className="flex items-center justify-end p-3" style={{ width: COLUMNS[7].width }}>{Number(p.width || 0).toFixed(2)}</div>
+      <div className="flex items-center justify-center p-3 text-[#2563eb] font-bold" style={{ width: COLUMNS[8].width }}>{p.qty}</div>
+      <div className="flex items-center p-3 truncate" style={{ width: COLUMNS[9].width }}>{p.sink_type}</div>
+      <div className="flex items-center justify-center p-3" style={{ width: COLUMNS[10].width }}>{p.sink_cut}</div>
+      <div className="flex items-center justify-center p-3" style={{ width: COLUMNS[11].width }}>{p.tap_holes}</div>
+      <div className="flex items-center p-3 truncate" style={{ width: COLUMNS[12].width }}>{p.edge}</div>
+      <div className="flex items-center p-3 truncate" style={{ width: COLUMNS[13].width }}>
+        {typeof p.edge_polish_machine === 'number' && p.edge_polish_machine > 0 ? p.edge_polish_machine.toFixed(2) : '-'}
+      </div>
+      <div className="flex items-center justify-end p-3 text-[#64748b]" style={{ width: COLUMNS[14].width }}>{sqft.toFixed(2)}</div>
+      <div className="flex items-center justify-end p-3 text-[#64748b]" style={{ width: COLUMNS[15].width }}>{formatNumber(wt)}</div>
+      <div className="flex items-center p-3 truncate text-[#64748b]" style={{ width: COLUMNS[16].width }}>{p.building}</div>
+      <div className="flex items-center p-3 truncate text-[#64748b]" style={{ width: COLUMNS[17].width }}>{p.floor}</div>
+      <div className="flex items-center p-3 truncate text-[#64748b]" style={{ width: COLUMNS[18].width }}>{p.flat}</div>
+      <div className="flex flex-col justify-center p-3 text-xs text-[#64748b]" style={{ width: COLUMNS[19].width }}>
+        <div className="truncate">{p.delivery_priority || 'Standard'} · {p.fragility || 'Standard'}</div>
+        <div className="truncate">{p.stack_preference || 'Auto'}{p.weight_override ? ` · ${formatNumber(p.weight_override)} kg ea` : ''}</div>
+      </div>
+      <div className="flex items-center justify-center gap-2 p-3" style={{ width: COLUMNS[20].width }}>
+        <button
+          onClick={() => (onLoadDrawing ? onLoadDrawing(p.drawing) : openEdit(p))}
+          className="text-[#2563eb] hover:text-[#1d4ed8] font-medium text-xs px-3 py-1 bg-[#eff6ff] hover:bg-[#dbeafe] rounded-md border border-[#bfdbfe] transition-colors"
+        >
+          Edit
+        </button>
+        <button onClick={() => onDelete(p.id)} className="text-[#dc2626] hover:text-[#991b1b] font-medium text-xs px-3 py-1 bg-[#fef2f2] hover:bg-[#fee2e2] rounded-md border border-[#fecaca] transition-colors">
+          Delete
+        </button>
+      </div>
+    </div>
+  );
+});
 
 const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing }) => {
   const [partSearch, setPartSearch] = useState('');
@@ -403,118 +513,42 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing })
         </div>
       </div>
 
-      <div className="overflow-auto max-h-[500px] bg-white border border-[#e2e8f0] shadow-sm rounded-lg relative">
-        <table className="w-full text-left text-sm text-[#475569]">
-          <thead className="bg-[#f1f5f9] text-[#334155] text-xs font-semibold sticky top-0 z-10 shadow-sm border-b border-[#e2e8f0]">
-            <tr>
-              <th className="p-3 w-10 sticky left-0 z-20 bg-[#f1f5f9]">
-                <input
-                  type="checkbox"
-                  checked={filteredPieces.length > 0 && filteredPieces.every(p => selectedIds.includes(p.id))}
-                  onChange={toggleAllSelection}
-                  className="h-4 w-4"
-                />
-              </th>
-              <th className="p-3 sticky left-10 z-20 bg-[#f1f5f9] min-w-[120px] whitespace-nowrap border-r border-[#e2e8f0]">Part #</th>
-              <th className="p-3">Part</th>
-              <th className="p-3">Category</th>
-              <th className="p-3">Drawing</th>
-              <th className="p-3">Unit</th>
-              <th className="p-3 text-right">Length"</th>
-              <th className="p-3 text-right">Depth"</th>
-              <th className="p-3 text-center">Qty</th>
-              <th className="p-3">Sink</th>
-              <th className="p-3 text-center">Cuts</th>
-              <th className="p-3 text-center">Tap</th>
-              <th className="p-3">Edge Finish</th>
-              <th className="p-3">Edge Polish area</th>
-              <th className="p-3 text-right">SqFt ea</th>
-              <th className="p-3 text-right">kg ea</th>
-              <th className="p-3">Building</th>
-              <th className="p-3">Floor</th>
-              <th className="p-3">Flat</th>
-              <th className="p-3">Planner</th>
-              <th className="p-3 text-center">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredPieces.map((p) => {
-              const sqft = (p.length * p.width) / 144;
-              const wt = getWeight(p);
-              return (
-                <tr key={p.id} className={`border-b border-[#f1f5f9] transition-colors ${selectedIds.includes(p.id) ? 'bg-[#eff6ff]' : 'hover:bg-[#f8fafc]'}`}>
-                  <td className={`p-3 sticky left-0 z-[2] border-r border-[#f1f5f9] ${selectedIds.includes(p.id) ? 'bg-[#eff6ff]' : 'bg-white'}`}>
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4"
-                      checked={selectedIds.includes(p.id)}
-                      onChange={() => toggleSelection(p.id)}
-                    />
-                  </td>
-                  <td className={`p-2 sticky left-10 z-[2] min-w-[120px] border-r border-[#e2e8f0] ${selectedIds.includes(p.id) ? 'bg-[#eff6ff]' : 'bg-white'}`}>
-                    {editingPartNo?.id === p.id ? (
-                      <input
-                        autoFocus
-                        value={editingPartNo.value}
-                        onChange={e => setEditingPartNo({ id: p.id, value: e.target.value })}
-                        onBlur={() => savePartNo(p.id, editingPartNo.value)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') savePartNo(p.id, editingPartNo.value);
-                          if (e.key === 'Escape') setEditingPartNo(null);
-                        }}
-                        className="font-mono text-xs border border-[#2563eb] rounded px-1.5 py-0.5 w-full outline-none bg-white"
-                      />
-                    ) : (
-                      <span
-                        className="font-mono text-xs font-semibold text-[#1e293b] cursor-text hover:bg-[#f1f5f9] rounded px-1 py-0.5 block"
-                        onClick={() => setEditingPartNo({ id: p.id, value: p.part_no || '' })}
-                        title="Click to edit Part #"
-                      >
-                        {p.part_no || <span className="text-[#cbd5e1] font-normal not-italic">—</span>}
-                      </span>
-                    )}
-                  </td>
-                  <td className="p-3 font-semibold text-[#1e293b] text-left">{p.part}</td>
-                  <td className="p-3 text-left">{p.category}</td>
-                  <td className="p-3 text-left">{p.drawing}</td>
-                  <td className="p-3 text-left">{p.unit}</td>
-                  <td className="p-3 text-right">{Number(p.length || 0).toFixed(2)}</td>
-                  <td className="p-3 text-right">{Number(p.width || 0).toFixed(2)}</td>
-                  <td className="p-3 text-center text-[#2563eb] font-bold">{p.qty}</td>
-                  <td className="p-3">{p.sink_type}</td>
-                  <td className="p-3 text-center">{p.sink_cut}</td>
-                  <td className="p-3 text-center">{p.tap_holes}</td>
-                  <td className="p-3">{p.edge}</td>
-                  <td className="p-3">{typeof p.edge_polish_machine === 'number' && p.edge_polish_machine > 0 ? p.edge_polish_machine.toFixed(2) : '-'}</td>
-                  <td className="p-3 text-right text-[#64748b]">{sqft.toFixed(2)}</td>
-                  <td className="p-3 text-right text-[#64748b]">{formatNumber(wt)}</td>
-                  <td className="p-3 text-left text-[#64748b]">{p.building}</td>
-                  <td className="p-3 text-left text-[#64748b]">{p.floor}</td>
-                  <td className="p-3 text-left text-[#64748b]">{p.flat}</td>
-                  <td className="p-3 text-xs text-[#64748b]">
-                    <div>{p.delivery_priority || 'Standard'} · {p.fragility || 'Standard'}</div>
-                    <div>{p.stack_preference || 'Auto'}{p.weight_override ? ` · ${formatNumber(p.weight_override)} kg ea` : ''}</div>
-                  </td>
-                  <td className="p-3 text-center">
-                    <div className="flex items-center justify-center gap-2">
-                      <button
-                        onClick={() => (onLoadDrawing ? onLoadDrawing(p.drawing) : openEdit(p))}
-                        className="text-[#2563eb] hover:text-[#1d4ed8] font-medium text-xs px-3 py-1 bg-[#eff6ff] hover:bg-[#dbeafe] rounded-md border border-[#bfdbfe] transition-colors"
-                      >
-                        Edit
-                      </button>
-                      <button onClick={() => onDelete(p.id)} className="text-[#dc2626] hover:text-[#991b1b] font-medium text-xs px-3 py-1 bg-[#fef2f2] hover:bg-[#fee2e2] rounded-md border border-[#fecaca] transition-colors">
-                        Delete
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-            {pieces.length === 0 && <tr><td colSpan="21" className="p-8 text-center text-[#64748b] italic">No pieces added to this project yet.</td></tr>}
-            {pieces.length > 0 && filteredPieces.length === 0 && <tr><td colSpan="21" className="p-8 text-center text-[#64748b] italic">No pieces match &ldquo;{partSearch}&rdquo;</td></tr>}
-          </tbody>
-        </table>
+      <div className="overflow-x-auto overflow-y-hidden bg-white border border-[#e2e8f0] shadow-sm rounded-lg relative">
+        <div style={{ width: TOTAL_WIDTH }}>
+          <div className="flex bg-[#f1f5f9] text-[#334155] text-xs font-semibold shadow-sm border-b border-[#e2e8f0]">
+            <div className="p-3 flex items-center sticky left-0 z-20 bg-[#f1f5f9]" style={{ width: COLUMNS[0].width }}>
+              <input
+                type="checkbox"
+                checked={filteredPieces.length > 0 && filteredPieces.every(p => selectedIds.includes(p.id))}
+                onChange={toggleAllSelection}
+                className="h-4 w-4"
+              />
+            </div>
+            <div className="p-3 flex items-center sticky z-20 bg-[#f1f5f9] whitespace-nowrap border-r border-[#e2e8f0]" style={{ width: COLUMNS[1].width, left: COLUMNS[0].width }}>Part #</div>
+            {COLUMNS.slice(2).map((col) => (
+              <div key={col.key} className="p-3 flex items-center" style={{ width: col.width }}>{col.label}</div>
+            ))}
+          </div>
+
+          {filteredPieces.length === 0 ? (
+            <div className="p-8 text-center text-[#64748b] italic" style={{ width: TOTAL_WIDTH }}>
+              {pieces.length === 0 ? 'No pieces added to this project yet.' : `No pieces match “${partSearch}”`}
+            </div>
+          ) : (
+            <List
+              height={LIST_HEIGHT}
+              itemCount={filteredPieces.length}
+              itemSize={ROW_HEIGHT}
+              width={TOTAL_WIDTH}
+              itemData={{
+                filteredPieces, selectedIds, toggleSelection, editingPartNo, setEditingPartNo,
+                savePartNo, onLoadDrawing, openEdit, onDelete, getWeight,
+              }}
+            >
+              {PieceRow}
+            </List>
+          )}
+        </div>
       </div>
 
       {editMode && editDraft && (
