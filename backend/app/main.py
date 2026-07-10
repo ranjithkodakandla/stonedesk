@@ -85,12 +85,19 @@ class InMemoryCollection:
             docs = sorted(docs, key=lambda d: d.get(key), reverse=direction < 0)
         return docs[0] if docs else None
 
-    def update_one(self, query, update):
+    def update_one(self, query, update, upsert=False):
         for doc in self.docs:
             if self._matches(doc, query):
                 if "$set" in update:
                     doc.update(deepcopy(update["$set"]))
                 return
+        if upsert:
+            new_doc = dict(query)
+            if "$set" in update:
+                new_doc.update(deepcopy(update["$set"]))
+            if "$setOnInsert" in update:
+                new_doc.update(deepcopy(update["$setOnInsert"]))
+            self.docs.append(new_doc)
 
     def delete_one(self, query):
         for idx, doc in enumerate(self.docs):
@@ -179,38 +186,54 @@ def ensure_indexes() -> None:
     assignments_col.create_index("id")
     assignments_col.create_index([("project_id", 1), ("piece_id", 1)])
     assignments_col.create_index([("project_id", 1), ("crate_id", 1)])
-    custom_colors_col.create_index([("material", 1), ("name", 1)])
-    crate_wood_types_col.create_index("name")
+    _ensure_unique_index(custom_colors_col, [("material", 1), ("name", 1)])
+    _ensure_unique_index(crate_wood_types_col, [("name", 1)])
+
+
+def _ensure_unique_index(collection, keys) -> None:
+    """create_index() errors if a same-named non-unique index already exists
+    (true here — these indexes predate the unique constraint). Drop and recreate."""
+    try:
+        collection.create_index(keys, unique=True)
+    except Exception:
+        from pymongo.errors import OperationFailure
+        try:
+            index_name = "_".join(f"{k}_{v}" for k, v in keys)
+            collection.drop_index(index_name)
+        except OperationFailure:
+            pass
+        collection.create_index(keys, unique=True)
 
 
 def seed_config_defaults() -> None:
     """One-time seed so the config screen has editable rows for every built-in
-    color/wood-type. Idempotent — only inserts names that aren't already present."""
+    color/wood-type. Uses an atomic upsert (backed by a unique index) rather than
+    check-then-insert — safe even when multiple Cloud Run instances cold-start
+    and run this at the same time."""
     for material, colors in COLOR_DENSITIES.items():
-        existing_names = {d["name"].lower() for d in custom_colors_col.find({"material": material}, {"_id": 0, "name": 1})}
         for name, density in colors.items():
-            if name.lower() in existing_names:
-                continue
-            custom_colors_col.insert_one({
-                "id": next_sequence("stone_color"),
-                "material": material,
-                "name": name,
-                "density_kg_m3": float(density),
+            custom_colors_col.update_one(
+                {"material": material, "name": name},
+                {"$setOnInsert": {
+                    "id": next_sequence("stone_color"),
+                    "density_kg_m3": float(density),
+                    "builtin": True,
+                    "created_at": utc_now(),
+                }},
+                upsert=True,
+            )
+
+    for name, factor in WOOD_DENSITY_FACTORS.items():
+        crate_wood_types_col.update_one(
+            {"name": name.capitalize()},
+            {"$setOnInsert": {
+                "id": next_sequence("crate_wood_type"),
+                "density_factor": float(factor),
                 "builtin": True,
                 "created_at": utc_now(),
-            })
-
-    existing_wood_names = {d["name"].lower() for d in crate_wood_types_col.find({}, {"_id": 0, "name": 1})}
-    for name, factor in WOOD_DENSITY_FACTORS.items():
-        if name.lower() in existing_wood_names:
-            continue
-        crate_wood_types_col.insert_one({
-            "id": next_sequence("crate_wood_type"),
-            "name": name.capitalize(),
-            "density_factor": float(factor),
-            "builtin": True,
-            "created_at": utc_now(),
-        })
+            }},
+            upsert=True,
+        )
 
 
 def load_config_registries() -> None:
