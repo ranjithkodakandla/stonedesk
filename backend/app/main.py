@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from pymongo import MongoClient, ReturnDocument
 from pydantic import BaseModel
 from .pdf_parser import parse_pdf
+from .nim_parser import parse_page_nim as _parse_page_nim, parse_pdf_nim as _parse_pdf_nim
 from .services.container_planner import build_container_plan
 from .services.deterministic_packing import (
     CATEGORY_CONFIG as DET_CATEGORY_CONFIG,
@@ -2942,6 +2943,43 @@ async def upload_pdf(project_id: int, file: UploadFile = File(...)):
         "similar_drawing": similar_drawing,
         "parser_summary": result.get("metadata", {}).get("page_summary", {}),
     }
+
+
+# ── NIM per-page parse ────────────────────────────────────────────────────────
+
+@app.post("/api/projects/{project_id}/upload-pdf/parse-page-nim/")
+async def parse_page_nim_endpoint(
+    project_id: int,
+    page_index: int = 0,
+    file: UploadFile = File(...),
+):
+    """
+    Parse a single PDF page with the NIM vision model (~60-90 s).
+
+    Called by the frontend review UI when the coordinate-based parser returned
+    zero or low-confidence results for a specific page.  Only processes the
+    requested page — not the whole PDF.
+    """
+    nim_key = os.environ.get("NVIDIA_NIM_API_KEY", "")
+    if not nim_key:
+        raise HTTPException(
+            status_code=503,
+            detail="AI-based parsing is not configured (NVIDIA_NIM_API_KEY missing).",
+        )
+
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    pdf_bytes = await file.read()
+    if len(pdf_bytes) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (max 20 MB)")
+
+    project = projects_col.find_one({"id": project_id}, {"_id": 0}) or {}
+    result  = _parse_page_nim(pdf_bytes, page_index, project, api_key=nim_key)
+
+    if result.get("error"):
+        raise HTTPException(status_code=500, detail=result["error"])
+
+    return result
 
 
 # ── Upload Drafts CRUD ────────────────────────────────────────────────────────

@@ -1,4 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
+import axios from 'axios';
+import { tagNimRows } from '../utils/nimUtils';
+
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
 // ── Colour scheme ─────────────────────────────────────────────────────────────
 const COLORS = {
@@ -123,10 +127,15 @@ const PieceEditor = ({ piece, onChange }) => {
 };
 
 // ── PdfReviewModal ─────────────────────────────────────────────────────────────
-const PdfReviewModal = ({ rows, reviewData, onClose, onSave }) => {
+const PdfReviewModal = ({ rows, reviewData, pdfFileMeta = [], projectId, onClose, onSave }) => {
   const [currentPage, setCurrentPage] = useState(0);
   const [selectedKey, setSelectedKey]  = useState(null);
   const [editedRows, setEditedRows]    = useState(() => rows.map(r => ({ ...r })));
+
+  // NIM per-page parsing state
+  const [nimLoading, setNimLoading]     = useState(false);
+  const [nimError,   setNimError]       = useState(null);
+  const [nimPreview, setNimPreview]     = useState(null); // {pageNum, rows}
 
   const pages = reviewData?.pages || [];
   const pageData = pages[currentPage] || null;
@@ -168,7 +177,59 @@ const PdfReviewModal = ({ rows, reviewData, onClose, onSave }) => {
     });
   };
 
-  // Unique pieces for the right-side list (one row per shape bbox)
+  // ── NIM per-page parsing ─────────────────────────────────────────────────────
+  // Determine which uploaded file + local page_index corresponds to currentPage.
+  const getFileForCurrentPage = useCallback(() => {
+    if (!pdfFileMeta.length) return null;
+    let remaining = currentPage;
+    for (const meta of pdfFileMeta) {
+      if (remaining < meta.pageCount) {
+        return { file: meta.file, localPageIdx: remaining };
+      }
+      remaining -= meta.pageCount;
+    }
+    return null;
+  }, [currentPage, pdfFileMeta]);
+
+  const canParseWithNim = pdfFileMeta.length > 0 && projectId && !nimLoading && getFileForCurrentPage() !== null;
+
+  const parseWithNim = useCallback(async () => {
+    const fileInfo = getFileForCurrentPage();
+    if (!fileInfo) return;
+    setNimLoading(true);
+    setNimError(null);
+    setNimPreview(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', fileInfo.file);
+      const res = await axios.post(
+        `${API_BASE}/projects/${projectId}/upload-pdf/parse-page-nim/?page_index=${fileInfo.localPageIdx}`,
+        fd,
+        { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 180000 }
+      );
+      const nimRows = res.data.rows || [];
+      const targetPageNum = pages[currentPage]?.page_num ?? (currentPage + 1);
+      const tagged = tagNimRows(nimRows, targetPageNum, editedRows);
+      setNimPreview({ pageNum: targetPageNum, rows: tagged });
+    } catch (err) {
+      setNimError(err.response?.data?.detail || err.message || 'AI parsing failed');
+    } finally {
+      setNimLoading(false);
+    }
+  }, [getFileForCurrentPage, currentPage, projectId, pages, editedRows]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const acceptNimPreview = useCallback(() => {
+    if (!nimPreview) return;
+    setEditedRows(prev => {
+      // Remove any coordinate-parser rows for this page, then add NIM rows
+      const without = prev.filter(r => r._page_num !== nimPreview.pageNum);
+      return [...without, ...nimPreview.rows];
+    });
+    setNimPreview(null);
+    setSelectedKey(null);
+  }, [nimPreview]);
+
+  // ── Unique pieces for the right-side list (one row per shape bbox) ───────────
   const uniquePieces = useMemo(() => {
     const seen = new Set();
     return editedRows.filter(r => {
@@ -232,6 +293,62 @@ const PdfReviewModal = ({ rows, reviewData, onClose, onSave }) => {
             <p className="text-[10px] text-[#94a3b8]">
               {pageData?.shapes?.length ?? 0} unique shapes detected on this page
             </p>
+
+            {/* NIM "Parse with AI" button — always offered as a fallback/override,
+                not just when the coordinate parser found zero shapes, since that
+                parser can also silently produce wrong dimensions on complex
+                multi-piece sheets even when it does detect shapes. */}
+            {canParseWithNim && !nimPreview && (
+              <div className="flex flex-col items-center gap-1.5">
+                <button
+                  onClick={parseWithNim}
+                  disabled={nimLoading}
+                  className="flex items-center gap-2 rounded-full bg-[#7c3aed] text-white text-xs font-medium px-4 py-1.5 hover:bg-[#6d28d9] disabled:opacity-50 transition-colors">
+                  {nimLoading
+                    ? <><span className="animate-spin">⟳</span> AI parsing… (~60s)</>
+                    : <><span>✦</span> {pageData?.shapes?.length > 0 ? 'Re-parse with AI' : 'Parse with AI'}</>}
+                </button>
+                {pageData?.shapes?.length > 0 && (
+                  <p className="text-[10px] text-[#94a3b8] text-center max-w-[220px]">
+                    Shapes were detected, but double-check the dimensions below —
+                    re-parse with AI if they look wrong.
+                  </p>
+                )}
+                {nimError && (
+                  <p className="text-[10px] text-rose-500 text-center max-w-[200px]">{nimError}</p>
+                )}
+              </div>
+            )}
+
+            {/* NIM preview panel */}
+            {nimPreview && (
+              <div className="w-full max-w-sm bg-white border border-[#7c3aed] rounded-xl p-3 shadow-lg">
+                <p className="text-xs font-semibold text-[#7c3aed] mb-2">
+                  ✦ AI found {nimPreview.rows.length} piece{nimPreview.rows.length !== 1 ? 's' : ''}
+                </p>
+                <div className="text-[11px] text-[#334155] space-y-1 mb-3 max-h-32 overflow-y-auto">
+                  {nimPreview.rows.map((r, i) => (
+                    <div key={i} className="flex items-center gap-2 bg-[#f5f3ff] rounded px-2 py-0.5">
+                      <span className="font-mono w-5 text-center text-[#7c3aed]">{r.part_no || '—'}</span>
+                      <span className="flex-1 truncate">{r.part || r.sink_type || '—'}</span>
+                      <span className="text-[#64748b] shrink-0">{r.length}×{r.width}"</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={acceptNimPreview}
+                    className="flex-1 rounded-full bg-[#7c3aed] text-white text-xs font-medium py-1 hover:bg-[#6d28d9]">
+                    Accept
+                  </button>
+                  <button
+                    onClick={() => { setNimPreview(null); setNimError(null); }}
+                    className="flex-1 rounded-full border border-[#e2e8f0] text-[#64748b] text-xs py-1 hover:bg-[#f1f5f9]">
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Right: Piece list + editor */}

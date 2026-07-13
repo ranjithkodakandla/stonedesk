@@ -445,16 +445,19 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
                   <UploadWorkspace
                     project={project}
                     onDataChange={refreshWorkspace}
+                    onSwitchToManual={() => setEntryMode('manual')}
                   />
                 )}
-                {/* Always visible — shows ALL pieces regardless of entry mode */}
-                <PiecesTable
-                  pieces={pieces}
-                  project={project}
-                  onDelete={deletePiece}
-                  onDataChange={refreshWorkspace}
-                  onLoadDrawing={handleLoadDrawing}
-                />
+                {/* Manual Entry only — Automated Upload has its own review grid with the same search/checkbox/Edit/Delete pattern for draft rows */}
+                {entryMode === 'manual' && (
+                  <PiecesTable
+                    pieces={pieces}
+                    project={project}
+                    onDelete={deletePiece}
+                    onDataChange={refreshWorkspace}
+                    onLoadDrawing={handleLoadDrawing}
+                  />
+                )}
               </div>
 
               {/* Source Data Footer */}

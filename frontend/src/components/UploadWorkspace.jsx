@@ -1,7 +1,8 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import UploadGrid, { blankRow, UPLOAD_COLUMNS } from './UploadGrid';
 import PdfReviewModal from './PdfReviewModal';
+import { mergeNimRowsForPage } from '../utils/nimUtils';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
@@ -102,7 +103,7 @@ const BulkEditPanel = ({ selectionCount, onApply }) => {
     <div className="border-t border-[#e2e8f0] bg-[#f8fafc] px-4 py-3">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs font-semibold text-[#475569] shrink-0">
-          Bulk Edit{selectionCount ? ` — ${selectionCount} rows` : ' (select rows first)'}
+          Bulk Edit{selectionCount ? ` — ${selectionCount} row${selectionCount !== 1 ? 's' : ''} in view` : ' (no rows match)'}
         </span>
         <select value={field} onChange={e => { setField(e.target.value); setValue(''); }}
           className="rounded border border-[#cbd5e1] bg-white px-2 py-1 text-xs text-[#334155]">
@@ -155,7 +156,7 @@ const DraftItem = ({ draft, onResume, onDelete }) => (
 );
 
 // ── Main UploadWorkspace ──────────────────────────────────────────────────────
-const UploadWorkspace = ({ project, onDataChange }) => {
+const UploadWorkspace = ({ project, onDataChange, onSwitchToManual }) => {
   const [step, setStep]               = useState('upload'); // 'upload' | 'review' | 'saved'
   const [files, setFiles]             = useState([]);       // {file, status, progress, rowCount, confidence}
   const [rows, setRows]               = useState([]);
@@ -165,16 +166,22 @@ const UploadWorkspace = ({ project, onDataChange }) => {
   const [showDrafts, setShowDrafts]   = useState(false);
   const [isDraftsLoading, setIsDraftsLoading] = useState(false);
   const [filterText, setFilterText]   = useState('');
-  const [selectionCount, setSelectionCount] = useState(0);
   const [isSaving, setIsSaving]       = useState(false);
   const [saveResult, setSaveResult]   = useState(null);
   const [similarDrawing, setSimilarDrawing] = useState(null);
   const [parseErrors, setParseErrors] = useState([]);
   const [reviewData, setReviewData]   = useState(null);
   const [showReview, setShowReview]   = useState(false);
+  const [pdfFileMeta, setPdfFileMeta] = useState([]); // [{file: File, pageCount: number}]
+  const [aiMode, setAiMode]           = useState(false);
+  const [aiProgress, setAiProgress]   = useState(null); // {current, total, label} | null
+  const [checkedIds, setCheckedIds]   = useState(() => new Set()); // row checkbox selection, lifted so Edit/Duplicate/Delete/Clear can sit next to Save to Project
   const fileInputRef = useRef(null);
   const dropRef      = useRef(null);
   const gridRef      = useRef(null);
+  const aiCancelRef  = useRef(false);
+
+  const editableIds = useMemo(() => UPLOAD_COLUMNS.filter(c => c.type !== 'computed').map(c => c.id), []);
 
   // ── Drag & drop ────────────────────────────────────────────────────────────
   const onDrop = useCallback((e) => {
@@ -193,12 +200,72 @@ const UploadWorkspace = ({ project, onDataChange }) => {
 
   const removeFile = (idx) => setFiles(prev => prev.filter((_, i) => i !== idx));
 
+  // ── Full-PDF AI parse pass (used when "Parse with AI" is checked) ──────────
+  // Loops the same per-page NIM endpoint used by "Re-parse with AI" in the
+  // review modal, across every page of every uploaded file, replacing the
+  // traditional parser's rows for each page as results come in. Each page
+  // takes ~60-150s, so this can take a long time on multi-page PDFs -- runs
+  // with visible progress and can be cancelled; any page that fails keeps its
+  // traditional-parser result instead of losing data.
+  const runAiParsePass = async (initialRows, fileMetas) => {
+    aiCancelRef.current = false;
+    const totalPages = fileMetas.reduce((sum, m) => sum + m.pageCount, 0);
+    if (!totalPages) return;
+
+    let currentRows = initialRows;
+    let done = 0;
+    setAiProgress({ current: 0, total: totalPages, label: 'Starting AI parse…' });
+
+    for (const meta of fileMetas) {
+      for (let localIdx = 0; localIdx < meta.pageCount; localIdx++) {
+        if (aiCancelRef.current) { setAiProgress(null); return; }
+        const pageNum = localIdx + 1;
+        setAiProgress({
+          current: done, total: totalPages,
+          label: `Parsing ${meta.file.name} — page ${pageNum} of ${meta.pageCount}…`,
+        });
+        try {
+          const fd = new FormData();
+          fd.append('file', meta.file);
+          const res = await axios.post(
+            `${API_BASE}/projects/${project.id}/upload-pdf/parse-page-nim/?page_index=${localIdx}`,
+            fd,
+            { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 180000 }
+          );
+          const nimRows = res.data.rows || [];
+          if (nimRows.length) {
+            currentRows = mergeNimRowsForPage(currentRows, nimRows, pageNum);
+            // UploadGrid only syncs its internal row state from the initialRows
+            // prop once, on mount -- pushing straight through its own imperative
+            // setRows (like the bulk-edit and template-apply flows already do)
+            // is what actually keeps the visible grid, Download CSV, Save Draft,
+            // and Save to Project in sync with each page as AI results land.
+            if (gridRef.current?.setRows) {
+              gridRef.current.setRows(currentRows);
+            } else {
+              setRows(currentRows);
+            }
+          }
+        } catch (err) {
+          setParseErrors(prev => [...prev,
+            `AI parse failed for ${meta.file.name} page ${pageNum}: ` +
+            `${err.response?.data?.detail || err.message} (kept traditional result for this page)`]);
+        }
+        done += 1;
+      }
+    }
+    setAiProgress(null);
+  };
+
+  const cancelAiParse = () => { aiCancelRef.current = true; };
+
   // ── Parse PDFs ─────────────────────────────────────────────────────────────
   const parsePDFs = async () => {
     if (!files.length || !project.id) return;
     setParseErrors([]);
     const allRows = [];
     const errs = [];
+    const fileMetasLocal = []; // built alongside setPdfFileMeta so it's usable immediately
 
     for (let i = 0; i < files.length; i++) {
       const entry = files[i];
@@ -224,6 +291,9 @@ const UploadWorkspace = ({ project, onDataChange }) => {
           setSimilarDrawing(res.data.similar_drawing);
         }
         if (res.data.review_data?.pages?.length) {
+          const pageCount = res.data.review_data.pages.length;
+          fileMetasLocal.push({ file: entry.file, pageCount });
+          setPdfFileMeta(prev => [...prev, { file: entry.file, pageCount }]);
           setReviewData(prev => {
             if (!prev) return res.data.review_data;
             // Merge pages from multiple PDFs
@@ -236,21 +306,53 @@ const UploadWorkspace = ({ project, onDataChange }) => {
       }
     }
 
+    let normalizedRows = [];
     if (allRows.length > 0) {
-      setRows(allRows.map((r, i) => {
+      normalizedRows = allRows.map((r, i) => {
         const wo = r.weight_override ?? r.weight_kg ?? r['Weight (kg)'];
         const weightKg =
           wo !== undefined && wo !== null && wo !== ''
             ? String(wo).trim()
             : '';
         return { ...blankRow(), ...r, weight_kg: weightKg || r.weight_kg || '', _id: i + 1 };
-      }));
+      });
+      setRows(normalizedRows);
       setStep('review');
     } else if (errs.length === 0) {
       errs.push('No rows could be extracted. The PDF format may not be supported — please review the file or add rows manually.');
       setStep('review');
     }
     setParseErrors(errs);
+
+    if (aiMode && normalizedRows.length && fileMetasLocal.length) {
+      runAiParsePass(normalizedRows, fileMetasLocal); // not awaited -- runs in background, updates rows as it goes
+    }
+  };
+
+  // ── Download extracted data as CSV (client-side, no backend round-trip) ─────
+  const downloadCSV = () => {
+    const currentRows = gridRef.current?.getRows() || rows;
+    if (!currentRows.length) return;
+    const calcCtx = { material: project.material, thickness: project.thickness };
+    const escapeCell = (v) => {
+      const s = String(v ?? '');
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const cellValue = (c, r) => (c.type === 'computed' ? c.fn(r, calcCtx) : r[c.id]);
+    const lines = [
+      UPLOAD_COLUMNS.map(c => escapeCell(c.label)).join(','),
+      ...currentRows.map(r => UPLOAD_COLUMNS.map(c => escapeCell(cellValue(c, r))).join(',')),
+    ];
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const safeName = (project.name || 'stonedesk-export').replace(/[^a-z0-9-_]+/gi, '_');
+    a.download = `${safeName}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   // ── Draft operations ───────────────────────────────────────────────────────
@@ -325,19 +427,83 @@ const UploadWorkspace = ({ project, onDataChange }) => {
   };
 
   // ── Bulk apply (from BulkEditPanel) ───────────────────────────────────────
-  // BulkEditPanel doesn't know about selected rows — we apply to all displayRows that match selection
-  // Since UploadGrid manages selection internally, we use a simpler "apply to ALL current rows" flow
-  // when no selection info is available. A future enhancement can wire up per-row selection.
+  // Applies to whatever the grid is currently filtered to (the search box)
+  // so "Apply to Selection" only touches the rows visibly in scope instead of
+  // silently rewriting the entire table.
+  const bulkTargetText = (filterText || '').toLowerCase();
+  const matchesBulkTarget = useCallback((r) => {
+    if (!bulkTargetText) return true;
+    return editableIds.some(id => String(r[id] || '').toLowerCase().includes(bulkTargetText));
+  }, [bulkTargetText, editableIds]);
+
+  const bulkMatchCount = useMemo(() => rows.filter(matchesBulkTarget).length, [rows, matchesBulkTarget]);
+
   const handleBulkApply = (field, value) => {
-    const updated = (gridRef.current?.getRows() || rows).map(r => ({ ...r, [field]: value, _confidence: { ...r._confidence, [field]: undefined } }));
+    const current = gridRef.current?.getRows() || rows;
+    const updated = current.map(r => matchesBulkTarget(r)
+      ? { ...r, [field]: value, _confidence: { ...r._confidence, [field]: undefined } }
+      : r);
     gridRef.current?.setRows(updated);
     setRows(updated);
+  };
+
+  // ── Row checkbox selection (mirrors PiecesTable's search + checkbox + Edit/Delete Selected/Clear Selection) ──
+  // Lifted here (rather than owned inside UploadGrid) so the action buttons can
+  // sit in the header bar next to Save to Project instead of a second toolbar.
+  const toggleChecked = useCallback((id) => {
+    setCheckedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleAllChecked = useCallback((ids, checked) => {
+    setCheckedIds(prev => {
+      const next = new Set(prev);
+      ids.forEach(id => checked ? next.add(id) : next.delete(id));
+      return next;
+    });
+  }, []);
+
+  const clearChecked = useCallback(() => setCheckedIds(new Set()), []);
+
+  // Drop stale checkbox ids once their rows are gone (deleted / re-parsed away)
+  useEffect(() => {
+    setCheckedIds(prev => {
+      if (prev.size === 0) return prev;
+      const liveIds = new Set(rows.map(r => r._id));
+      const next = new Set([...prev].filter(id => liveIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [rows]);
+
+  const duplicateChecked = () => {
+    if (checkedIds.size === 0) return;
+    const current = gridRef.current?.getRows() || rows;
+    const next = [];
+    current.forEach(r => {
+      next.push(r);
+      if (checkedIds.has(r._id)) next.push({ ...r, _id: Date.now() + Math.random() });
+    });
+    gridRef.current?.setRows(next);
+    setRows(next);
+    clearChecked();
+  };
+
+  const deleteChecked = () => {
+    if (checkedIds.size === 0) return;
+    const current = gridRef.current?.getRows() || rows;
+    const next = current.filter(r => !checkedIds.has(r._id));
+    gridRef.current?.setRows(next);
+    setRows(next);
+    clearChecked();
   };
 
   // ── Reset / start over ─────────────────────────────────────────────────────
   const resetAll = () => {
     setStep('upload'); setFiles([]); setRows([]); setDraftId(null);
-    setDraftName(''); setParseErrors([]); setSimilarDrawing(null);
+    setDraftName(''); setParseErrors([]); setSimilarDrawing(null); setFilterText('');
     setSaveResult(null); setReviewData(null); setShowReview(false);
   };
 
@@ -376,6 +542,27 @@ const UploadWorkspace = ({ project, onDataChange }) => {
               <FileEntry key={i} {...f} onRemove={() => removeFile(i)} />
             ))}
           </div>
+        )}
+
+        {/* AI parse mode toggle */}
+        {files.length > 0 && (
+          <label className="flex items-start gap-2.5 rounded-xl border border-[#e2e8f0] bg-[#f8fafc] px-4 py-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={aiMode}
+              onChange={e => setAiMode(e.target.checked)}
+              disabled={isParsing || !!aiProgress}
+              className="mt-0.5 h-4 w-4 rounded border-[#cbd5e1] text-[#7c3aed] focus:ring-[#7c3aed]"
+            />
+            <span>
+              <span className="block text-sm font-medium text-[#334155]">✦ Parse with AI (slower, more accurate)</span>
+              <span className="block text-xs text-[#94a3b8] mt-0.5">
+                Runs every page through the AI vision model instead of the fast coordinate parser.
+                ~60-150s per page — a 19-page PDF can take 20-40+ minutes. Best for drawings where the
+                fast parser tends to misread complex multi-piece pages.
+              </span>
+            </span>
+          </label>
         )}
 
         {/* Error list */}
@@ -438,7 +625,7 @@ const UploadWorkspace = ({ project, onDataChange }) => {
   if (step === 'review') {
     return (
       <>
-      <div className="flex flex-col" style={{ minHeight: 560 }}>
+      <div className="flex flex-col" style={{ height: 'calc(100vh - 420px)', minHeight: 360 }}>
         {/* Header bar */}
         <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#edf2f7]">
           <div className="flex items-center gap-3">
@@ -455,12 +642,22 @@ const UploadWorkspace = ({ project, onDataChange }) => {
                 Review Shapes
               </button>
             )}
+            {/* Download CSV button */}
+            {rows.length > 0 && (
+              <button type="button" onClick={downloadCSV}
+                className="rounded-full border border-[#cbd5e1] bg-white px-3 py-1.5 text-xs font-medium text-[#334155] hover:bg-[#f1f5f9]">
+                ⬇ Download CSV
+              </button>
+            )}
             {/* Filter */}
             <input
               value={filterText} onChange={e => setFilterText(e.target.value)}
               placeholder="Search…"
               className="rounded-full border border-[#cbd5e1] bg-white px-3 py-1.5 text-xs text-[#334155] w-32 focus:outline-none focus:ring-1 focus:ring-[#2563eb]"
             />
+            {filterText && (
+              <span className="text-xs text-[#94a3b8]">{bulkMatchCount} of {rows.length}</span>
+            )}
             {/* Draft name */}
             <input
               value={draftName} onChange={e => setDraftName(e.target.value)}
@@ -471,6 +668,26 @@ const UploadWorkspace = ({ project, onDataChange }) => {
               className="rounded-full border border-[#cbd5e1] bg-white px-3 py-1.5 text-xs font-medium text-[#334155] hover:bg-[#f1f5f9]">
               💾 Save Draft
             </button>
+            {/* Checkbox-selection actions — same Duplicate/Delete Selected/Clear Selection pattern as Manual Entry's saved-pieces table.
+                No "Edit" here: double-click any cell to edit inline. Bulk destination/spec edits happen after
+                Save to Project, in Manual Entry, which already has the mature matrix + technical-details editor. */}
+            {checkedIds.size > 0 && (
+              <>
+                <span className="text-xs text-[#475569] font-medium">{checkedIds.size} selected</span>
+                <button type="button" onClick={duplicateChecked}
+                  className="rounded-full border border-[#cbd5e1] bg-white px-3 py-1.5 text-xs font-medium text-[#334155] hover:bg-[#f1f5f9]">
+                  Duplicate Selected ({checkedIds.size})
+                </button>
+                <button type="button" onClick={deleteChecked}
+                  className="rounded-full border border-rose-200 bg-white px-3 py-1.5 text-xs font-medium text-rose-500 hover:bg-rose-50">
+                  Delete Selected ({checkedIds.size})
+                </button>
+                <button type="button" onClick={clearChecked}
+                  className="rounded-full border border-[#cbd5e1] bg-white px-3 py-1.5 text-xs font-medium text-[#64748b] hover:bg-[#f1f5f9]">
+                  Clear Selection
+                </button>
+              </>
+            )}
             <button
               type="button"
               disabled={isSaving || !project.id}
@@ -482,6 +699,28 @@ const UploadWorkspace = ({ project, onDataChange }) => {
             </button>
           </div>
         </div>
+
+        {/* AI parse progress -- runs in background while this review screen is open */}
+        {aiProgress && (
+          <div className="rounded-xl border border-[#7c3aed]/30 bg-[#f5f3ff] px-4 py-3 my-2">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs font-medium text-[#5b21b6]">
+                ✦ {aiProgress.label || `Parsed ${aiProgress.current} of ${aiProgress.total} pages…`}
+              </p>
+              <button type="button" onClick={cancelAiParse}
+                className="text-[10px] text-[#7c3aed] hover:underline shrink-0">
+                Cancel AI parse
+              </button>
+            </div>
+            <div className="mt-2 h-1.5 w-full rounded-full bg-[#ede9fe] overflow-hidden">
+              <div className="h-full bg-[#7c3aed] transition-all"
+                   style={{ width: `${aiProgress.total ? (aiProgress.current / aiProgress.total) * 100 : 0}%` }} />
+            </div>
+            <p className="text-[10px] text-[#94a3b8] mt-1">
+              {aiProgress.current} / {aiProgress.total} pages — rows below update as each page finishes; you can review/edit already-parsed pages now.
+            </p>
+          </div>
+        )}
 
         {/* Similar drawing suggestion */}
         {similarDrawing && (
@@ -523,17 +762,22 @@ const UploadWorkspace = ({ project, onDataChange }) => {
         )}
 
         {/* Spreadsheet */}
-        <div className="flex-1 rounded-xl border border-[#e2e8f0] overflow-hidden flex flex-col mt-2" style={{ minHeight: 400 }}>
+        <div className="flex-1 rounded-xl border border-[#e2e8f0] overflow-hidden flex flex-col mt-2" style={{ minHeight: 0 }}>
           <UploadGrid
             ref={gridRef}
             initialRows={rows}
             onChange={setRows}
             filterText={filterText}
+            material={project.material}
+            thickness={project.thickness}
+            checkedIds={checkedIds}
+            onToggleChecked={toggleChecked}
+            onToggleAllChecked={toggleAllChecked}
           />
         </div>
 
-        {/* Bulk edit panel */}
-        <BulkEditPanel selectionCount={rows.length} onApply={handleBulkApply} />
+        {/* Bulk edit panel — scoped to the current search / Drawing # filter */}
+        <BulkEditPanel selectionCount={bulkMatchCount} onApply={handleBulkApply} />
 
         {/* Footer hint */}
         <p className="text-[10px] text-[#94a3b8] mt-2 text-center">
@@ -546,6 +790,8 @@ const UploadWorkspace = ({ project, onDataChange }) => {
         <PdfReviewModal
           rows={gridRef.current?.getRows() || rows}
           reviewData={reviewData}
+          pdfFileMeta={pdfFileMeta}
+          projectId={project.id}
           onClose={() => setShowReview(false)}
           onSave={(corrected) => {
             gridRef.current?.setRows(corrected);
@@ -567,13 +813,22 @@ const UploadWorkspace = ({ project, onDataChange }) => {
           <span className="font-semibold text-[#059669]">{saveResult.created}</span> parts added to the project.
           {saveResult.skipped > 0 && ` (${saveResult.skipped} incomplete rows skipped)`}
         </p>
-        <p className="text-xs text-[#94a3b8]">
-          You can now view all parts in the table below, generate a crate plan, and export.
-        </p>
+        <div className="rounded-xl border border-[#a78bfa]/30 bg-violet-50 px-4 py-3 text-left">
+          <p className="text-xs font-semibold text-violet-700">Need to fix a drawing's building/floor/flat layout or sink, edge, radius details?</p>
+          <p className="text-xs text-violet-600 mt-1">
+            Go to Manual Entry, search the Part # or Drawing # below, select it, and click Edit — that loads the
+            whole drawing into the same destination-matrix and technical-details editor Manual Entry always uses,
+            whether the parts came from a PDF upload or manual entry.
+          </p>
+        </div>
         <div className="flex justify-center gap-3 pt-2">
           <button type="button" onClick={resetAll}
             className="rounded-full border border-[#cbd5e1] bg-white px-5 py-2.5 text-sm font-medium text-[#334155] hover:bg-[#f1f5f9]">
             Upload More PDFs
+          </button>
+          <button type="button" onClick={() => onSwitchToManual?.()}
+            className="rounded-full bg-[#7c3aed] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#6d28d9]">
+            Go to Manual Entry →
           </button>
         </div>
       </div>

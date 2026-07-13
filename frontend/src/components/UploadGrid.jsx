@@ -1,6 +1,11 @@
 import React, { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { calcWeight } from '../utils/pieceCalc';
 
 // ── Column definitions ────────────────────────────────────────────────────────
+// Computed columns' `fn` receives (row, ctx) where ctx = { material, thickness }
+// (project-level context passed down from UploadWorkspace) -- mirrors the live
+// Sq Ft / Wt kg estimates Manual Entry (PiecesGrid) already shows, so parsed
+// rows get the same automatic calculation without the user typing anything in.
 export const UPLOAD_COLUMNS = [
   { id: 'drawing',   label: 'Drawing',    w: 78,  type: 'text' },
   { id: 'unit',      label: 'Unit',       w: 68,  type: 'text' },
@@ -16,9 +21,14 @@ export const UPLOAD_COLUMNS = [
   { id: 'thickness', label: 'Thick.',     w: 54,  type: 'select',
     options: ['2CM','3CM','Mixed'] },
   { id: 'qty',       label: 'Qty',        w: 40,  type: 'number' },
-  { id: 'weight_kg', label: 'Wt (kg)',    w: 52,  type: 'number' },
   { id: '_sqft',     label: 'Sq Ft',      w: 52,  type: 'computed',
-    fn: r => r.length && r.width ? (parseFloat(r.length)*parseFloat(r.width)/144*(parseInt(r.qty)||1)).toFixed(1) : '' },
+    fn: (r) => r.length && r.width ? (parseFloat(r.length)*parseFloat(r.width)/144*(parseInt(r.qty)||1)).toFixed(1) : '' },
+  { id: '_est_weight', label: 'Wt (kg)',  w: 56,  type: 'computed',
+    fn: (r, ctx = {}) => {
+      const wt = calcWeight(r.length, r.width, r.qty, ctx.material, r.thickness, ctx.thickness);
+      return wt > 0 ? wt.toFixed(1) : '';
+    } },
+  { id: 'weight_kg', label: 'Wt Override',w: 66,  type: 'number' },
   { id: 'sink_type', label: 'Sink',       w: 90,  type: 'select',
     options: ['No Sink','Single Bowl','Double Bowl','Bar Sink','Undermount'] },
   { id: 'sink_cut',  label: 'Cutouts',    w: 64,  type: 'text' },
@@ -65,7 +75,8 @@ const validateRow = (row) => {
 };
 
 // ── UploadGrid ────────────────────────────────────────────────────────────────
-const UploadGrid = React.forwardRef(({ initialRows = [], onChange, filterText = '' }, ref) => {
+const UploadGrid = React.forwardRef(({ initialRows = [], onChange, filterText = '', material, thickness, checkedIds, onToggleChecked, onToggleAllChecked }, ref) => {
+  const calcCtx = useMemo(() => ({ material, thickness }), [material, thickness]);
   const [rows, setRowsRaw] = useState(() => initialRows.map(r => ({ ...blankRow(), ...r })));
   const [anchor, setAnchor] = useState(null);   // {r, c} index into filteredRows
   const [cursor, setCursor] = useState(null);   // {r, c}
@@ -144,6 +155,8 @@ const UploadGrid = React.forwardRef(({ initialRows = [], onChange, filterText = 
 
   const colIdx = (colId) => UPLOAD_COLUMNS.findIndex(c => c.id === colId);
 
+  const allVisibleChecked = displayRows.length > 0 && displayRows.every(r => checkedIds.has(r._id));
+
   // ── Selection helpers ──────────────────────────────────────────────────────
   const selRange = useMemo(() => {
     if (!anchor || !cursor) return null;
@@ -202,12 +215,14 @@ const UploadGrid = React.forwardRef(({ initialRows = [], onChange, filterText = 
     setCursor({ r: rows.length, c: 0 });
   }, [rows, pushHistory]);
 
-  const deleteSelectedRows = useCallback(() => {
-    if (!selRange) return;
-    const selectedRowIds = new Set(displayRows.slice(selRange.r1, selRange.r2 + 1).map(r => r._id));
-    pushHistory(rows.filter(r => !selectedRowIds.has(r._id)));
-    setAnchor(null); setCursor(null);
-  }, [selRange, displayRows, rows, pushHistory]);
+  const duplicateRow = useCallback((id) => {
+    const idx = rows.findIndex(r => r._id === id);
+    if (idx < 0) return;
+    const copy = { ...rows[idx], _id: Date.now() + Math.random() };
+    const next = [...rows];
+    next.splice(idx + 1, 0, copy);
+    pushHistory(next);
+  }, [rows, pushHistory]);
 
   // ── Copy / Paste ──────────────────────────────────────────────────────────
   const copySelection = useCallback(() => {
@@ -219,7 +234,7 @@ const UploadGrid = React.forwardRef(({ initialRows = [], onChange, filterText = 
       const cells = [];
       for (let ci = selRange.c1; ci <= selRange.c2; ci++) {
         const col = UPLOAD_COLUMNS[ci];
-        cells.push(col.type === 'computed' ? (col.fn(row) || '') : String(row[col.id] ?? ''));
+        cells.push(col.type === 'computed' ? (col.fn(row, calcCtx) || '') : String(row[col.id] ?? ''));
       }
       lines.push(cells.join('\t'));
     }
@@ -373,7 +388,12 @@ const UploadGrid = React.forwardRef(({ initialRows = [], onChange, filterText = 
       <table className="border-collapse text-xs w-full select-none" style={{ minWidth: UPLOAD_COLUMNS.reduce((s, c) => s + c.w, 36) }}>
         <thead className="sticky top-0 z-20 bg-[#f1f5f9] border-b-2 border-[#cbd5e1]">
           <tr>
-            <th className="sticky left-0 z-30 bg-[#f1f5f9] w-9 px-1 py-2 text-center text-[#94a3b8] border-r border-[#e2e8f0]">#</th>
+            <th className="sticky left-0 z-30 bg-[#f1f5f9] w-7 px-1 py-2 text-center border-r border-[#e2e8f0]">
+              <input type="checkbox" checked={allVisibleChecked}
+                onChange={() => onToggleAllChecked?.(displayRows.map(r => r._id), !allVisibleChecked)}
+                className="rounded border-[#cbd5e1]" title="Select all visible rows" />
+            </th>
+            <th className="sticky left-7 z-30 bg-[#f1f5f9] w-9 px-1 py-2 text-center text-[#94a3b8] border-r border-[#e2e8f0]">#</th>
             {UPLOAD_COLUMNS.map((col) => (
               <th key={col.id}
                 className="px-2 py-2 text-left font-semibold text-[#475569] whitespace-nowrap cursor-pointer hover:bg-[#e8eef5] border-r border-[#e2e8f0] last:border-r-0"
@@ -394,15 +414,19 @@ const UploadGrid = React.forwardRef(({ initialRows = [], onChange, filterText = 
             const hasError = errors.size > 0;
             return (
               <tr key={row._id}
-                className={`border-b border-[#f1f5f9] ${hasError ? 'bg-rose-50/30' : ''}`}
+                className={`border-b border-[#f1f5f9] ${checkedIds.has(row._id) ? 'bg-blue-50/50' : hasError ? 'bg-rose-50/30' : ''}`}
                 onDoubleClick={() => {
                   if (anchor?.r === ri) startEdit(ri, anchor.c);
                 }}>
-                <td className="sticky left-0 z-10 bg-white px-1 py-0.5 text-center text-[#94a3b8] border-r border-[#e2e8f0] font-mono text-[10px]">
+                <td className="sticky left-0 z-10 bg-white px-1 py-0.5 text-center border-r border-[#e2e8f0]">
+                  <input type="checkbox" checked={checkedIds.has(row._id)} onChange={() => onToggleChecked?.(row._id)}
+                    className="rounded border-[#cbd5e1]" />
+                </td>
+                <td className="sticky left-7 z-10 bg-white px-1 py-0.5 text-center text-[#94a3b8] border-r border-[#e2e8f0] font-mono text-[10px]">
                   {ri + 1}
                 </td>
                 {UPLOAD_COLUMNS.map((col, ci) => {
-                  const val = col.type === 'computed' ? col.fn(row) : (row[col.id] ?? '');
+                  const val = col.type === 'computed' ? col.fn(row, calcCtx) : (row[col.id] ?? '');
                   const conf = row._confidence?.[col.id];
                   const isEditing = editCell?.r === ri && editCell?.c === ci;
                   const selected = isSel(ri, ci);
@@ -464,7 +488,13 @@ const UploadGrid = React.forwardRef(({ initialRows = [], onChange, filterText = 
                     </td>
                   );
                 })}
-                <td className="px-1 py-0.5 text-center">
+                <td className="px-1 py-0.5 text-center whitespace-nowrap">
+                  <button type="button"
+                    className="text-[#94a3b8] hover:text-[#2563eb] text-[10px] px-1 leading-none"
+                    onClick={() => duplicateRow(row._id)}
+                    title="Duplicate row">
+                    ⧉
+                  </button>
                   <button type="button"
                     className="text-[#94a3b8] hover:text-rose-500 text-[10px] px-1 leading-none"
                     onClick={() => pushHistory(rows.filter(r => r._id !== row._id))}
@@ -477,7 +507,7 @@ const UploadGrid = React.forwardRef(({ initialRows = [], onChange, filterText = 
           })}
           {displayRows.length === 0 && (
             <tr>
-              <td colSpan={UPLOAD_COLUMNS.length + 2} className="py-12 text-center text-[#94a3b8] text-sm">
+              <td colSpan={UPLOAD_COLUMNS.length + 3} className="py-12 text-center text-[#94a3b8] text-sm">
                 {filterText ? 'No rows match the filter.' : 'No rows yet — upload a PDF or add rows manually.'}
               </td>
             </tr>
@@ -485,17 +515,14 @@ const UploadGrid = React.forwardRef(({ initialRows = [], onChange, filterText = 
         </tbody>
       </table>
 
-      {/* Toolbar: add row / bulk delete */}
-      <div className="sticky bottom-0 bg-white border-t border-[#e2e8f0] px-3 py-1.5 flex items-center gap-3 z-10">
+      {/* Toolbar: add row — checkbox selection actions (Edit/Duplicate/Delete/Clear) live in the header bar next to Save to Project */}
+      <div className="sticky bottom-0 bg-white border-t border-[#e2e8f0] px-3 py-1.5 flex items-center gap-3 z-10 flex-wrap">
         <button type="button" onClick={addRow}
           className="text-xs text-[#2563eb] hover:text-[#1d4ed8] font-medium">
           + Add Row
         </button>
-        {selRange && (
-          <button type="button" onClick={deleteSelectedRows}
-            className="text-xs text-rose-500 hover:text-rose-700 font-medium">
-            Delete Selected Rows
-          </button>
+        {checkedIds.size > 0 && (
+          <span className="text-xs text-[#475569] font-medium">{checkedIds.size} selected</span>
         )}
         <span className="text-[10px] text-[#94a3b8] ml-auto">
           {rows.length} rows · Double-click or F2 to edit · Ctrl+C copy · Ctrl+V paste · Ctrl+D fill down · Ctrl+Z undo
