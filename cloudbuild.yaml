@@ -24,11 +24,13 @@ steps:
       - deploy
       - stonedesk-backend
       - --image=gcr.io/$PROJECT_ID/stonedesk-backend:$SHORT_SHA
-      - --region=us-central1
+      - --region=asia-south1
       - --platform=managed
       - --allow-unauthenticated
-      - --set-env-vars=MONGODB_DB=virgin
-      # Set MONGODB_URI and CORS_ORIGINS via Cloud Run Secret Manager or substitutions
+      - --update-env-vars=MONGODB_DB=virgin
+      # MONGODB_URI and CORS_ORIGINS are already set on the live service and are
+      # intentionally left untouched here — --update-env-vars merges rather than
+      # replaces, so this deploy won't wipe them.
 
   # --- Frontend ---
   - name: 'gcr.io/cloud-builders/docker'
@@ -58,12 +60,12 @@ steps:
       - deploy
       - stonedesk-frontend
       - --image=gcr.io/$PROJECT_ID/stonedesk-frontend:$SHORT_SHA
-      - --region=us-central1
+      - --region=asia-south1
       - --platform=managed
       - --allow-unauthenticated
 
 substitutions:
-  _BACKEND_URL: https://stonedesk-backend-xxxxxxxxxx-uc.a.run.app
+  _BACKEND_URL: https://stonedesk-backend-149130710868.asia-south1.run.app
 
 images:
   - gcr.io/$PROJECT_ID/stonedesk-backend:$SHORT_SHA
