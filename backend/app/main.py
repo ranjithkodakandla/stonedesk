@@ -2,12 +2,13 @@ from copy import deepcopy
 from datetime import date, datetime
 from io import BytesIO
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import certifi
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Response, UploadFile, File, Body
+from fastapi import FastAPI, HTTPException, Request, Response, UploadFile, File, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pymongo import MongoClient, ReturnDocument
@@ -32,6 +33,8 @@ from .services.planning_engine import (
     piece_weight as planning_piece_weight,
     reset_custom_color_densities,
     reset_wood_density_factors,
+    reset_project_density_override,
+    set_project_density_override,
     weight_factor as planning_weight_factor,
 )
 
@@ -325,6 +328,7 @@ def project_response(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         "planner_v3_unshippable_crates": _json_safe_floats(doc.get("planner_v3_unshippable_crates") or []),
         "planner_v3_container_optimization": _json_safe_floats(doc.get("planner_v3_container_optimization")),
         "delivery_payload_cap_kg": float(doc.get("delivery_payload_cap_kg") or 24000),
+        "density_override_kg_m3": doc.get("density_override_kg_m3"),
         "created_at": as_iso(doc.get("created_at")),
         "updated_at": as_iso(doc.get("updated_at")),
     }
@@ -811,6 +815,28 @@ app.add_middleware(
     ],
 )
 
+_PROJECT_ID_IN_PATH = re.compile(r"/projects/(\d+)")
+
+
+@app.middleware("http")
+async def apply_project_density_override(request: Request, call_next):
+    """
+    Scopes every per-project weight calculation to that project's density override
+    (if any) for the duration of the request — see get_color_density() in
+    planning_engine.py, the single choke point all weight math funnels through.
+    """
+    match = _PROJECT_ID_IN_PATH.search(request.url.path)
+    token = None
+    if match:
+        project_id = int(match.group(1))
+        project_doc = projects_col.find_one({"id": project_id}, {"density_override_kg_m3": 1, "_id": 0})
+        token = set_project_density_override((project_doc or {}).get("density_override_kg_m3"))
+    try:
+        return await call_next(request)
+    finally:
+        if token is not None:
+            reset_project_density_override(token)
+
 
 @app.get("/health")
 def health():
@@ -855,6 +881,25 @@ def create_project():
 def get_project(project_id: int):
     project = projects_col.find_one({"id": project_id}, {"_id": 0})
     return project_response(project)
+
+
+@app.patch("/api/projects/{project_id}/density-override")
+def patch_density_override(project_id: int, data: Dict[str, Any] = Body(...)):
+    """
+    Per-project density override (kg/m³) — takes precedence over the shared/global
+    stone color density for this project only, for every weight calc (summary,
+    dispatch inventory, crate planning). Pass density_kg_m3: null to clear it and
+    fall back to the global color density again.
+    """
+    raw = data.get("density_kg_m3")
+    value = float(raw) if raw not in (None, "") else None
+    if value is not None and value <= 0:
+        raise HTTPException(status_code=400, detail="density_kg_m3 must be positive")
+    projects_col.update_one(
+        {"id": project_id},
+        {"$set": {"density_override_kg_m3": value, "updated_at": utc_now()}},
+    )
+    return {"density_override_kg_m3": value}
 
 
 @app.patch("/api/projects/{project_id}/planner-payload")
@@ -1633,6 +1678,50 @@ def get_dispatch_hierarchy(project_id: int):
     return discover_dispatch_hierarchy(pieces)
 
 
+@app.get("/api/projects/{project_id}/dispatch-parts")
+def get_dispatch_parts(project_id: int):
+    """
+    Returns the flat, unfiltered list of parts for the project's Excel-style
+    crate-planning filter UI — one row per physical piece, no aggregation.
+    """
+    from .services.planning_engine import piece_weight as pw, parse_float
+
+    pieces = list(pieces_col.find({"project_id": project_id}, {"_id": 0}))
+    if not pieces:
+        return []
+
+    project_doc = projects_col.find_one({"id": project_id}, {"_id": 0})
+    material = (project_doc or {}).get("material", "Granite")
+    project_thickness = (project_doc or {}).get("thickness", "3CM")
+    stone_color = str((project_doc or {}).get("stone_color", "") or "")
+
+    def piece_sqft(p: Dict[str, Any]) -> float:
+        L = parse_float(p.get("length"))
+        W = parse_float(p.get("width"))
+        return (L * W) / 144.0 if L > 0 and W > 0 else 0.0
+
+    out = []
+    for p in pieces:
+        out.append({
+            "id": p.get("id"),
+            "part_no": str(p.get("part_no", "") or ""),
+            "part": str(p.get("part", "") or ""),
+            "category": str(p.get("category", "") or ""),
+            "drawing": str(p.get("drawing", "") or ""),
+            "unit": str(p.get("unit", "") or ""),
+            "building": str(p.get("building", "") or ""),
+            "floor": str(p.get("floor", "") or ""),
+            "flat": str(p.get("flat", "") or ""),
+            "length": parse_float(p.get("length")),
+            "width": parse_float(p.get("width")),
+            "qty": int(p.get("qty", 1) or 1),
+            "thickness": str(p.get("thickness") or project_thickness),
+            "sqft": piece_sqft(p),
+            "weight_kg": pw(p, material, project_thickness, stone_color),
+        })
+    return _json_safe_floats(out)
+
+
 # ── Operational bucket model (4 groups) ──────────────────────────────────────
 # Grouping uses standardized Part Type from the piece `part` field.
 # Falls back to derived `category` for pieces not yet migrated to new names.
@@ -2038,6 +2127,157 @@ def load_draft_crate_plan(project_id: int):
     doc = projects_col.find_one({"id": project_id}, {"planner_v3_draft_crate_plan": 1, "_id": 0})
     plan = (doc or {}).get("planner_v3_draft_crate_plan")
     return {"plan": plan}
+
+
+@app.post("/api/projects/{project_id}/manual-crate-plan")
+def save_manual_crate_plan(project_id: int, body: Dict):
+    """
+    Persist the part-level crate plan from the Excel-style crate filter UI.
+    Separate field from planner_v3_draft_crate_plan (bundle-granularity) —
+    this one is keyed by raw part ids.
+    """
+    now = utc_now()
+    raw_crates = body.get("crates") or []
+    plan = {
+        "target_weight_kg": round(float(body.get("target_weight_kg", 1900) or 1900), 2),
+        "filters": body.get("filters") or {},
+        "crates": [
+            {
+                "crate_no": c.get("crate_no"),
+                "part_ids": [pid for pid in (c.get("part_ids") or [])],
+            }
+            for c in raw_crates
+        ],
+        "saved_at": now,
+    }
+    projects_col.update_one(
+        {"id": project_id},
+        {"$set": {"manual_crate_plan": plan}},
+    )
+    return {"saved": True, "saved_at": now}
+
+
+@app.get("/api/projects/{project_id}/manual-crate-plan")
+def load_manual_crate_plan(project_id: int):
+    """Return the last saved part-level crate plan, or null if none exists."""
+    doc = projects_col.find_one({"id": project_id}, {"manual_crate_plan": 1, "_id": 0})
+    plan = (doc or {}).get("manual_crate_plan")
+    return {"plan": plan}
+
+
+@app.post("/api/projects/{project_id}/manual-crate-plan/export")
+def export_manual_crate_plan_xlsx(project_id: int, body: Dict):
+    """
+    Two-sheet XLSX export for the Excel-style crate planner: Sheet 1 is the
+    crate summary (crate #, weight, sqft, internal/external dims — computed
+    client-side and passed in), Sheet 2 is every part in every crate.
+    """
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    def _bold_header(ws, row_num, hex_color="1e293b"):
+        fill = PatternFill("solid", fgColor=hex_color)
+        font = Font(bold=True, color="FFFFFF")
+        for cell in ws[row_num]:
+            cell.fill = fill
+            cell.font = font
+
+    def _auto_width(ws):
+        for col in ws.columns:
+            max_len = max((len(str(cell.value or "")) for cell in col), default=8)
+            ws.column_dimensions[get_column_letter(col[0].column)].width = min(max_len + 2, 50)
+
+    crates = body.get("crates") or []
+    if not crates:
+        raise HTTPException(status_code=400, detail="No crates to export.")
+
+    doc = projects_col.find_one({"id": project_id}, {"name": 1, "job_number": 1, "_id": 0})
+    project_name = (doc or {}).get("name") or (doc or {}).get("job_number") or f"Project {project_id}"
+
+    all_part_ids = [pid for c in crates for pid in (c.get("part_ids") or [])]
+    pieces = list(pieces_col.find({"project_id": project_id, "id": {"$in": all_part_ids}}, {"_id": 0}))
+    pieces_by_id = {p.get("id"): p for p in pieces}
+
+    from .services.planning_engine import piece_weight as pw, parse_float
+    project_thickness = (doc or {}).get("thickness", "3CM") if doc else "3CM"
+    project_full = projects_col.find_one({"id": project_id}, {"_id": 0}) or {}
+    material = project_full.get("material", "Granite")
+    stone_color = str(project_full.get("stone_color", "") or "")
+
+    def piece_sqft(p):
+        L = parse_float(p.get("length"))
+        W = parse_float(p.get("width"))
+        return (L * W) / 144.0 if L > 0 and W > 0 else 0.0
+
+    wb = openpyxl.Workbook()
+
+    # ── Sheet 1: Crate Summary ───────────────────────────────────────────────
+    ws1 = wb.active
+    ws1.title = "Crate Summary"
+    ws1.append([
+        "Crate #", "Parts", "Weight (kg)", "Sq Ft",
+        "Internal Length (in)", "Internal Width (in)", "Internal Height (in)",
+        "External Length (in)", "External Width (in)", "External Height (in)",
+    ])
+    _bold_header(ws1, 1)
+    for c in crates:
+        part_ids = c.get("part_ids") or []
+        ws1.append([
+            c.get("crate_no"),
+            len(part_ids),
+            round(float(c.get("total_weight_kg") or 0), 2),
+            round(float(c.get("total_sqft") or 0), 2),
+            round(float(c.get("internal_length") or 0), 2),
+            round(float(c.get("internal_width") or 0), 2),
+            round(float(c.get("internal_height") or 0), 2),
+            round(float(c.get("external_length") or 0), 2),
+            round(float(c.get("external_width") or 0), 2),
+            round(float(c.get("external_height") or 0), 2),
+        ])
+    _auto_width(ws1)
+
+    # ── Sheet 2: Crate Detail — every part in every crate ────────────────────
+    ws2 = wb.create_sheet("Crate Detail")
+    ws2.append([
+        "Crate #", "Part #", "Part Type", "Category", "Drawing", "Unit",
+        "Building", "Floor", "Flat", "Length (in)", "Width (in)", "Qty",
+        "Sq Ft", "Weight (kg)",
+    ])
+    _bold_header(ws2, 1)
+    for c in crates:
+        for pid in (c.get("part_ids") or []):
+            p = pieces_by_id.get(pid)
+            if not p:
+                continue
+            ws2.append([
+                c.get("crate_no"),
+                str(p.get("part_no", "") or ""),
+                str(p.get("part", "") or ""),
+                str(p.get("category", "") or ""),
+                str(p.get("drawing", "") or ""),
+                str(p.get("unit", "") or ""),
+                str(p.get("building", "") or ""),
+                str(p.get("floor", "") or ""),
+                str(p.get("flat", "") or ""),
+                parse_float(p.get("length")),
+                parse_float(p.get("width")),
+                int(p.get("qty", 1) or 1),
+                round(piece_sqft(p), 2),
+                round(pw(p, material, project_thickness, stone_color), 2),
+            ])
+    _auto_width(ws2)
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    safe_name = "".join(ch if ch.isalnum() or ch in "-_ " else "_" for ch in project_name).strip()
+    filename = f"CratePlan_{safe_name}_{date.today().isoformat()}.xlsx"
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.delete("/api/projects/{project_id}/draft-crate-plan")

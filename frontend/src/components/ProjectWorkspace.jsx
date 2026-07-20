@@ -4,21 +4,11 @@ import Logo from './Logo';
 import EntryForm from './EntryForm';
 import UploadWorkspace from './UploadWorkspace';
 import PiecesTable from './PiecesTable';
-import PlannerSummaryTab from './PlannerSummaryTab';
-import PlannerCrateTab from './PlannerCrateTab';
-import PlannerContainerTab from './PlannerContainerTab';
 import PlannerV3Screen from './PlannerV3Screen';
 import { usePlannerStore } from '../store/plannerStore';
 import { formatNumber, getPieceWeight } from '../utils/plannerUtils';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
-
-const plannerSubTabs = [
-  { id: 'summary', label: 'Summary / Insights', step: 'Step 1' },
-  { id: 'build-plan', label: 'Dispatch & build', step: 'Step 2' },
-  { id: 'crate-plan', label: 'Crate contents', step: 'Step 3' },
-  { id: 'container-loading', label: 'Container loading', step: 'Step 4' },
-];
 
 const STATUS_CONFIG = {
   draft:                 { label: 'Draft',                  cls: 'bg-[#f1f5f9] text-[#64748b] border-[#cbd5e1]' },
@@ -112,11 +102,9 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
   };
 
   useEffect(() => {
-    if (mainTab !== 'planning' || !planningUnlocked || hasPlan || hasSavedDraftPlan) return;
-    if (activeTab === 'crate-plan' || activeTab === 'container-loading') {
-      setActiveTab('build-plan');
-    }
-  }, [mainTab, planningUnlocked, hasPlan, hasSavedDraftPlan, activeTab, setActiveTab]);
+    if (mainTab !== 'planning' || !planningUnlocked) return;
+    if (activeTab !== 'build-plan') setActiveTab('build-plan');
+  }, [mainTab, planningUnlocked, activeTab, setActiveTab]);
 
   const totalWeight = pieces.reduce((sum, piece) => sum + getPieceWeight(piece, project), 0);
   const totalSqFt = pieces.reduce((sum, piece) => sum + ((Number(piece.length || 0) * Number(piece.width || 0)) / 144) * (Number(piece.qty) || 1), 0);
@@ -500,52 +488,15 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
             </>
           )}
 
-          {/* ▸ Tab 2: Planning Workspace */}
+          {/* ▸ Tab 2: Planning Workspace — Crate Planning only, other steps hidden */}
           {mainTab === 'planning' && planningUnlocked && (
-            <>
-              <div className="border-b border-[#edf2f7] px-6 py-4">
-                <div className="flex flex-wrap gap-3">
-                  {plannerSubTabs.map((tab) => (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      onClick={() => setActiveTab(tab.id)}
-                      className={`rounded-[24px] border px-4 py-3 text-left transition-all ${
-                        activeTab === tab.id
-                          ? 'border-[#1d4ed8] bg-[#eff6ff] text-[#1d4ed8] shadow-sm'
-                          : 'border-[#dbe4f0] bg-[#f8fafc] text-[#334155] hover:bg-white'
-                      }`}
-                    >
-                      <div className="text-xs uppercase tracking-[0.16em]">{tab.step}</div>
-                      <div className="mt-1 text-sm font-semibold">{tab.label}</div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="px-6 py-6">
-                {activeTab === 'summary' && (
-                  <PlannerSummaryTab draftCratePlan={draftCratePlan} onEditPlan={openEditDraftPlan} />
-                )}
-                {activeTab === 'build-plan' && (
-                  <PlannerV3Screen
-                    projectId={projectId}
-                    savedPlan={draftCratePlan}
-                    onPlanSaved={setDraftCratePlan}
-                  />
-                )}
-                {activeTab === 'crate-plan' && (
-                  <PlannerCrateTab
-                    draftCratePlan={draftCratePlan}
-                    projectId={projectId}
-                    onPlanUpdated={setDraftCratePlan}
-                    onPlanDeleted={() => setDraftCratePlan(null)}
-                    onEditPlan={openEditDraftPlan}
-                  />
-                )}
-                {activeTab === 'container-loading' && <PlannerContainerTab />}
-              </div>
-            </>
+            <div className="px-6 py-6">
+              <PlannerV3Screen
+                projectId={projectId}
+                savedPlan={draftCratePlan}
+                onPlanSaved={setDraftCratePlan}
+              />
+            </div>
           )}
 
         </div>

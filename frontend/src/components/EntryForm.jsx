@@ -317,6 +317,61 @@ const MirrorModal = ({ drawings, loading, onClose, onApply }) => {
   );
 };
 
+// Per-project density override (kg/m³) — overrides the shared/global stone color
+// density for this project only. Every weight calc (summary, dispatch inventory,
+// crate planning) recalculates live once this is saved.
+function DensityOverrideControl({ project, onDataChange }) {
+  const [value, setValue] = useState(project.density_override_kg_m3 ?? '');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setValue(project.density_override_kg_m3 ?? '');
+  }, [project.id, project.density_override_kg_m3]);
+
+  const save = async (nextValue) => {
+    setSaving(true);
+    try {
+      await axios.patch(`${API_BASE}/projects/${project.id}/density-override`, {
+        density_kg_m3: nextValue === '' ? null : Number(nextValue),
+      });
+      onDataChange?.();
+    } catch (err) {
+      console.error('Failed to save density override', err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div>
+      <label className="label-text">Density Override (kg/m³)</label>
+      <div className="flex gap-1.5">
+        <input
+          type="number"
+          min="1"
+          placeholder="Global default"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={() => save(value)}
+          className="input-field"
+        />
+        {project.density_override_kg_m3 != null && (
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => { setValue(''); save(''); }}
+            className="rounded-lg border border-slate-200 px-2 text-xs text-slate-500 hover:bg-slate-50 whitespace-nowrap"
+            title="Clear override, use global density again"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      <p className="mt-1 text-[10px] text-slate-400">This project only — leave blank to use the global color density.</p>
+    </div>
+  );
+}
+
 const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedDrawingClear }) => {
   const thicknessAutoLockRef = useRef(false);
   const loadedPieceIdsRef = useRef([]);
@@ -854,6 +909,7 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
           <div><label className="label-text">Customer</label><input name="customer" value={project.customer || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
           <div><label className="label-text">Job #</label><input name="job_number" value={project.job_number || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
           <div><label className="label-text">Date</label><input type="date" name="date" value={project.date || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
+          <DensityOverrideControl project={project} onDataChange={onDataChange} />
         </div>
 
         {/* ── Thickness Mapping ── */}

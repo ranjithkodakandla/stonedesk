@@ -124,6 +124,29 @@ function weightBatchBundles(bundles, targetWeightKg) {
   return batches;
 }
 
+// Same greedy-fill idea as weightBatchBundles, but at raw-part granularity
+// (no crate-class splitting — this view is filter-driven, not geometry-driven).
+export function weightBatchParts(parts, targetWeightKg = 1900) {
+  if (!parts?.length) return [];
+  const batches = [];
+  let current = [];
+  let currentWeight = 0;
+
+  for (const part of parts) {
+    const w = part.weight_kg || 0;
+    if (currentWeight + w > targetWeightKg && current.length > 0) {
+      batches.push(current);
+      current = [part];
+      currentWeight = w;
+    } else {
+      current.push(part);
+      currentWeight += w;
+    }
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
+
 const CLASS_ORDER = ['island_vertical', 'kitchen_vertical', 'vanity_vertical', 'misc'];
 
 // ─── Multi-crate batch builder ────────────────────────────────────────────────

@@ -123,7 +123,29 @@ def reset_custom_color_densities(entries: List[Dict[str, Any]]) -> None:
         _CUSTOM_COLOR_DENSITIES.setdefault(entry["material"], {})[entry["name"]] = entry["density_kg_m3"]
 
 
+import contextvars
+
+# Per-project density override (kg/m³) — set for the duration of a request scoped
+# to one project, so that project can override the shared/global color density
+# without touching any other project. None = fall back to the global color table.
+_project_density_override: "contextvars.ContextVar[Optional[float]]" = contextvars.ContextVar(
+    "_project_density_override", default=None,
+)
+
+
+def set_project_density_override(density_kg_m3: Optional[float]):
+    """Returns a token; pass it to reset_project_density_override(token) when done."""
+    return _project_density_override.set(density_kg_m3)
+
+
+def reset_project_density_override(token) -> None:
+    _project_density_override.reset(token)
+
+
 def get_color_density(material: str, color: str) -> Optional[float]:
+    override = _project_density_override.get()
+    if override is not None:
+        return override
     if not color:
         return None
     if material in _CUSTOM_COLOR_DENSITIES and color in _CUSTOM_COLOR_DENSITIES[material]:

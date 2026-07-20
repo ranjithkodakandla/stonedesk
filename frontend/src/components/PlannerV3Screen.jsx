@@ -1,8 +1,7 @@
 import React, { Suspense, useMemo, useState, useCallback, useEffect } from 'react';
 import axios from 'axios';
 import { API_BASE } from '../utils/plannerUtils';
-import DispatchSelectionPanel from './DispatchSelectionPanel';
-import DispatchInventoryExplorer from './DispatchInventoryExplorer';
+import CrateFilterPlanner from './CrateFilterPlanner';
 import DraftCrateWorkspace from './DraftCrateWorkspace';
 import { buildDraftCrate, recomputeCrate, getNextDraftCrateId, batchBundlesIntoCrates, getCrateClass } from '../utils/crateEstimator';
 import IslandOperationalReview from './IslandOperationalReview';
@@ -285,7 +284,7 @@ const PlannerV3Screen = ({
     <div className="space-y-6 text-[#0f172a]">
       {/* Header */}
       <div>
-        <div className="text-xs uppercase tracking-[0.2em] text-[#64748b]">Dispatch & build</div>
+        <div className="text-xs uppercase tracking-[0.2em] text-[#64748b]">Crate Planning</div>
         <h2 className="mt-1 text-xl font-semibold text-[#0f172a]">
           {project.name || project.job_number || `Project #${projectId}`}
         </h2>
@@ -328,27 +327,8 @@ const PlannerV3Screen = ({
         </div>
       )}
 
-      {/* Step 1 — Dispatch scope selection */}
-      <DispatchSelectionPanel
-        projectId={projectId}
-        onGenerate={handleGenerate}
-        isGenerating={isRefreshing}
-        onSelectionChange={setDispatchSelection}
-        onApplySelection={setDispatchSelection}
-        showGenerate={OPTIMIZER_UI_ENABLED}
-      />
-
-      {/* Step 2 — Inventory + part selection workspace */}
-      <DispatchInventoryExplorer
-        projectId={projectId}
-        dispatchSelection={dispatchSelection}
-        onCreateCrate={handleCreateDraftCrate}
-        assignedBundleIds={assignedBundleIds}
-        draftCrates={draftCrates}
-        onAddToCrate={handleAddBundlesToCrate}
-        targetWeightKg={targetWeightKg}
-        onTargetWeightChange={setTargetWeightKg}
-      />
+      {/* Step 2 — Excel-style multi-select part filters + crate planning */}
+      <CrateFilterPlanner projectId={projectId} />
 
       {/* Step 3 — Draft crate lifecycle */}
       <DraftCrateWorkspace

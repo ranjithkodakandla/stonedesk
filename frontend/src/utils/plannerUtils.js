@@ -125,6 +125,16 @@ export const getPieceWeight = (piece, project) => {
   const qty = Number(piece.qty) || 1;
   const override = Number(piece.weight_override || 0);
   if (override > 0) return override * qty;
+
+  // CHECK FOR DENSITY OVERRIDE FIRST (like backend does)
+  if (project.density_override_kg_m3 != null && project.density_override_kg_m3 > 0) {
+    const density = Number(project.density_override_kg_m3);
+    const thick = piece.thickness || project.thickness || '3CM';
+    const tM = _THICKNESS_M[thick] || 0.025;
+    const factor = density * tM * 0.0929;
+    return ((Number(piece.length || 0) * Number(piece.width || 0)) / 144) * factor * qty;
+  }
+
   const color = project.stone_color || '';
   const mat = project.material || 'Granite';
   const thick = piece.thickness || project.thickness || '3CM';
