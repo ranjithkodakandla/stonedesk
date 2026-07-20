@@ -106,9 +106,21 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
     if (activeTab !== 'build-plan') setActiveTab('build-plan');
   }, [mainTab, planningUnlocked, activeTab, setActiveTab]);
 
-  const totalWeight = pieces.reduce((sum, piece) => sum + getPieceWeight(piece, project), 0);
-  const totalSqFt = pieces.reduce((sum, piece) => sum + ((Number(piece.length || 0) * Number(piece.width || 0)) / 144) * (Number(piece.qty) || 1), 0);
-  const totalQty = pieces.reduce((sum, p) => sum + (Number(p.qty) || 1), 0);
+  // Header totals come from the backend (GET /projects/{id}/totals) — the single
+  // source of truth also used by the crate planner and Excel exports, so all
+  // three always agree. Falls back to a client-side estimate while loading.
+  const [serverTotals, setServerTotals] = useState(null);
+  useEffect(() => {
+    if (!projectId) return;
+    axios
+      .get(`${API_BASE}/projects/${projectId}/totals`)
+      .then((res) => setServerTotals(res.data))
+      .catch(() => setServerTotals(null));
+  }, [projectId, pieces.length]);
+
+  const totalWeight = serverTotals?.total_weight_kg ?? pieces.reduce((sum, piece) => sum + getPieceWeight(piece, project), 0);
+  const totalSqFt = serverTotals?.total_sqft ?? pieces.reduce((sum, piece) => sum + ((Number(piece.length || 0) * Number(piece.width || 0)) / 144) * (Number(piece.qty) || 1), 0);
+  const totalQty = serverTotals?.part_count ?? pieces.reduce((sum, p) => sum + (Number(p.qty) || 1), 0);
 
   const drawingsByNumber = useMemo(() => {
     const map = new Map();

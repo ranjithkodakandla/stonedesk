@@ -1678,6 +1678,36 @@ def get_dispatch_hierarchy(project_id: int):
     return discover_dispatch_hierarchy(pieces)
 
 
+@app.get("/api/projects/{project_id}/totals")
+def get_project_totals(project_id: int):
+    """
+    Single source of truth for project-level Parts/Sq Ft/Weight totals — used by
+    the project header. Uses the same per-piece thickness + piece_area_sqft
+    rounding as dispatch-parts and the Excel exports, so header, crate planner,
+    and downloads always agree.
+    """
+    pieces = list(pieces_col.find({"project_id": project_id}, {"_id": 0}))
+    if not pieces:
+        return {"part_count": 0, "total_sqft": 0.0, "total_weight_kg": 0.0}
+
+    project_doc = projects_col.find_one({"id": project_id}, {"_id": 0})
+    material = (project_doc or {}).get("material", "Granite")
+    project_thickness = (project_doc or {}).get("thickness", "3CM")
+    stone_color = str((project_doc or {}).get("stone_color", "") or "")
+
+    part_count = sum(int(p.get("qty", 1) or 1) for p in pieces)
+    total_sqft = sum(piece_area_sqft(p) * int(p.get("qty", 1) or 1) for p in pieces)
+    total_weight = sum(
+        planning_piece_weight(p, material, str(p.get("thickness") or project_thickness), stone_color)
+        for p in pieces
+    )
+    return {
+        "part_count": part_count,
+        "total_sqft": round(total_sqft, 2),
+        "total_weight_kg": round(total_weight, 2),
+    }
+
+
 @app.get("/api/projects/{project_id}/dispatch-parts")
 def get_dispatch_parts(project_id: int):
     """
