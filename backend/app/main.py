@@ -1696,9 +1696,7 @@ def get_dispatch_parts(project_id: int):
     stone_color = str((project_doc or {}).get("stone_color", "") or "")
 
     def piece_sqft(p: Dict[str, Any]) -> float:
-        L = parse_float(p.get("length"))
-        W = parse_float(p.get("width"))
-        return (L * W) / 144.0 if L > 0 and W > 0 else 0.0
+        return piece_area_sqft(p)
 
     out = []
     for p in pieces:
@@ -1807,9 +1805,7 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
         _log.debug("[dispatch-inventory] normalization_events=%s", norm_events[:10])
 
     def piece_sqft(p: Dict[str, Any]) -> float:
-        L = parse_float(p.get("length"))
-        W = parse_float(p.get("width"))
-        return (L * W) / 144.0 if L > 0 and W > 0 else 0.0
+        return piece_area_sqft(p)
 
     def flat_sort_key(f: str):
         try:
@@ -2209,9 +2205,7 @@ def export_manual_crate_plan_xlsx(project_id: int, body: Dict):
     stone_color = str(project_full.get("stone_color", "") or "")
 
     def piece_sqft(p):
-        L = parse_float(p.get("length"))
-        W = parse_float(p.get("width"))
-        return (L * W) / 144.0 if L > 0 and W > 0 else 0.0
+        return piece_area_sqft(p)
 
     wb = openpyxl.Workbook()
 
