@@ -1717,7 +1717,7 @@ def get_dispatch_parts(project_id: int):
             "qty": int(p.get("qty", 1) or 1),
             "thickness": str(p.get("thickness") or project_thickness),
             "sqft": piece_sqft(p),
-            "weight_kg": pw(p, material, project_thickness, stone_color),
+            "weight_kg": pw(p, material, str(p.get("thickness") or project_thickness), stone_color),
         })
     return _json_safe_floats(out)
 
@@ -1823,6 +1823,9 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
     )
 
     # ── Piece-detail builder (defined once, captures material/thickness/stone_color) ──
+    def _effective_thickness(p: Dict[str, Any]) -> str:
+        return str(p.get("thickness", "") or thickness)
+
     def _piece_detail(p: Dict[str, Any], role: str) -> Dict[str, Any]:
         return {
             "id": p.get("id"),
@@ -1832,8 +1835,8 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
             "unit": str(p.get("unit", "") or ""),
             "length": parse_float(p.get("length")),
             "width": parse_float(p.get("width")),
-            "thickness": str(p.get("thickness", "") or thickness),
-            "weight_kg": pw(p, material, thickness, stone_color),
+            "thickness": _effective_thickness(p),
+            "weight_kg": pw(p, material, _effective_thickness(p), stone_color),
             "sqft": piece_sqft(p),
             "role": role,
         }
@@ -1882,7 +1885,7 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
             pieces_by_bucket[b].append(("splash", p))
 
         # Update raw totals (before splitting)
-        raw_unit_weight = sum(pw(p, material, thickness, stone_color) for p in all_p_raw)
+        raw_unit_weight = sum(pw(p, material, _effective_thickness(p), stone_color) for p in all_p_raw)
         _raw_pieces += len(all_p_raw)
         _raw_weight += raw_unit_weight
 
@@ -1892,7 +1895,7 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
             splash_p = [p for role, p in pieces_with_roles if role == "splash"]
             all_p_bucket = main_p + splash_p
 
-            total_w = sum(pw(p, material, thickness, stone_color) for p in all_p_bucket)
+            total_w = sum(pw(p, material, _effective_thickness(p), stone_color) for p in all_p_bucket)
             total_sq = sum(piece_sqft(p) for p in all_p_bucket)
 
             pieces_detail = (
@@ -2264,7 +2267,7 @@ def export_manual_crate_plan_xlsx(project_id: int, body: Dict):
                 parse_float(p.get("width")),
                 int(p.get("qty", 1) or 1),
                 round(piece_sqft(p), 2),
-                round(pw(p, material, project_thickness, stone_color), 2),
+                round(pw(p, material, str(p.get("thickness") or project_thickness), stone_color), 2),
             ])
     _auto_width(ws2)
 
@@ -2581,7 +2584,10 @@ def get_packing_families(project_id: int):
             primary_db_id = None
             is_split = False
 
-        total_weight = sum(planning_piece_weight(p, material, thickness, stone_color) for p in all_pieces)
+        total_weight = sum(
+            planning_piece_weight(p, material, str(p.get("thickness") or thickness), stone_color)
+            for p in all_pieces
+        )
         cat_cfg = DET_CATEGORY_CONFIG.get(fam["category"], DET_CATEGORY_CONFIG["misc"])
 
         # Extract location from first piece (all pieces in a unit share flat/floor/building)
@@ -3317,7 +3323,11 @@ def export_source_data(project_id: int):
         total_qty = sum(int(p.get("qty", 1) or 1) for p in pieces)
         total_sqft = sum(piece_area_sqft(p) * int(p.get("qty", 1) or 1) for p in pieces)
         total_weight = sum(
-            planning_piece_weight(p, project.get("material", "Granite"), project.get("thickness", "3CM"), project.get("stone_color", "") or "")
+            planning_piece_weight(
+                p, project.get("material", "Granite"),
+                str(p.get("thickness") or project.get("thickness", "3CM")),
+                project.get("stone_color", "") or "",
+            )
             for p in pieces
         )
         ws1.append(["Total Parts", total_qty])
@@ -3349,7 +3359,7 @@ def export_source_data(project_id: int):
         for p in pieces:
             qty = int(p.get("qty", 1) or 1)
             sqft = round(piece_area_sqft(p) * qty, 2)
-            wt = round(planning_piece_weight(p, mat, thick, _color), 2)
+            wt = round(planning_piece_weight(p, mat, str(p.get("thickness") or thick), _color), 2)
             rc = p.get("radius_corners") or {}
             active_corners = sum(1 for v in rc.values() if v)
             ws2.append([
@@ -3548,7 +3558,7 @@ def export_excel(project_id: int):
                     piece.get("category", ""), piece.get("drawing", ""), piece.get("unit", ""),
                     piece.get("building", ""), piece.get("floor", ""), piece.get("flat", ""),
                     piece.get("length", 0), piece.get("width", 0), piece.get("qty", 1),
-                    round(planning_piece_weight(piece, _mat, _thick, _color2), 2),
+                    round(planning_piece_weight(piece, _mat, str(piece.get("thickness") or _thick), _color2), 2),
                     piece.get("sink_type", "No Sink"), piece.get("sink_cut", "-"),
                     piece.get("tap_holes", "-"), piece.get("grooves", "-"),
                     piece.get("edge", "None"), piece.get("edge_area", ""),
