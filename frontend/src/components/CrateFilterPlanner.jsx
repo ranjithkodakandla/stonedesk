@@ -100,20 +100,46 @@ function thicknessInches(t) {
   return THICKNESS_INCH[key] ?? 1.18;
 }
 
+// Mirrors estimateHorizontalLayeredDimensions() in crateEstimator.js — the
+// established packing model: bigger parts (tops) form one layer, back
+// splashes another, side splashes another, stacked with a separator between
+// each. A layer's height is its MAX piece thickness, not the sum of every
+// piece in it — same-role parts sit side by side in the layer, not stacked
+// on each other.
+const LAYER_SEPARATOR_IN = 1.0;
+function isBackSplashPart(p) {
+  return /back.?splash/i.test(p.part || '');
+}
+function isSideSplashPart(p) {
+  return /side.?splash/i.test(p.part || '');
+}
+
 function computeCrateDimensions(parts, dimConfig) {
   if (!parts.length) {
     return { internal_length: 0, internal_width: 0, internal_height: 0, external_length: 0, external_width: 0, external_height: 0 };
   }
   const rawLength = Math.max(...parts.map((p) => p.length || 0));
   const rawWidth = Math.max(...parts.map((p) => p.width || 0));
-  const rawHeight = parts.reduce((s, p) => s + thicknessInches(p.thickness) * (p.qty || 1), 0);
+
+  const backSplash = parts.filter(isBackSplashPart);
+  const sideSplash = parts.filter(isSideSplashPart);
+  const mainTops = parts.filter((p) => !isBackSplashPart(p) && !isSideSplashPart(p));
+
+  const mainH = mainTops.length ? Math.max(...mainTops.map((p) => thicknessInches(p.thickness))) : 0;
+  const backH = backSplash.length ? Math.max(...backSplash.map((p) => thicknessInches(p.thickness))) : 0;
+  const sideH = sideSplash.length ? Math.max(...sideSplash.map((p) => thicknessInches(p.thickness))) : 0;
+
+  let stackedHeight = 0;
+  if (mainH > 0) stackedHeight += mainH;
+  if (backH > 0) stackedHeight += LAYER_SEPARATOR_IN + backH;
+  if (sideH > 0) stackedHeight += LAYER_SEPARATOR_IN + sideH;
 
   const isIsland = parts.some((p) => bucketOrderForPart(p) === 0);
   const cfg = isIsland ? dimConfig.island : dimConfig.kv;
 
   const internal_length = rawLength + cfg.lengthMargin * 2;
   const internal_width = rawWidth + cfg.widthMargin * 2;
-  const internal_height = rawHeight + cfg.heightMargin;
+  const internal_height = stackedHeight + cfg.heightMargin;
 
   return {
     internal_length,
@@ -121,7 +147,7 @@ function computeCrateDimensions(parts, dimConfig) {
     internal_height,
     external_length: internal_length + cfg.extLengthAdd,
     external_width: internal_width + cfg.extWidthAdd,
-    external_height: cfg.extHeight,
+    external_height: internal_height + cfg.extHeight,
   };
 }
 
@@ -136,7 +162,7 @@ const DIM_CLASS_FIELDS = [
   { key: 'widthMargin', label: 'Width — internal margin/side (in)' },
   { key: 'extWidthAdd', label: 'Width — external add (in)' },
   { key: 'heightMargin', label: 'Height — internal margin (in)' },
-  { key: 'extHeight', label: 'Height — external (in)' },
+  { key: 'extHeight', label: 'Height — external add (in)' },
 ];
 
 const TABLE_COLUMNS = [
