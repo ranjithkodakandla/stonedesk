@@ -128,23 +128,39 @@ import contextvars
 # Per-project density override (kg/m³) — set for the duration of a request scoped
 # to one project, so that project can override the shared/global color density
 # without touching any other project. None = fall back to the global color table.
+#
+# Pieces can now carry their own material/stone_color (drawing-level "use project
+# material/color" checkbox unchecked) that differs from the project's own default.
+# The override only makes sense for the project's own material+color — a piece
+# using a drawing-specific color has nothing to do with this project's override,
+# so it must fall through to the normal global/custom lookup for its own color.
+# _project_default_mat_color holds the project's own (material, color) tuple so
+# get_color_density can tell which case it's in.
 _project_density_override: "contextvars.ContextVar[Optional[float]]" = contextvars.ContextVar(
     "_project_density_override", default=None,
 )
+_project_default_mat_color: "contextvars.ContextVar[Optional[Tuple[str, str]]]" = contextvars.ContextVar(
+    "_project_default_mat_color", default=None,
+)
 
 
-def set_project_density_override(density_kg_m3: Optional[float]):
-    """Returns a token; pass it to reset_project_density_override(token) when done."""
-    return _project_density_override.set(density_kg_m3)
+def set_project_density_override(density_kg_m3: Optional[float], material: str = "", color: str = ""):
+    """Returns a (token, token) pair; pass to reset_project_density_override() when done."""
+    return (
+        _project_density_override.set(density_kg_m3),
+        _project_default_mat_color.set((material, color) if density_kg_m3 is not None else None),
+    )
 
 
-def reset_project_density_override(token) -> None:
-    _project_density_override.reset(token)
+def reset_project_density_override(tokens) -> None:
+    override_token, mat_color_token = tokens
+    _project_density_override.reset(override_token)
+    _project_default_mat_color.reset(mat_color_token)
 
 
 def get_color_density(material: str, color: str) -> Optional[float]:
     override = _project_density_override.get()
-    if override is not None:
+    if override is not None and _project_default_mat_color.get() == (material, color):
         return override
     if not color:
         return None

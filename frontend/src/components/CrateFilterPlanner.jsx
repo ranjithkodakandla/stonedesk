@@ -75,18 +75,23 @@ function sortByBucketOrder(parts) {
 }
 
 // ─── Crate dimension configuration ────────────────────────────────────────────
-// Editable by the employee before auto-bucketing. Defaults per current spec:
+// Editable by the employee before auto-bucketing, fully independent per crate
+// class (Vanity/Kitchen vs Islands) — nothing is shared between the two.
 // internal = raw part extents + margin (length/width each side, height total);
-// external = internal + fixed add-on for length/width, plus a FIXED external
-// height per crate class (islands are taller than kitchen/vanity horizontals).
-const DEFAULT_DIM_CONFIG = {
-  lengthMarginEachSide: 0.5,
-  widthMarginEachSide: 0.5,
+// external = internal + that class's own add-on for length/width, plus that
+// class's own fixed external height.
+const DEFAULT_CLASS_DIM_CONFIG = {
+  lengthMargin: 0.5,
+  widthMargin: 0.5,
   heightMargin: 2,
-  kvExternalLWAdd: 4,
-  kvExternalHeight: 7,
-  islandExternalLWAdd: 4,
-  islandExternalHeight: 9,
+  extLengthAdd: 4,
+  extWidthAdd: 4,
+  extHeight: 7,
+};
+
+const DEFAULT_DIM_CONFIG = {
+  kv: { ...DEFAULT_CLASS_DIM_CONFIG },
+  island: { ...DEFAULT_CLASS_DIM_CONFIG, extHeight: 9 },
 };
 
 const THICKNESS_INCH = { '2CM': 0.79, '3CM': 1.18, '4CM': 1.57 };
@@ -103,32 +108,35 @@ function computeCrateDimensions(parts, dimConfig) {
   const rawWidth = Math.max(...parts.map((p) => p.width || 0));
   const rawHeight = parts.reduce((s, p) => s + thicknessInches(p.thickness) * (p.qty || 1), 0);
 
-  const internal_length = rawLength + dimConfig.lengthMarginEachSide * 2;
-  const internal_width = rawWidth + dimConfig.widthMarginEachSide * 2;
-  const internal_height = rawHeight + dimConfig.heightMargin;
-
   const isIsland = parts.some((p) => bucketOrderForPart(p) === 0);
-  const extLWAdd = isIsland ? dimConfig.islandExternalLWAdd : dimConfig.kvExternalLWAdd;
-  const extHeight = isIsland ? dimConfig.islandExternalHeight : dimConfig.kvExternalHeight;
+  const cfg = isIsland ? dimConfig.island : dimConfig.kv;
+
+  const internal_length = rawLength + cfg.lengthMargin * 2;
+  const internal_width = rawWidth + cfg.widthMargin * 2;
+  const internal_height = rawHeight + cfg.heightMargin;
 
   return {
     internal_length,
     internal_width,
     internal_height,
-    external_length: internal_length + extLWAdd,
-    external_width: internal_width + extLWAdd,
-    external_height: extHeight,
+    external_length: internal_length + cfg.extLengthAdd,
+    external_width: internal_width + cfg.extWidthAdd,
+    external_height: cfg.extHeight,
   };
 }
 
-const DIM_CONFIG_FIELDS = [
-  { key: 'lengthMarginEachSide', label: 'Length margin / side (in)' },
-  { key: 'widthMarginEachSide', label: 'Width margin / side (in)' },
-  { key: 'heightMargin', label: 'Internal height margin (in)' },
-  { key: 'kvExternalLWAdd', label: 'Kitchen/Vanity ext. L/W add (in)' },
-  { key: 'kvExternalHeight', label: 'Kitchen/Vanity ext. height (in)' },
-  { key: 'islandExternalLWAdd', label: 'Island ext. L/W add (in)' },
-  { key: 'islandExternalHeight', label: 'Island ext. height (in)' },
+const DIM_CLASS_SECTIONS = [
+  { key: 'kv', label: 'Vanity / Kitchen' },
+  { key: 'island', label: 'Islands' },
+];
+
+const DIM_CLASS_FIELDS = [
+  { key: 'lengthMargin', label: 'Length — internal margin/side (in)' },
+  { key: 'extLengthAdd', label: 'Length — external add (in)' },
+  { key: 'widthMargin', label: 'Width — internal margin/side (in)' },
+  { key: 'extWidthAdd', label: 'Width — external add (in)' },
+  { key: 'heightMargin', label: 'Height — internal margin (in)' },
+  { key: 'extHeight', label: 'Height — external (in)' },
 ];
 
 const TABLE_COLUMNS = [
@@ -157,42 +165,106 @@ function crateFromParts(crateNo, parts, dimConfig) {
   };
 }
 
-function CrateRow({ crate, crateOptions, onMovePart, onDeleteCrate, expandedDefault = false }) {
-  const [open, setOpen] = useState(expandedDefault);
+const CRATE_SUMMARY_COLUMNS = [
+  { key: 'crate_no', label: 'Crate #' },
+  { key: 'parts', label: 'Parts', numeric: true },
+  { key: 'total_weight_kg', label: 'Weight (kg)', numeric: true },
+  { key: 'total_sqft', label: 'Sq Ft', numeric: true },
+  { key: 'internal_length', label: 'Int L', numeric: true },
+  { key: 'internal_width', label: 'Int W', numeric: true },
+  { key: 'internal_height', label: 'Int H', numeric: true },
+  { key: 'external_length', label: 'Ext L', numeric: true },
+  { key: 'external_width', label: 'Ext W', numeric: true },
+  { key: 'external_height', label: 'Ext H', numeric: true },
+];
 
+// Excel-style summary — one row per crate, inline-scrolled (the container, not
+// the page, scrolls), with View/Delete as inline links per row.
+function CrateSummaryTable({ crates, onViewDetails, onDeleteCrate }) {
   return (
     <div className="rounded-[20px] border border-[#dbe4f0] bg-white overflow-hidden">
-      <div className="flex items-center gap-4 px-5 py-4 flex-wrap">
-        <span className="text-sm font-bold text-[#0f172a]">Crate #{crate.crate_no}</span>
-        <span className="text-xs text-[#64748b]">{crate.parts.length} parts</span>
-        <span className="text-sm font-semibold text-[#1e293b]">{fmt(crate.total_weight_kg)} kg</span>
-        <span className="text-xs text-[#94a3b8]">{fmt(crate.total_sqft)} ft²</span>
-        <span className="text-xs text-[#94a3b8]">
-          Int {fmt(crate.internal_length)}×{fmt(crate.internal_width)}×{fmt(crate.internal_height)}″
-        </span>
-        <span className="text-xs text-[#94a3b8]">
-          Ext {fmt(crate.external_length)}×{fmt(crate.external_width)}×{fmt(crate.external_height)}″
-        </span>
-        <div className="ml-auto flex items-center gap-2">
+      <div className="max-h-[520px] overflow-y-auto overflow-x-auto">
+        <table className="w-full text-[12px]">
+          <thead className="sticky top-0 z-10">
+            <tr className="bg-[#f8fafc] text-[#64748b] uppercase tracking-wide text-[10px]">
+              {CRATE_SUMMARY_COLUMNS.map((c) => (
+                <th key={c.key} className={`px-3 py-2 text-left whitespace-nowrap ${c.numeric ? 'text-right' : ''}`}>
+                  {c.label}
+                </th>
+              ))}
+              <th className="px-3 py-2 text-left whitespace-nowrap">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {crates.map((c) => (
+              <tr key={c.crate_no} className="border-t border-[#f1f5f9] hover:bg-[#f8fafc]">
+                <td className="px-3 py-2 whitespace-nowrap font-semibold text-[#0f172a]">#{c.crate_no}</td>
+                <td className="px-3 py-2 whitespace-nowrap text-right text-[#334155]">{c.parts.length}</td>
+                <td className="px-3 py-2 whitespace-nowrap text-right font-medium text-[#1e293b]">{fmt(c.total_weight_kg)}</td>
+                <td className="px-3 py-2 whitespace-nowrap text-right text-[#334155]">{fmt(c.total_sqft)}</td>
+                <td className="px-3 py-2 whitespace-nowrap text-right text-[#64748b]">{fmt(c.internal_length)}</td>
+                <td className="px-3 py-2 whitespace-nowrap text-right text-[#64748b]">{fmt(c.internal_width)}</td>
+                <td className="px-3 py-2 whitespace-nowrap text-right text-[#64748b]">{fmt(c.internal_height)}</td>
+                <td className="px-3 py-2 whitespace-nowrap text-right text-[#64748b]">{fmt(c.external_length)}</td>
+                <td className="px-3 py-2 whitespace-nowrap text-right text-[#64748b]">{fmt(c.external_width)}</td>
+                <td className="px-3 py-2 whitespace-nowrap text-right text-[#64748b]">{fmt(c.external_height)}</td>
+                <td className="px-3 py-2 whitespace-nowrap">
+                  <button
+                    type="button"
+                    onClick={() => onViewDetails(c.crate_no)}
+                    className="text-[#1d4ed8] font-medium hover:underline"
+                  >
+                    View details
+                  </button>
+                  <span className="mx-2 text-[#e2e8f0]">|</span>
+                  <button
+                    type="button"
+                    onClick={() => onDeleteCrate(c.crate_no)}
+                    className="text-red-600 font-medium hover:underline"
+                  >
+                    Delete
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// Part-detail modal for a single crate — opened via "View details" in the
+// summary table above.
+function CrateDetailModal({ crate, crateOptions, onMovePart, onClose }) {
+  if (!crate) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onClose}>
+      <div
+        className="w-full max-w-6xl max-h-[85vh] rounded-[20px] bg-white shadow-xl flex flex-col overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-4 px-5 py-4 border-b border-[#f1f5f9] flex-wrap">
+          <span className="text-sm font-bold text-[#0f172a]">Crate #{crate.crate_no}</span>
+          <span className="text-xs text-[#64748b]">{crate.parts.length} parts</span>
+          <span className="text-sm font-semibold text-[#1e293b]">{fmt(crate.total_weight_kg)} kg</span>
+          <span className="text-xs text-[#94a3b8]">{fmt(crate.total_sqft)} ft²</span>
+          <span className="text-xs text-[#94a3b8]">
+            Int {fmt(crate.internal_length)}×{fmt(crate.internal_width)}×{fmt(crate.internal_height)}″
+          </span>
+          <span className="text-xs text-[#94a3b8]">
+            Ext {fmt(crate.external_length)}×{fmt(crate.external_width)}×{fmt(crate.external_height)}″
+          </span>
           <button
             type="button"
-            onClick={() => setOpen((o) => !o)}
-            className="rounded-full border border-[#e2e8f0] bg-[#f8fafc] px-3 py-1.5 text-[11px] font-medium text-[#64748b] hover:bg-[#f1f5f9] transition-colors"
+            onClick={onClose}
+            className="ml-auto rounded-full border border-[#e2e8f0] bg-[#f8fafc] px-3 py-1.5 text-[11px] font-medium text-[#64748b] hover:bg-[#f1f5f9] transition-colors"
           >
-            {open ? 'Hide' : `Details (${crate.parts.length} parts)`}
-          </button>
-          <button
-            type="button"
-            onClick={() => onDeleteCrate(crate.crate_no)}
-            className="rounded-full border border-red-200 bg-red-50 px-3 py-1.5 text-[11px] font-medium text-red-700 hover:bg-red-100 transition-colors"
-          >
-            Delete crate
+            Close
           </button>
         </div>
-      </div>
 
-      {open && (
-        <div className="border-t border-[#f1f5f9] max-h-96 overflow-y-auto overflow-x-auto">
+        <div className="overflow-y-auto overflow-x-auto flex-1">
           <table className="w-full text-[11px]">
             <thead className="sticky top-0 z-10">
               <tr className="bg-[#f8fafc] text-[#64748b] uppercase tracking-wide text-[9px]">
@@ -234,7 +306,7 @@ function CrateRow({ crate, crateOptions, onMovePart, onDeleteCrate, expandedDefa
             </tbody>
           </table>
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -253,6 +325,12 @@ const CrateFilterPlanner = ({ projectId }) => {
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState(null);
   const [exporting, setExporting] = useState(false);
+  const [detailCrateNo, setDetailCrateNo] = useState(null);
+  const [generatingLabels, setGeneratingLabels] = useState(false);
+  const [labelsPreviewUrl, setLabelsPreviewUrl] = useState(null);
+
+  // Revoke the blob URL when the component unmounts.
+  useEffect(() => () => { if (labelsPreviewUrl) window.URL.revokeObjectURL(labelsPreviewUrl); }, [labelsPreviewUrl]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -285,6 +363,13 @@ const CrateFilterPlanner = ({ projectId }) => {
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, allParts.length]);
+
+  // Editing the dimension config must reflect immediately on every crate already
+  // built, not just future auto-bucket rounds — recompute all of them in place.
+  useEffect(() => {
+    setCrates((prev) => prev.map((c) => crateFromParts(c.crate_no, c.parts, dimConfig)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dimConfig]);
 
   // Parts already sitting in a crate never come back through the filter pool —
   // to remove one, go into its specific crate and use "Remove (back to pool)".
@@ -397,7 +482,37 @@ const CrateFilterPlanner = ({ projectId }) => {
       .finally(() => setExporting(false));
   }, [projectId, crates]);
 
+  const handleGenerateLabels = useCallback(() => {
+    if (!crates.length) return;
+    setGeneratingLabels(true);
+    axios
+      .post(
+        `${API_BASE}/projects/${projectId}/process-labels/export`,
+        { crates: crates.map((c) => ({ crate_no: c.crate_no, part_ids: c.parts.map((p) => p.id) })) },
+        { responseType: 'blob' },
+      )
+      .then((res) => {
+        if (labelsPreviewUrl) window.URL.revokeObjectURL(labelsPreviewUrl);
+        const url = window.URL.createObjectURL(res.data);
+        setLabelsPreviewUrl(url);
+      })
+      .catch((e) => setError(e?.response?.data?.detail || e.message || 'Failed to generate process labels'))
+      .finally(() => setGeneratingLabels(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, crates, labelsPreviewUrl]);
+
+  const handleDownloadLabels = useCallback(() => {
+    if (!labelsPreviewUrl) return;
+    const link = document.createElement('a');
+    link.href = labelsPreviewUrl;
+    link.download = 'ProcessLabels.pdf';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }, [labelsPreviewUrl]);
+
   const crateOptions = useMemo(() => crates.map((c) => c.crate_no), [crates]);
+  const detailCrate = useMemo(() => crates.find((c) => c.crate_no === detailCrateNo) || null, [crates, detailCrateNo]);
 
   const filteredTotals = useMemo(() => ({
     part_count: filteredParts.length,
@@ -456,24 +571,34 @@ const CrateFilterPlanner = ({ projectId }) => {
             <span className="ml-2 text-xs text-[#94a3b8]">{allocatedIds.size} parts already allocated</span>
           </div>
 
-          <div className="rounded-[16px] border border-[#dbe4f0] bg-[#f8fafc] px-4 py-3 space-y-2">
+          <div className="rounded-[16px] border border-[#dbe4f0] bg-[#f8fafc] px-4 py-3 space-y-4">
             <div className="text-[10px] font-semibold uppercase tracking-wide text-[#94a3b8]">
-              Crate dimension configuration (applies to new auto-bucket rounds)
+              Crate dimension configuration — changes apply immediately to every crate below, and to new auto-bucket rounds
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              {DIM_CONFIG_FIELDS.map((f) => (
-                <label key={f.key} className="flex flex-col text-[10px] text-[#64748b]">
-                  <span className="flex min-h-[28px] items-end">{f.label}</span>
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={dimConfig[f.key]}
-                    onChange={(e) => setDimConfig((c) => ({ ...c, [f.key]: Number(e.target.value) }))}
-                    className="mt-1 w-full rounded-lg border border-[#e2e8f0] bg-white px-2 py-1 text-[12px] text-[#0f172a] focus:border-[#0f172a] focus:outline-none"
-                  />
-                </label>
-              ))}
-            </div>
+            {DIM_CLASS_SECTIONS.map((section) => (
+              <div key={section.key} className="space-y-2">
+                <div className="text-[11px] font-semibold text-[#334155]">{section.label}</div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                  {DIM_CLASS_FIELDS.map((f) => (
+                    <label key={f.key} className="flex flex-col text-[10px] text-[#64748b]">
+                      <span className="flex min-h-[28px] items-end">{f.label}</span>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={dimConfig[section.key][f.key]}
+                        onChange={(e) =>
+                          setDimConfig((c) => ({
+                            ...c,
+                            [section.key]: { ...c[section.key], [f.key]: Number(e.target.value) },
+                          }))
+                        }
+                        className="mt-1 w-full rounded-lg border border-[#e2e8f0] bg-white px-2 py-1 text-[12px] text-[#0f172a] focus:border-[#0f172a] focus:outline-none"
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
 
           <div className="flex flex-wrap items-center gap-3 rounded-[16px] border border-[#dbe4f0] bg-[#f8fafc] px-4 py-3">
@@ -502,17 +627,11 @@ const CrateFilterPlanner = ({ projectId }) => {
                   Delete all crates
                 </button>
               </div>
-              <div className="space-y-3">
-                {crates.map((c) => (
-                  <CrateRow
-                    key={c.crate_no}
-                    crate={c}
-                    crateOptions={crateOptions}
-                    onMovePart={handleMovePart}
-                    onDeleteCrate={handleDeleteCrate}
-                  />
-                ))}
-              </div>
+              <CrateSummaryTable
+                crates={crates}
+                onViewDetails={setDetailCrateNo}
+                onDeleteCrate={handleDeleteCrate}
+              />
               <div className="flex items-center gap-3">
                 <button
                   type="button"
@@ -532,10 +651,52 @@ const CrateFilterPlanner = ({ projectId }) => {
                 </button>
                 {savedAt && <span className="text-xs text-[#64748b]">Saved {new Date(savedAt).toLocaleString()}</span>}
               </div>
+
+              {savedAt && (
+                <div className="rounded-[16px] border border-[#dbe4f0] bg-[#f8fafc] px-4 py-4 space-y-3">
+                  <div>
+                    <div className="text-xs font-semibold uppercase tracking-wide text-[#64748b]">Next: process labels</div>
+                    <div className="mt-1 text-sm text-[#475569]">
+                      One process label per part, for every part currently in a crate — the fabrication reference sheet to print and stick on each piece.
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={handleGenerateLabels}
+                      disabled={generatingLabels}
+                      className="rounded-full bg-[#1d4ed8] px-5 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-[#1e40af] disabled:opacity-50"
+                    >
+                      {generatingLabels ? 'Generating…' : 'Preview process labels'}
+                    </button>
+                    {labelsPreviewUrl && (
+                      <button
+                        type="button"
+                        onClick={handleDownloadLabels}
+                        className="rounded-full border border-[#0f172a] bg-white px-5 py-2 text-sm font-semibold text-[#0f172a] shadow-sm transition-all hover:bg-[#f1f5f9]"
+                      >
+                        Download PDF
+                      </button>
+                    )}
+                  </div>
+                  {labelsPreviewUrl && (
+                    <div className="rounded-[12px] border border-[#e2e8f0] overflow-hidden" style={{ height: 600 }}>
+                      <iframe title="Process labels preview" src={labelsPreviewUrl} className="w-full h-full" />
+                    </div>
+                  )}
+                </div>
+              )}
             </>
           )}
         </>
       )}
+
+      <CrateDetailModal
+        crate={detailCrate}
+        crateOptions={crateOptions}
+        onMovePart={handleMovePart}
+        onClose={() => setDetailCrateNo(null)}
+      />
     </div>
   );
 };

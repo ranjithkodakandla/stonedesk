@@ -381,6 +381,7 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
     drawing: '', unit: '', category: 'Vanity', thickness: project.thickness || '3CM', building: '', floor: '', flat: '', notes: '',
     fragility: 'Standard', orientation: 'Auto', delivery_priority: 'Standard',
     stack_preference: 'Auto', weight_override: '',
+    useProjectMaterialColor: true, material: project.material || 'Granite', stone_color: project.stone_color || '',
   });
 
   // ── Pieces Grid rows ──
@@ -770,6 +771,8 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
             length: row.length,
             width: row.width,
             thickness: row.thickness || drawingCtx.thickness || project.thickness || '3CM',
+            material: drawingCtx.useProjectMaterialColor ? '' : (drawingCtx.material || ''),
+            stone_color: drawingCtx.useProjectMaterialColor ? '' : (drawingCtx.stone_color || ''),
             unit: drawingCtx.unit || '',
             sink_type: row.sink_type || 'No Sink',
             sink_cut: row.sink_cut || '-',
@@ -857,7 +860,8 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
   const clearDrawing = () => {
     setDrawingCtx({ drawing: '', unit: '', category: 'Vanity', building: '', floor: '', flat: '', notes: '',
       thickness: project.thickness || '3CM',
-      fragility: 'Standard', orientation: 'Auto', delivery_priority: 'Standard', stack_preference: 'Auto', weight_override: '' });
+      fragility: 'Standard', orientation: 'Auto', delivery_priority: 'Standard', stack_preference: 'Auto', weight_override: '',
+      useProjectMaterialColor: true, material: project.material || 'Granite', stone_color: project.stone_color || '' });
     thicknessAutoLockRef.current = false;
     setPieceRows([newRow(drawingCtx.thickness || project.thickness || '3CM')]);
     setMatrixData({ buildings: '', floors: '', cells: {} });
@@ -1014,6 +1018,42 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
               <div><label className="label-text">Orientation</label><select name="orientation" value={drawingCtx.orientation} onChange={handleCtx} className="input-field"><option>Auto</option><option>No Rotate</option><option>Long Edge Vertical</option><option>Finished Face Protected</option></select></div>
               <div><label className="label-text">Priority</label><select name="delivery_priority" value={drawingCtx.delivery_priority} onChange={handleCtx} className="input-field"><option>Standard</option><option>First Off</option><option>Last Off</option><option>Rush</option></select></div>
               <div><label className="label-text">Stacking</label><select name="stack_preference" value={drawingCtx.stack_preference} onChange={handleCtx} className="input-field"><option>Auto</option><option>No Stack</option><option>Stack Allowed</option></select></div>
+              <div className="col-span-2 md:col-span-3 lg:col-span-4 flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="useProjectMaterialColor"
+                  checked={drawingCtx.useProjectMaterialColor}
+                  onChange={(e) => setDrawingCtx(prev => ({ ...prev, useProjectMaterialColor: e.target.checked }))}
+                  className="rounded border-[#cbd5e1]"
+                />
+                <label htmlFor="useProjectMaterialColor" className="text-xs font-medium text-[#475569]">
+                  Use project material &amp; color for this drawing
+                </label>
+              </div>
+              <div>
+                <label className="label-text">Material {drawingCtx.useProjectMaterialColor && <span className="text-[#94a3b8]">(project)</span>}</label>
+                <select
+                  name="material"
+                  value={drawingCtx.useProjectMaterialColor ? (project.material || 'Granite') : drawingCtx.material}
+                  onChange={handleCtx}
+                  disabled={drawingCtx.useProjectMaterialColor}
+                  className="input-field disabled:bg-[#f8fafc] disabled:text-[#94a3b8]"
+                >
+                  <option>Granite</option><option>Quartz</option><option>Marble</option>
+                </select>
+              </div>
+              <div>
+                <label className="label-text">Stone Color {drawingCtx.useProjectMaterialColor && <span className="text-[#94a3b8]">(project)</span>}</label>
+                {drawingCtx.useProjectMaterialColor ? (
+                  <input className="input-field disabled:bg-[#f8fafc] disabled:text-[#94a3b8]" value={project.stone_color || ''} disabled />
+                ) : (
+                  <StoneColorPicker
+                    material={drawingCtx.material}
+                    value={drawingCtx.stone_color || ''}
+                    onSelect={(colorName) => setDrawingCtx(prev => ({ ...prev, stone_color: colorName }))}
+                  />
+                )}
+              </div>
               <div><label className="label-text">Wt Override (kg)</label><input name="weight_override" type="number" step="0.1" value={drawingCtx.weight_override} onChange={handleCtx} className="input-field" placeholder="Optional" /></div>
             </div>
           </div>

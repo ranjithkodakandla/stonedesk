@@ -159,6 +159,34 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo }) => {
                   {['-','0','1','2','3','4'].map(v => <option key={v}>{v}</option>)}
                 </select>
               </div>
+
+              {local.sink_type && local.sink_type !== 'No Sink' && (
+                <>
+                  <div className="col-span-2 pt-2 border-t border-slate-100 text-[11px] text-slate-500">
+                    Sink position — used to place the sink cutout on the process label drawing.
+                  </div>
+                  <div>
+                    <label className="label-text">Distance from left (in)</label>
+                    <input type="number" step="0.125" min="0" value={local.sink_offset_left ?? ''}
+                      onChange={e => set('sink_offset_left', e.target.value)} className="input-field" placeholder="e.g., 12.5" />
+                  </div>
+                  <div>
+                    <label className="label-text">Distance from right (in)</label>
+                    <input type="number" step="0.125" min="0" value={local.sink_offset_right ?? ''}
+                      onChange={e => set('sink_offset_right', e.target.value)} className="input-field" placeholder="e.g., 12.5" />
+                  </div>
+                  <div>
+                    <label className="label-text">Sink length (in) <span className="text-slate-400">(optional)</span></label>
+                    <input type="number" step="0.125" min="0" value={local.sink_length ?? ''}
+                      onChange={e => set('sink_length', e.target.value)} className="input-field" placeholder="Optional" />
+                  </div>
+                  <div>
+                    <label className="label-text">Sink width (in) <span className="text-slate-400">(optional)</span></label>
+                    <input type="number" step="0.125" min="0" value={local.sink_width ?? ''}
+                      onChange={e => set('sink_width', e.target.value)} className="input-field" placeholder="Optional" />
+                  </div>
+                </>
+              )}
             </div>
           </Section>
 

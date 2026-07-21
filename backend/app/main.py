@@ -345,6 +345,8 @@ def piece_response(doc: Dict[str, Any]) -> Dict[str, Any]:
         "length": doc.get("length", 0.0),
         "width": doc.get("width", 0.0),
         "thickness": doc.get("thickness", "3CM"),
+        "material": doc.get("material", ""),
+        "stone_color": doc.get("stone_color", ""),
         "qty": doc.get("qty", 1),
         "unit": doc.get("unit", ""),
         "edge": doc.get("edge", ""),
@@ -360,6 +362,10 @@ def piece_response(doc: Dict[str, Any]) -> Dict[str, Any]:
         "sink_cut": doc.get("sink_cut", "-"),
         "tap_holes": doc.get("tap_holes", "-"),
         "grooves": doc.get("grooves", "-"),
+        "sink_offset_left": doc.get("sink_offset_left"),
+        "sink_offset_right": doc.get("sink_offset_right"),
+        "sink_length": doc.get("sink_length"),
+        "sink_width": doc.get("sink_width"),
         "fragility": doc.get("fragility", "Standard"),
         "orientation": doc.get("orientation", "Auto"),
         "delivery_priority": doc.get("delivery_priority", "Standard"),
@@ -709,6 +715,8 @@ class PieceCreate(BaseModel):
     length: float
     width: float
     thickness: str = "3CM"
+    material: str = ""
+    stone_color: str = ""
     qty: int = 1
     unit: str = ""
     building: str = ""
@@ -718,6 +726,10 @@ class PieceCreate(BaseModel):
     sink_cut: str = "-"
     tap_holes: str = "-"
     grooves: str = "-"
+    sink_offset_left: Optional[float] = None
+    sink_offset_right: Optional[float] = None
+    sink_length: Optional[float] = None
+    sink_width: Optional[float] = None
     fragility: str = "Standard"
     orientation: str = "Auto"
     delivery_priority: str = "Standard"
@@ -743,6 +755,8 @@ class PieceUpdate(BaseModel):
     length: float = 0.0
     width: float = 0.0
     thickness: str = "3CM"
+    material: str = ""
+    stone_color: str = ""
     qty: int = 1
     unit: str = ""
     building: str = ""
@@ -752,6 +766,10 @@ class PieceUpdate(BaseModel):
     sink_cut: str = "-"
     tap_holes: str = "-"
     grooves: str = "-"
+    sink_offset_left: Optional[float] = None
+    sink_offset_right: Optional[float] = None
+    sink_length: Optional[float] = None
+    sink_width: Optional[float] = None
     fragility: str = "Standard"
     orientation: str = "Auto"
     delivery_priority: str = "Standard"
@@ -826,16 +844,24 @@ async def apply_project_density_override(request: Request, call_next):
     planning_engine.py, the single choke point all weight math funnels through.
     """
     match = _PROJECT_ID_IN_PATH.search(request.url.path)
-    token = None
+    tokens = None
     if match:
         project_id = int(match.group(1))
-        project_doc = projects_col.find_one({"id": project_id}, {"density_override_kg_m3": 1, "_id": 0})
-        token = set_project_density_override((project_doc or {}).get("density_override_kg_m3"))
+        project_doc = projects_col.find_one(
+            {"id": project_id},
+            {"density_override_kg_m3": 1, "material": 1, "stone_color": 1, "_id": 0},
+        )
+        pd = project_doc or {}
+        tokens = set_project_density_override(
+            pd.get("density_override_kg_m3"),
+            pd.get("material", "Granite"),
+            pd.get("stone_color", "") or "",
+        )
     try:
         return await call_next(request)
     finally:
-        if token is not None:
-            reset_project_density_override(token)
+        if tokens is not None:
+            reset_project_density_override(tokens)
 
 
 @app.get("/health")
@@ -1136,6 +1162,8 @@ def create_piece(project_id: int, piece: PieceCreate):
         "length": piece.length,
         "width": piece.width,
         "thickness": piece.thickness,
+        "material": piece.material,
+        "stone_color": piece.stone_color,
         "qty": piece.qty,
         "unit": piece.unit,
         "building": piece.building,
@@ -1145,6 +1173,10 @@ def create_piece(project_id: int, piece: PieceCreate):
         "sink_cut": piece.sink_cut,
         "tap_holes": piece.tap_holes,
         "grooves": piece.grooves,
+        "sink_offset_left": piece.sink_offset_left,
+        "sink_offset_right": piece.sink_offset_right,
+        "sink_length": piece.sink_length,
+        "sink_width": piece.sink_width,
         "fragility": piece.fragility,
         "orientation": piece.orientation,
         "delivery_priority": piece.delivery_priority,
@@ -1180,6 +1212,8 @@ def create_pieces_batch(project_id: int, pieces_data: List[PieceCreate]):
                 "length": piece.length,
                 "width": piece.width,
                 "thickness": piece.thickness,
+                "material": piece.material,
+                "stone_color": piece.stone_color,
                 "qty": piece.qty,
                 "unit": piece.unit,
                 "building": piece.building,
@@ -1189,6 +1223,10 @@ def create_pieces_batch(project_id: int, pieces_data: List[PieceCreate]):
                 "sink_cut": piece.sink_cut,
                 "tap_holes": piece.tap_holes,
                 "grooves": piece.grooves,
+                "sink_offset_left": piece.sink_offset_left,
+                "sink_offset_right": piece.sink_offset_right,
+                "sink_length": piece.sink_length,
+                "sink_width": piece.sink_width,
                 "fragility": piece.fragility,
                 "orientation": piece.orientation,
                 "delivery_priority": piece.delivery_priority,
@@ -1342,6 +1380,8 @@ def update_piece(piece_id: int, piece: PieceUpdate):
         "length": piece.length,
         "width": piece.width,
         "thickness": piece.thickness,
+        "material": piece.material,
+        "stone_color": piece.stone_color,
         "qty": piece.qty,
         "unit": piece.unit,
         "building": piece.building,
@@ -1351,6 +1391,10 @@ def update_piece(piece_id: int, piece: PieceUpdate):
         "sink_cut": piece.sink_cut,
         "tap_holes": piece.tap_holes,
         "grooves": piece.grooves,
+        "sink_offset_left": piece.sink_offset_left,
+        "sink_offset_right": piece.sink_offset_right,
+        "sink_length": piece.sink_length,
+        "sink_width": piece.sink_width,
         "fragility": piece.fragility,
         "orientation": piece.orientation,
         "delivery_priority": piece.delivery_priority,
@@ -1698,7 +1742,12 @@ def get_project_totals(project_id: int):
     part_count = sum(int(p.get("qty", 1) or 1) for p in pieces)
     total_sqft = sum(piece_area_sqft(p) * int(p.get("qty", 1) or 1) for p in pieces)
     total_weight = sum(
-        planning_piece_weight(p, material, str(p.get("thickness") or project_thickness), stone_color)
+        planning_piece_weight(
+            p,
+            str(p.get("material") or material),
+            str(p.get("thickness") or project_thickness),
+            str(p.get("stone_color") or stone_color),
+        )
         for p in pieces
     )
     return {
@@ -1744,8 +1793,15 @@ def get_dispatch_parts(project_id: int):
             "width": parse_float(p.get("width")),
             "qty": int(p.get("qty", 1) or 1),
             "thickness": str(p.get("thickness") or project_thickness),
+            "material": str(p.get("material") or material),
+            "stone_color": str(p.get("stone_color") or stone_color),
             "sqft": piece_sqft(p),
-            "weight_kg": pw(p, material, str(p.get("thickness") or project_thickness), stone_color),
+            "weight_kg": pw(
+                p,
+                str(p.get("material") or material),
+                str(p.get("thickness") or project_thickness),
+                str(p.get("stone_color") or stone_color),
+            ),
         })
     return _json_safe_floats(out)
 
@@ -1852,6 +1908,12 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
     def _effective_thickness(p: Dict[str, Any]) -> str:
         return str(p.get("thickness", "") or thickness)
 
+    def _effective_material(p: Dict[str, Any]) -> str:
+        return str(p.get("material", "") or material)
+
+    def _effective_color(p: Dict[str, Any]) -> str:
+        return str(p.get("stone_color", "") or stone_color)
+
     def _piece_detail(p: Dict[str, Any], role: str) -> Dict[str, Any]:
         return {
             "id": p.get("id"),
@@ -1862,7 +1924,7 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
             "length": parse_float(p.get("length")),
             "width": parse_float(p.get("width")),
             "thickness": _effective_thickness(p),
-            "weight_kg": pw(p, material, _effective_thickness(p), stone_color),
+            "weight_kg": pw(p, _effective_material(p), _effective_thickness(p), _effective_color(p)),
             "sqft": piece_sqft(p),
             "role": role,
         }
@@ -1911,7 +1973,7 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
             pieces_by_bucket[b].append(("splash", p))
 
         # Update raw totals (before splitting)
-        raw_unit_weight = sum(pw(p, material, _effective_thickness(p), stone_color) for p in all_p_raw)
+        raw_unit_weight = sum(pw(p, _effective_material(p), _effective_thickness(p), _effective_color(p)) for p in all_p_raw)
         _raw_pieces += len(all_p_raw)
         _raw_weight += raw_unit_weight
 
@@ -1921,7 +1983,7 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
             splash_p = [p for role, p in pieces_with_roles if role == "splash"]
             all_p_bucket = main_p + splash_p
 
-            total_w = sum(pw(p, material, _effective_thickness(p), stone_color) for p in all_p_bucket)
+            total_w = sum(pw(p, _effective_material(p), _effective_thickness(p), _effective_color(p)) for p in all_p_bucket)
             total_sq = sum(piece_sqft(p) for p in all_p_bucket)
 
             pieces_detail = (
@@ -2291,7 +2353,15 @@ def export_manual_crate_plan_xlsx(project_id: int, body: Dict):
                 parse_float(p.get("width")),
                 int(p.get("qty", 1) or 1),
                 round(piece_sqft(p), 2),
-                round(pw(p, material, str(p.get("thickness") or project_thickness), stone_color), 2),
+                round(
+                    pw(
+                        p,
+                        str(p.get("material") or material),
+                        str(p.get("thickness") or project_thickness),
+                        str(p.get("stone_color") or stone_color),
+                    ),
+                    2,
+                ),
             ])
     _auto_width(ws2)
 
@@ -2304,6 +2374,155 @@ def export_manual_crate_plan_xlsx(project_id: int, body: Dict):
         output,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+_EDGE_SIDE_LABELS = {"top": "front", "bottom": "back", "left": "left", "right": "right"}
+
+
+def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, project_thickness: str, stone_color: str) -> None:
+    """Draws one process label (fabrication reference) for a single piece onto a fresh PDF page."""
+    import fitz
+    from .services.planning_engine import piece_weight as pw, parse_float
+
+    W, H = 432, 288  # 6in x 4in @ 72dpi
+
+    black = (0.06, 0.09, 0.14)
+    gray = (0.4, 0.45, 0.5)
+    coral = (0.85, 0.35, 0.19)
+
+    page.insert_text((18, 24), str(p.get("part_no", "") or ""), fontsize=13, fontname="helv", color=black)
+    page.insert_text((18, 38), str(p.get("part", "") or ""), fontsize=9, color=gray)
+    page.insert_text((W - 90, 24), f"Crate #{crate_no}", fontsize=10, color=black)
+    thickness = str(p.get("thickness") or project_thickness)
+    page.insert_text((W - 90, 38), thickness, fontsize=9, color=gray)
+    page.draw_line((18, 44), (W - 18, 44), color=gray, width=0.5)
+
+    length = parse_float(p.get("length"))
+    width = parse_float(p.get("width"))
+
+    # Drawing area — rectangle scaled to fit, preserving aspect ratio.
+    draw_x0, draw_y0, draw_x1, draw_y1 = 50, 70, W - 50, 190
+    avail_w, avail_h = draw_x1 - draw_x0, draw_y1 - draw_y0
+    if length > 0 and width > 0:
+        scale = min(avail_w / length, avail_h / width)
+    else:
+        scale = 1
+    rw, rh = length * scale, width * scale
+    rx0 = draw_x0 + (avail_w - rw) / 2
+    ry0 = draw_y0 + (avail_h - rh) / 2
+    rx1, ry1 = rx0 + rw, ry0 + rh
+
+    page.draw_rect(fitz.Rect(rx0, ry0, rx1, ry1), color=black, width=1.2)
+
+    # Overall dimension callouts.
+    page.draw_line((rx0, ry0 - 10), (rx1, ry0 - 10), color=gray, width=0.5)
+    page.insert_text(((rx0 + rx1) / 2 - 18, ry0 - 13), f'{length:.2f}"', fontsize=8, color=gray)
+    page.draw_line((rx0 - 14, ry0), (rx0 - 14, ry1), color=gray, width=0.5)
+    page.insert_text((rx0 - 34, (ry0 + ry1) / 2), f'{width:.2f}"', fontsize=8, color=gray, rotate=90)
+
+    # Edge polish sides — marked with an X directly on the side to be worked.
+    edge_map = p.get("edge_map") or {}
+    edge_sides = [side for side, v in edge_map.items() if v and v != "none"]
+    mid_x, mid_y = (rx0 + rx1) / 2, (ry0 + ry1) / 2
+    if edge_map.get("top") and edge_map["top"] != "none":
+        page.insert_text((mid_x - 4, ry0 + 12), "X", fontsize=13, color=coral, fontname="helv")
+    if edge_map.get("bottom") and edge_map["bottom"] != "none":
+        page.insert_text((mid_x - 4, ry1 - 4), "X", fontsize=13, color=coral, fontname="helv")
+    if edge_map.get("left") and edge_map["left"] != "none":
+        page.insert_text((rx0 + 4, mid_y + 4), "X", fontsize=13, color=coral, fontname="helv")
+    if edge_map.get("right") and edge_map["right"] != "none":
+        page.insert_text((rx1 - 14, mid_y + 4), "X", fontsize=13, color=coral, fontname="helv")
+
+    # Sink cutout — positioned from the piece's own left/right offsets when set.
+    sink_type = str(p.get("sink_type") or "No Sink")
+    if sink_type and sink_type != "No Sink":
+        off_left = parse_float(p.get("sink_offset_left"))
+        off_right = parse_float(p.get("sink_offset_right"))
+        sink_len = parse_float(p.get("sink_length")) or max(length * 0.3, 1)
+        sink_wid = parse_float(p.get("sink_width")) or max(width * 0.5, 1)
+
+        if off_left > 0:
+            sx0 = rx0 + off_left * scale
+        elif off_right > 0 and length > 0:
+            sx0 = rx0 + (length - off_right - sink_len) * scale
+        else:
+            sx0 = mid_x - (sink_len * scale) / 2
+        sx1 = sx0 + sink_len * scale
+        sy0 = ry0 + (rh - sink_wid * scale) / 2
+        sy1 = sy0 + sink_wid * scale
+
+        page.draw_rect(fitz.Rect(sx0, sy0, sx1, sy1), color=coral, width=1)
+        page.insert_text(((sx0 + sx1) / 2 - 22, (sy0 + sy1) / 2 + 3), sink_type, fontsize=7, color=gray)
+
+        dim_y = ry1 + 22
+        page.draw_line((rx0, dim_y), (sx0, dim_y), color=gray, width=0.5)
+        page.insert_text(((rx0 + sx0) / 2 - 24, dim_y + 11), f'{off_left:.2f}" from left', fontsize=8, color=gray)
+        page.draw_line((sx1, dim_y), (rx1, dim_y), color=gray, width=0.5)
+        page.insert_text(((sx1 + rx1) / 2 - 26, dim_y + 11), f'{off_right:.2f}" from right', fontsize=8, color=gray)
+
+    # Spec table.
+    spec_y = 226
+    page.draw_line((18, spec_y - 8), (W - 18, spec_y - 8), color=gray, width=0.5)
+    sink_line = (
+        f"Sink: {sink_type} · {p.get('sink_cut', '-')} cutout(s) · {p.get('tap_holes', '-')} tap hole(s) · "
+        f"{p.get('grooves', '-')} groove(s)"
+    )
+    page.insert_text((18, spec_y + 8), sink_line, fontsize=8, color=black)
+    edge_line = "Edge polish: " + (", ".join(_EDGE_SIDE_LABELS.get(s, s) for s in edge_sides) if edge_sides else "None")
+    page.insert_text((18, spec_y + 22), edge_line, fontsize=8, color=black)
+    weight = pw(p, str(p.get("material") or material), thickness, str(p.get("stone_color") or stone_color))
+    page.insert_text((18, spec_y + 36), f"Weight: {weight:.2f} kg", fontsize=8, color=black)
+    page.insert_text((W - 100, spec_y + 36), f"{p.get('building', '')}/{p.get('floor', '')}/{p.get('flat', '')}", fontsize=8, color=gray)
+
+
+@app.post("/api/projects/{project_id}/process-labels/export")
+def export_process_labels_pdf(project_id: int, body: Dict):
+    """
+    One process label per part, one PDF page per part, for every part currently
+    assigned to a crate — the fabrication reference sheet meant to be printed
+    and stuck on each physical piece.
+    """
+    import fitz
+
+    crates = body.get("crates") or []
+    if not crates:
+        raise HTTPException(status_code=400, detail="No crates to generate labels for.")
+
+    project_doc = projects_col.find_one({"id": project_id}, {"_id": 0})
+    if not project_doc:
+        raise HTTPException(status_code=404, detail="Project not found")
+    project_name = project_doc.get("name") or project_doc.get("job_number") or f"Project {project_id}"
+    material = project_doc.get("material", "Granite")
+    project_thickness = project_doc.get("thickness", "3CM")
+    stone_color = str(project_doc.get("stone_color", "") or "")
+
+    all_part_ids = [pid for c in crates for pid in (c.get("part_ids") or [])]
+    pieces = list(pieces_col.find({"project_id": project_id, "id": {"$in": all_part_ids}}, {"_id": 0}))
+    pieces_by_id = {p.get("id"): p for p in pieces}
+
+    doc = fitz.open()
+    for c in crates:
+        crate_no = c.get("crate_no")
+        for pid in (c.get("part_ids") or []):
+            p = pieces_by_id.get(pid)
+            if not p:
+                continue
+            page = doc.new_page(width=432, height=288)
+            _build_process_label_page(page, p, crate_no, material, project_thickness, stone_color)
+
+    if doc.page_count == 0:
+        raise HTTPException(status_code=400, detail="No parts found for the given crates.")
+
+    output = BytesIO(doc.tobytes())
+    doc.close()
+    output.seek(0)
+    safe_name = "".join(ch if ch.isalnum() or ch in "-_ " else "_" for ch in project_name).strip()
+    filename = f"ProcessLabels_{safe_name}_{date.today().isoformat()}.pdf"
+    return StreamingResponse(
+        output,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
 
 
@@ -2609,7 +2828,12 @@ def get_packing_families(project_id: int):
             is_split = False
 
         total_weight = sum(
-            planning_piece_weight(p, material, str(p.get("thickness") or thickness), stone_color)
+            planning_piece_weight(
+                p,
+                str(p.get("material") or material),
+                str(p.get("thickness") or thickness),
+                str(p.get("stone_color") or stone_color),
+            )
             for p in all_pieces
         )
         cat_cfg = DET_CATEGORY_CONFIG.get(fam["category"], DET_CATEGORY_CONFIG["misc"])
@@ -3348,9 +3572,10 @@ def export_source_data(project_id: int):
         total_sqft = sum(piece_area_sqft(p) * int(p.get("qty", 1) or 1) for p in pieces)
         total_weight = sum(
             planning_piece_weight(
-                p, project.get("material", "Granite"),
+                p,
+                str(p.get("material") or project.get("material", "Granite")),
                 str(p.get("thickness") or project.get("thickness", "3CM")),
-                project.get("stone_color", "") or "",
+                str(p.get("stone_color") or project.get("stone_color", "") or ""),
             )
             for p in pieces
         )
@@ -3383,7 +3608,15 @@ def export_source_data(project_id: int):
         for p in pieces:
             qty = int(p.get("qty", 1) or 1)
             sqft = round(piece_area_sqft(p) * qty, 2)
-            wt = round(planning_piece_weight(p, mat, str(p.get("thickness") or thick), _color), 2)
+            wt = round(
+                planning_piece_weight(
+                    p,
+                    str(p.get("material") or mat),
+                    str(p.get("thickness") or thick),
+                    str(p.get("stone_color") or _color),
+                ),
+                2,
+            )
             rc = p.get("radius_corners") or {}
             active_corners = sum(1 for v in rc.values() if v)
             ws2.append([
@@ -3582,7 +3815,15 @@ def export_excel(project_id: int):
                     piece.get("category", ""), piece.get("drawing", ""), piece.get("unit", ""),
                     piece.get("building", ""), piece.get("floor", ""), piece.get("flat", ""),
                     piece.get("length", 0), piece.get("width", 0), piece.get("qty", 1),
-                    round(planning_piece_weight(piece, _mat, str(piece.get("thickness") or _thick), _color2), 2),
+                    round(
+                        planning_piece_weight(
+                            piece,
+                            str(piece.get("material") or _mat),
+                            str(piece.get("thickness") or _thick),
+                            str(piece.get("stone_color") or _color2),
+                        ),
+                        2,
+                    ),
                     piece.get("sink_type", "No Sink"), piece.get("sink_cut", "-"),
                     piece.get("tap_holes", "-"), piece.get("grooves", "-"),
                     piece.get("edge", "None"), piece.get("edge_area", ""),
