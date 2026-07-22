@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { API_BASE } from '../utils/plannerUtils';
 import { weightBatchParts } from '../utils/crateEstimator';
@@ -352,11 +352,19 @@ const CrateFilterPlanner = ({ projectId }) => {
   const [savedAt, setSavedAt] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [detailCrateNo, setDetailCrateNo] = useState(null);
+  // Process labels load incrementally — a small batch renders immediately,
+  // more batches fetch as the user scrolls, instead of blocking on every
+  // page for the whole (possibly thousands-of-parts) project up front.
+  const LABEL_BATCH_SIZE = 30;
   const [generatingLabels, setGeneratingLabels] = useState(false);
-  const [labelsPreviewUrl, setLabelsPreviewUrl] = useState(null);
+  const [labelBatches, setLabelBatches] = useState([]); // [{ url, count }]
+  const [labelsTotalParts, setLabelsTotalParts] = useState(0);
+  const [loadingMoreLabels, setLoadingMoreLabels] = useState(false);
+  const [exportingLabels, setExportingLabels] = useState(false);
+  const labelSentinelRef = useRef(null);
 
-  // Revoke the blob URL when the component unmounts.
-  useEffect(() => () => { if (labelsPreviewUrl) window.URL.revokeObjectURL(labelsPreviewUrl); }, [labelsPreviewUrl]);
+  // Revoke every batch blob URL when the component unmounts.
+  useEffect(() => () => { labelBatches.forEach((b) => window.URL.revokeObjectURL(b.url)); }, [labelBatches]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -508,34 +516,83 @@ const CrateFilterPlanner = ({ projectId }) => {
       .finally(() => setExporting(false));
   }, [projectId, crates]);
 
-  const handleGenerateLabels = useCallback(() => {
-    if (!crates.length) return;
-    setGeneratingLabels(true);
-    axios
+  const crateSpecs = useMemo(
+    () => crates.map((c) => ({ crate_no: c.crate_no, part_ids: c.parts.map((p) => p.id) })),
+    [crates],
+  );
+
+  const fetchLabelBatch = useCallback((offset) => {
+    return axios
       .post(
         `${API_BASE}/projects/${projectId}/process-labels/export`,
-        { crates: crates.map((c) => ({ crate_no: c.crate_no, part_ids: c.parts.map((p) => p.id) })) },
+        { crates: crateSpecs, offset, limit: LABEL_BATCH_SIZE },
         { responseType: 'blob' },
       )
       .then((res) => {
-        if (labelsPreviewUrl) window.URL.revokeObjectURL(labelsPreviewUrl);
+        const total = Number(res.headers['x-total-parts'] || 0);
+        const returned = Number(res.headers['x-returned-parts'] || 0);
         const url = window.URL.createObjectURL(res.data);
-        setLabelsPreviewUrl(url);
-      })
+        setLabelsTotalParts(total);
+        setLabelBatches((prev) => [...prev, { url, count: returned }]);
+      });
+  }, [projectId, crateSpecs]);
+
+  const handleGenerateLabels = useCallback(() => {
+    if (!crates.length) return;
+    labelBatches.forEach((b) => window.URL.revokeObjectURL(b.url));
+    setLabelBatches([]);
+    setLabelsTotalParts(0);
+    setGeneratingLabels(true);
+    fetchLabelBatch(0)
       .catch((e) => setError(e?.response?.data?.detail || e.message || 'Failed to generate process labels'))
       .finally(() => setGeneratingLabels(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, crates, labelsPreviewUrl]);
+  }, [crates.length, fetchLabelBatch]);
+
+  const labelsLoadedCount = useMemo(() => labelBatches.reduce((s, b) => s + b.count, 0), [labelBatches]);
+
+  // IntersectionObserver on a sentinel at the bottom of the preview list —
+  // scrolling it into view fetches the next batch, so the whole project's
+  // worth of labels is never generated (or waited on) all at once.
+  useEffect(() => {
+    if (!labelBatches.length || labelsLoadedCount >= labelsTotalParts) return;
+    const sentinel = labelSentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting && !loadingMoreLabels) {
+        setLoadingMoreLabels(true);
+        fetchLabelBatch(labelsLoadedCount)
+          .catch((e) => setError(e?.response?.data?.detail || e.message || 'Failed to load more labels'))
+          .finally(() => setLoadingMoreLabels(false));
+      }
+    }, { threshold: 0.1 });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [labelBatches.length, labelsLoadedCount, labelsTotalParts, loadingMoreLabels, fetchLabelBatch]);
 
   const handleDownloadLabels = useCallback(() => {
-    if (!labelsPreviewUrl) return;
-    const link = document.createElement('a');
-    link.href = labelsPreviewUrl;
-    link.download = 'ProcessLabels.pdf';
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-  }, [labelsPreviewUrl]);
+    if (!crates.length) return;
+    setExportingLabels(true);
+    axios
+      .post(
+        `${API_BASE}/projects/${projectId}/process-labels/export`,
+        { crates: crateSpecs },
+        { responseType: 'blob' },
+      )
+      .then((res) => {
+        const url = window.URL.createObjectURL(res.data);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'ProcessLabels.pdf';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => window.URL.revokeObjectURL(url), 1500);
+      })
+      .catch((e) => setError(e?.response?.data?.detail || e.message || 'Failed to download process labels'))
+      .finally(() => setExportingLabels(false));
+  }, [projectId, crates.length, crateSpecs]);
 
   const crateOptions = useMemo(() => crates.map((c) => c.crate_no), [crates]);
   const detailCrate = useMemo(() => crates.find((c) => c.crate_no === detailCrateNo) || null, [crates, detailCrateNo]);
@@ -693,21 +750,41 @@ const CrateFilterPlanner = ({ projectId }) => {
                       disabled={generatingLabels}
                       className="rounded-full bg-[#1d4ed8] px-5 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-[#1e40af] disabled:opacity-50"
                     >
-                      {generatingLabels ? 'Generating…' : 'Preview process labels'}
+                      {generatingLabels ? 'Loading first labels…' : 'Preview process labels'}
                     </button>
-                    {labelsPreviewUrl && (
+                    {labelBatches.length > 0 && (
                       <button
                         type="button"
                         onClick={handleDownloadLabels}
-                        className="rounded-full border border-[#0f172a] bg-white px-5 py-2 text-sm font-semibold text-[#0f172a] shadow-sm transition-all hover:bg-[#f1f5f9]"
+                        disabled={exportingLabels}
+                        className="rounded-full border border-[#0f172a] bg-white px-5 py-2 text-sm font-semibold text-[#0f172a] shadow-sm transition-all hover:bg-[#f1f5f9] disabled:opacity-50"
                       >
-                        Download PDF
+                        {exportingLabels ? `Generating all ${labelsTotalParts}…` : `Download PDF (all ${labelsTotalParts})`}
                       </button>
                     )}
+                    {labelBatches.length > 0 && (
+                      <span className="text-xs text-[#94a3b8]">
+                        Showing {labelsLoadedCount} of {labelsTotalParts} labels
+                      </span>
+                    )}
                   </div>
-                  {labelsPreviewUrl && (
+                  {labelBatches.length > 0 && (
                     <div className="rounded-[12px] border border-[#e2e8f0] overflow-hidden" style={{ height: 600 }}>
-                      <iframe title="Process labels preview" src={labelsPreviewUrl} className="w-full h-full" />
+                      <div className="overflow-y-auto h-full">
+                        {labelBatches.map((b, i) => (
+                          <iframe
+                            key={b.url}
+                            title={`Process labels preview batch ${i + 1}`}
+                            src={b.url}
+                            style={{ width: '100%', height: 500, border: 'none', display: 'block' }}
+                          />
+                        ))}
+                        {labelsLoadedCount < labelsTotalParts && (
+                          <div ref={labelSentinelRef} className="py-4 text-center text-xs text-[#94a3b8]">
+                            {loadingMoreLabels ? 'Loading more labels…' : 'Scroll for more'}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>

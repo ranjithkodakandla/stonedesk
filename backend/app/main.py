@@ -830,6 +830,8 @@ app.add_middleware(
         "X-Perf-Validation",
         "X-Perf-Mongo",
         "X-Perf-Backend-Total",
+        "X-Total-Parts",
+        "X-Returned-Parts",
     ],
 )
 
@@ -2378,6 +2380,10 @@ def export_manual_crate_plan_xlsx(project_id: int, body: Dict):
 
 
 _EDGE_SIDE_LABELS = {"top": "front", "bottom": "back", "left": "left", "right": "right"}
+_CORNER_LABELS = {
+    "top_left": "top-left", "top_right": "top-right",
+    "bottom_left": "bottom-left", "bottom_right": "bottom-right",
+}
 
 
 def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, project_thickness: str, stone_color: str) -> None:
@@ -2434,6 +2440,28 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
     if edge_map.get("right") and edge_map["right"] != "none":
         page.insert_text((rx1 - 14, mid_y + 4), "X", fontsize=13, color=coral, fontname="helv")
 
+    # Radius corners — a small arc marks each rounded corner, labeled with the radius.
+    radius_corners = p.get("radius_corners") or {}
+    radius_value = parse_float(p.get("radius_value"))
+    active_corners = [c for c, v in radius_corners.items() if v]
+    r_arc = 10
+    corner_geometry = {
+        "top_left": (rx0, ry0, 1, 1),
+        "top_right": (rx1, ry0, -1, 1),
+        "bottom_left": (rx0, ry1, 1, -1),
+        "bottom_right": (rx1, ry1, -1, -1),
+    }
+    for corner in active_corners:
+        geo = corner_geometry.get(corner)
+        if not geo:
+            continue
+        cx, cy, sx, sy = geo
+        page.draw_curve((cx, cy + sy * r_arc), (cx, cy), (cx + sx * r_arc, cy), color=coral, width=1.2)
+        label = f'R{radius_value:.2f}"' if radius_value > 0 else "R"
+        label_x = cx + sx * (r_arc + 4) - (len(label) * 4 if sx < 0 else 0)
+        label_y = cy + sy * (r_arc + 10) if sy < 0 else cy + sy * (r_arc + 4) + 10
+        page.insert_text((label_x, label_y), label, fontsize=7, color=coral)
+
     # Sink cutout — positioned from the piece's own left/right offsets when set.
     sink_type = str(p.get("sink_type") or "No Sink")
     if sink_type and sink_type != "No Sink":
@@ -2470,10 +2498,15 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
     )
     page.insert_text((18, spec_y + 8), sink_line, fontsize=8, color=black)
     edge_line = "Edge polish: " + (", ".join(_EDGE_SIDE_LABELS.get(s, s) for s in edge_sides) if edge_sides else "None")
-    page.insert_text((18, spec_y + 22), edge_line, fontsize=8, color=black)
+    page.insert_text((18, spec_y + 19), edge_line, fontsize=8, color=black)
+    if active_corners:
+        radius_line = f'Radius: R{radius_value:.2f}" on ' + ", ".join(_CORNER_LABELS.get(c, c) for c in active_corners)
+    else:
+        radius_line = "Radius: None"
+    page.insert_text((18, spec_y + 30), radius_line, fontsize=8, color=black)
     weight = pw(p, str(p.get("material") or material), thickness, str(p.get("stone_color") or stone_color))
-    page.insert_text((18, spec_y + 36), f"Weight: {weight:.2f} kg", fontsize=8, color=black)
-    page.insert_text((W - 100, spec_y + 36), f"{p.get('building', '')}/{p.get('floor', '')}/{p.get('flat', '')}", fontsize=8, color=gray)
+    page.insert_text((18, spec_y + 41), f"Weight: {weight:.2f} kg", fontsize=8, color=black)
+    page.insert_text((W - 100, spec_y + 41), f"{p.get('building', '')}/{p.get('floor', '')}/{p.get('flat', '')}", fontsize=8, color=gray)
 
 
 @app.post("/api/projects/{project_id}/process-labels/export")
@@ -2482,12 +2515,23 @@ def export_process_labels_pdf(project_id: int, body: Dict):
     One process label per part, one PDF page per part, for every part currently
     assigned to a crate — the fabrication reference sheet meant to be printed
     and stuck on each physical piece.
+
+    Optional `offset`/`limit` slice the flattened (crate order, part order)
+    sequence so the caller can page through a huge label set instead of
+    waiting for every page to render before seeing anything — the preview UI
+    uses this to load a small batch immediately and fetch more on scroll.
+    Omit both to generate the complete set (used for the full download).
+    Response includes X-Total-Parts / X-Returned-Parts headers so the caller
+    knows whether more batches remain.
     """
     import fitz
 
     crates = body.get("crates") or []
     if not crates:
         raise HTTPException(status_code=400, detail="No crates to generate labels for.")
+    offset = max(0, int(body.get("offset") or 0))
+    limit = body.get("limit")
+    limit = int(limit) if limit not in (None, "") else None
 
     project_doc = projects_col.find_one({"id": project_id}, {"_id": 0})
     if not project_doc:
@@ -2497,22 +2541,26 @@ def export_process_labels_pdf(project_id: int, body: Dict):
     project_thickness = project_doc.get("thickness", "3CM")
     stone_color = str(project_doc.get("stone_color", "") or "")
 
-    all_part_ids = [pid for c in crates for pid in (c.get("part_ids") or [])]
+    # Flatten to a stable (crate_no, part_id) sequence, then slice.
+    flat = [(c.get("crate_no"), pid) for c in crates for pid in (c.get("part_ids") or [])]
+    total_parts = len(flat)
+    sliced = flat[offset:offset + limit] if limit is not None else flat[offset:]
+
+    all_part_ids = list({pid for _, pid in sliced})
     pieces = list(pieces_col.find({"project_id": project_id, "id": {"$in": all_part_ids}}, {"_id": 0}))
     pieces_by_id = {p.get("id"): p for p in pieces}
 
     doc = fitz.open()
-    for c in crates:
-        crate_no = c.get("crate_no")
-        for pid in (c.get("part_ids") or []):
-            p = pieces_by_id.get(pid)
-            if not p:
-                continue
-            page = doc.new_page(width=432, height=288)
-            _build_process_label_page(page, p, crate_no, material, project_thickness, stone_color)
+    for crate_no, pid in sliced:
+        p = pieces_by_id.get(pid)
+        if not p:
+            continue
+        page = doc.new_page(width=432, height=288)
+        _build_process_label_page(page, p, crate_no, material, project_thickness, stone_color)
 
-    if doc.page_count == 0:
-        raise HTTPException(status_code=400, detail="No parts found for the given crates.")
+    returned_count = doc.page_count
+    if returned_count == 0:
+        raise HTTPException(status_code=400, detail="No parts found for the given crates/range.")
 
     output = BytesIO(doc.tobytes())
     doc.close()
@@ -2522,7 +2570,11 @@ def export_process_labels_pdf(project_id: int, body: Dict):
     return StreamingResponse(
         output,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'inline; filename="{filename}"',
+            "X-Total-Parts": str(total_parts),
+            "X-Returned-Parts": str(returned_count),
+        },
     )
 
 
