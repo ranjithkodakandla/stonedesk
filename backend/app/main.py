@@ -35,6 +35,8 @@ from .services.planning_engine import (
     reset_wood_density_factors,
     reset_project_density_override,
     set_project_density_override,
+    reset_project_weight_multiplier,
+    set_project_weight_multiplier,
     weight_factor as planning_weight_factor,
 )
 
@@ -329,6 +331,7 @@ def project_response(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         "planner_v3_container_optimization": _json_safe_floats(doc.get("planner_v3_container_optimization")),
         "delivery_payload_cap_kg": float(doc.get("delivery_payload_cap_kg") or 24000),
         "density_override_kg_m3": doc.get("density_override_kg_m3"),
+        "weight_multiplier_kg_per_sqft": doc.get("weight_multiplier_kg_per_sqft"),
         "created_at": as_iso(doc.get("created_at")),
         "updated_at": as_iso(doc.get("updated_at")),
     }
@@ -847,11 +850,12 @@ async def apply_project_density_override(request: Request, call_next):
     """
     match = _PROJECT_ID_IN_PATH.search(request.url.path)
     tokens = None
+    multiplier_token = None
     if match:
         project_id = int(match.group(1))
         project_doc = projects_col.find_one(
             {"id": project_id},
-            {"density_override_kg_m3": 1, "material": 1, "stone_color": 1, "_id": 0},
+            {"density_override_kg_m3": 1, "material": 1, "stone_color": 1, "weight_multiplier_kg_per_sqft": 1, "_id": 0},
         )
         pd = project_doc or {}
         tokens = set_project_density_override(
@@ -859,11 +863,14 @@ async def apply_project_density_override(request: Request, call_next):
             pd.get("material", "Granite"),
             pd.get("stone_color", "") or "",
         )
+        multiplier_token = set_project_weight_multiplier(pd.get("weight_multiplier_kg_per_sqft"))
     try:
         return await call_next(request)
     finally:
         if tokens is not None:
             reset_project_density_override(tokens)
+        if multiplier_token is not None:
+            reset_project_weight_multiplier(multiplier_token)
 
 
 @app.get("/health")
@@ -928,6 +935,28 @@ def patch_density_override(project_id: int, data: Dict[str, Any] = Body(...)):
         {"$set": {"density_override_kg_m3": value, "updated_at": utc_now()}},
     )
     return {"density_override_kg_m3": value}
+
+
+@app.patch("/api/projects/{project_id}/weight-multiplier")
+def patch_weight_multiplier(project_id: int, data: Dict[str, Any] = Body(...)):
+    """
+    Per-project weight MULTIPLYING FACTOR (kg per sqft) — an alternative to
+    density-based weight, for teams that estimate weight manually as
+    sqft × flat factor (e.g. 7.75) regardless of color/thickness. Takes
+    precedence over density and the material/thickness table outright for
+    every weight calc in this project (summary, crate planning, exports).
+    Pass weight_multiplier_kg_per_sqft: null to clear it and fall back to
+    density-based weight again.
+    """
+    raw = data.get("weight_multiplier_kg_per_sqft")
+    value = float(raw) if raw not in (None, "") else None
+    if value is not None and value <= 0:
+        raise HTTPException(status_code=400, detail="weight_multiplier_kg_per_sqft must be positive")
+    projects_col.update_one(
+        {"id": project_id},
+        {"$set": {"weight_multiplier_kg_per_sqft": value, "updated_at": utc_now()}},
+    )
+    return {"weight_multiplier_kg_per_sqft": value}
 
 
 @app.patch("/api/projects/{project_id}/planner-payload")

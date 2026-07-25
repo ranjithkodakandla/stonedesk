@@ -372,6 +372,61 @@ function DensityOverrideControl({ project, onDataChange }) {
   );
 }
 
+function WeightMultiplierControl({ project, onDataChange }) {
+  const [value, setValue] = useState(project.weight_multiplier_kg_per_sqft ?? '');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setValue(project.weight_multiplier_kg_per_sqft ?? '');
+  }, [project.id, project.weight_multiplier_kg_per_sqft]);
+
+  const save = async (nextValue) => {
+    setSaving(true);
+    try {
+      await axios.patch(`${API_BASE}/projects/${project.id}/weight-multiplier`, {
+        weight_multiplier_kg_per_sqft: nextValue === '' ? null : Number(nextValue),
+      });
+      onDataChange?.();
+    } catch (err) {
+      console.error('Failed to save weight multiplier', err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div>
+      <label className="label-text">Weight Multiplying Factor (kg/sqft)</label>
+      <div className="flex gap-1.5">
+        <input
+          type="number"
+          min="0.1"
+          step="0.01"
+          placeholder="e.g., 7.75"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={() => save(value)}
+          className="input-field"
+        />
+        {project.weight_multiplier_kg_per_sqft != null && (
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => { setValue(''); save(''); }}
+            className="rounded-lg border border-slate-200 px-2 text-xs text-slate-500 hover:bg-slate-50 whitespace-nowrap"
+            title="Clear override, use density-based weight again"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      <p className="mt-1 text-[10px] text-slate-400">
+        Overrides density entirely: weight = sqft × this factor. Leave blank to use color density instead.
+      </p>
+    </div>
+  );
+}
+
 const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedDrawingClear }) => {
   const thicknessAutoLockRef = useRef(false);
   const loadedPieceIdsRef = useRef([]);
@@ -914,6 +969,7 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
           <div><label className="label-text">Job #</label><input name="job_number" value={project.job_number || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
           <div><label className="label-text">Date</label><input type="date" name="date" value={project.date || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
           <DensityOverrideControl project={project} onDataChange={onDataChange} />
+          <WeightMultiplierControl project={project} onDataChange={onDataChange} />
         </div>
 
         {/* ── Thickness Mapping ── */}

@@ -118,6 +118,43 @@ function computeCrateDimensions(parts, dimConfig) {
   if (!parts.length) {
     return { internal_length: 0, internal_width: 0, internal_height: 0, external_length: 0, external_width: 0, external_height: 0 };
   }
+
+  const isIsland = parts.some((p) => bucketOrderForPart(p) === 0);
+  const cfg = isIsland ? dimConfig.island : dimConfig.kv;
+
+  if (isIsland) {
+    // Islands stand upright (cassette model) — a completely different axis
+    // assignment than flat-lay kitchen/vanity crates: the piece's SHORT edge
+    // becomes the crate's HEIGHT (it's standing on end), and thickness stacks
+    // on the WIDTH/DEPTH axis (pieces lean side by side like books on a
+    // shelf), not on height. Mirrors estimateLeanedCassetteDimensions() in
+    // crateEstimator.js.
+    let maxLongEdge = 0;
+    let maxShortEdge = 0;
+    for (const p of parts) {
+      const L = p.length || 0;
+      const W = p.width || 0;
+      maxLongEdge = Math.max(maxLongEdge, Math.max(L, W));
+      maxShortEdge = Math.max(maxShortEdge, L > 0 && W > 0 ? Math.min(L, W) : Math.max(L, W));
+    }
+    const stackDepth = parts.reduce((s, p) => s + thicknessInches(p.thickness) * (p.qty || 1), 0);
+
+    const internal_length = maxLongEdge + cfg.lengthMargin * 2;
+    const internal_width = stackDepth + cfg.widthMargin * 2;
+    const internal_height = maxShortEdge + cfg.heightMargin;
+
+    return {
+      internal_length,
+      internal_width,
+      internal_height,
+      external_length: internal_length + cfg.extLengthAdd,
+      external_width: internal_width + cfg.extWidthAdd,
+      external_height: internal_height + cfg.extHeight,
+    };
+  }
+
+  // Kitchen/Vanity — flat-lay: length/width from footprint, height from
+  // layered same-role groups (mirrors estimateHorizontalLayeredDimensions()).
   const rawLength = Math.max(...parts.map((p) => p.length || 0));
   const rawWidth = Math.max(...parts.map((p) => p.width || 0));
 
@@ -133,9 +170,6 @@ function computeCrateDimensions(parts, dimConfig) {
   if (mainH > 0) stackedHeight += mainH;
   if (backH > 0) stackedHeight += LAYER_SEPARATOR_IN + backH;
   if (sideH > 0) stackedHeight += LAYER_SEPARATOR_IN + sideH;
-
-  const isIsland = parts.some((p) => bucketOrderForPart(p) === 0);
-  const cfg = isIsland ? dimConfig.island : dimConfig.kv;
 
   const internal_length = rawLength + cfg.lengthMargin * 2;
   const internal_width = rawWidth + cfg.widthMargin * 2;
