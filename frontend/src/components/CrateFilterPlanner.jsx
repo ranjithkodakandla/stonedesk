@@ -200,11 +200,11 @@ const DIM_CLASS_FIELDS = [
 ];
 
 const TABLE_COLUMNS = [
-  { key: 'part_no', label: 'Part #' },
-  { key: 'part', label: 'Part Type' },
-  { key: 'category', label: 'Category' },
   { key: 'drawing', label: 'Drawing' },
   { key: 'unit', label: 'Unit' },
+  { key: 'part', label: 'Part Type' },
+  { key: 'category', label: 'Category' },
+  { key: 'part_no', label: 'Part #' },
   { key: 'building', label: 'Building' },
   { key: 'floor', label: 'Floor' },
   { key: 'flat', label: 'Flat' },
@@ -230,13 +230,13 @@ const CRATE_SUMMARY_COLUMNS = [
   { key: 'parts', label: 'Parts', numeric: true },
   { key: 'total_weight_kg', label: 'Weight (kg)', numeric: true },
   { key: 'total_sqft', label: 'Sq Ft', numeric: true },
-  { key: 'internal_length', label: 'Int L', numeric: true },
-  { key: 'internal_width', label: 'Int W', numeric: true },
-  { key: 'internal_height', label: 'Int H', numeric: true },
-  { key: 'external_length', label: 'Ext L', numeric: true },
-  { key: 'external_width', label: 'Ext W', numeric: true },
-  { key: 'external_height', label: 'Ext H', numeric: true },
+  { key: 'internal_size', label: 'Internal Size (L×W×H)', numeric: true },
+  { key: 'external_size', label: 'External Size (L×W×H)', numeric: true },
 ];
+
+function sizeLWH(l, w, h) {
+  return `${fmt(l)}×${fmt(w)}×${fmt(h)}″`;
+}
 
 // Excel-style summary — one row per crate, inline-scrolled (the container, not
 // the page, scrolls), with View/Delete as inline links per row.
@@ -262,12 +262,8 @@ function CrateSummaryTable({ crates, onViewDetails, onDeleteCrate }) {
                 <td className="px-3 py-2 whitespace-nowrap text-right text-[#334155]">{c.parts.length}</td>
                 <td className="px-3 py-2 whitespace-nowrap text-right font-medium text-[#1e293b]">{fmt(c.total_weight_kg)}</td>
                 <td className="px-3 py-2 whitespace-nowrap text-right text-[#334155]">{fmt(c.total_sqft)}</td>
-                <td className="px-3 py-2 whitespace-nowrap text-right text-[#64748b]">{fmt(c.internal_length)}</td>
-                <td className="px-3 py-2 whitespace-nowrap text-right text-[#64748b]">{fmt(c.internal_width)}</td>
-                <td className="px-3 py-2 whitespace-nowrap text-right text-[#64748b]">{fmt(c.internal_height)}</td>
-                <td className="px-3 py-2 whitespace-nowrap text-right text-[#64748b]">{fmt(c.external_length)}</td>
-                <td className="px-3 py-2 whitespace-nowrap text-right text-[#64748b]">{fmt(c.external_width)}</td>
-                <td className="px-3 py-2 whitespace-nowrap text-right text-[#64748b]">{fmt(c.external_height)}</td>
+                <td className="px-3 py-2 whitespace-nowrap text-right text-[#64748b]">{sizeLWH(c.internal_length, c.internal_width, c.internal_height)}</td>
+                <td className="px-3 py-2 whitespace-nowrap text-right text-[#64748b]">{sizeLWH(c.external_length, c.external_width, c.external_height)}</td>
                 <td className="px-3 py-2 whitespace-nowrap">
                   <button
                     type="button"
