@@ -328,6 +328,9 @@ function DensityOverrideControl({ project, onDataChange }) {
     setValue(project.density_override_kg_m3 ?? '');
   }, [project.id, project.density_override_kg_m3]);
 
+  const persisted = project.density_override_kg_m3 ?? '';
+  const dirty = String(value) !== String(persisted);
+
   const save = async (nextValue) => {
     setSaving(true);
     try {
@@ -352,10 +355,20 @@ function DensityOverrideControl({ project, onDataChange }) {
           placeholder="Global default"
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          onBlur={() => save(value)}
+          onKeyDown={(e) => e.key === 'Enter' && dirty && save(value)}
           className="input-field"
         />
-        {project.density_override_kg_m3 != null && (
+        {dirty && (
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => save(value)}
+            className="rounded-lg border border-blue-600 bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700 whitespace-nowrap"
+          >
+            {saving ? 'Updating…' : 'Update'}
+          </button>
+        )}
+        {!dirty && project.density_override_kg_m3 != null && (
           <button
             type="button"
             disabled={saving}
@@ -367,7 +380,7 @@ function DensityOverrideControl({ project, onDataChange }) {
           </button>
         )}
       </div>
-      <p className="mt-1 text-[10px] text-slate-400">This project only — leave blank to use the global color density.</p>
+      <p className="mt-1 text-[10px] text-slate-400">This project only — leave blank to use the global color density. Changes apply on Update.</p>
     </div>
   );
 }
@@ -379,6 +392,9 @@ function WeightMultiplierControl({ project, onDataChange }) {
   useEffect(() => {
     setValue(project.weight_multiplier_kg_per_sqft ?? '');
   }, [project.id, project.weight_multiplier_kg_per_sqft]);
+
+  const persisted = project.weight_multiplier_kg_per_sqft ?? '';
+  const dirty = String(value) !== String(persisted);
 
   const save = async (nextValue) => {
     setSaving(true);
@@ -405,10 +421,20 @@ function WeightMultiplierControl({ project, onDataChange }) {
           placeholder="e.g., 7.75"
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          onBlur={() => save(value)}
+          onKeyDown={(e) => e.key === 'Enter' && dirty && save(value)}
           className="input-field"
         />
-        {project.weight_multiplier_kg_per_sqft != null && (
+        {dirty && (
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => save(value)}
+            className="rounded-lg border border-blue-600 bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700 whitespace-nowrap"
+          >
+            {saving ? 'Updating…' : 'Update'}
+          </button>
+        )}
+        {!dirty && project.weight_multiplier_kg_per_sqft != null && (
           <button
             type="button"
             disabled={saving}
@@ -421,7 +447,7 @@ function WeightMultiplierControl({ project, onDataChange }) {
         )}
       </div>
       <p className="mt-1 text-[10px] text-slate-400">
-        Overrides density entirely: weight = sqft × this factor. Leave blank to use color density instead.
+        Overrides density entirely: weight = sqft × this factor. Leave blank to use color density instead. Changes apply on Update.
       </p>
     </div>
   );

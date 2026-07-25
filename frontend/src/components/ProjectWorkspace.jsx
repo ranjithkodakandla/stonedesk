@@ -116,7 +116,15 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
       .get(`${API_BASE}/projects/${projectId}/totals`)
       .then((res) => setServerTotals(res.data))
       .catch(() => setServerTotals(null));
-  }, [projectId, pieces.length]);
+  }, [
+    projectId,
+    pieces.length,
+    project?.density_override_kg_m3,
+    project?.weight_multiplier_kg_per_sqft,
+    project?.material,
+    project?.stone_color,
+    project?.thickness,
+  ]);
 
   const totalWeight = serverTotals?.total_weight_kg ?? pieces.reduce((sum, piece) => sum + getPieceWeight(piece, project), 0);
   const totalSqFt = serverTotals?.total_sqft ?? pieces.reduce((sum, piece) => sum + ((Number(piece.length || 0) * Number(piece.width || 0)) / 144) * (Number(piece.qty) || 1), 0);
