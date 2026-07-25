@@ -260,9 +260,111 @@ function CrateSummaryTable({ crates, onViewDetails, onDeleteCrate }) {
   );
 }
 
+// Compact Excel-style column header filter — click the funnel to check/uncheck
+// values; empty selection = show all (same convention as MultiSelectDropdown).
+function ColumnFilterMenu({ options, selected, onChange }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+
+  useEffect(() => {
+    function onDocClick(e) {
+      if (rootRef.current && !rootRef.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, []);
+
+  const isAll = selected.length === 0;
+  const active = !isAll;
+
+  return (
+    <span className="relative inline-block ml-1" ref={rootRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className={`text-[10px] ${active ? 'text-[#1d4ed8]' : 'text-[#94a3b8]'} hover:text-[#1d4ed8]`}
+        title="Filter"
+      >
+        ▾
+      </button>
+      {open && (
+        <div className="absolute z-30 top-full left-0 mt-1 w-48 max-h-64 overflow-hidden rounded-xl border border-[#e2e8f0] bg-white shadow-lg flex flex-col normal-case font-normal text-[11px]">
+          <div className="flex items-center justify-between px-2 py-1.5 border-b border-[#f1f5f9]">
+            <button type="button" className="text-blue-600 font-semibold" onClick={() => onChange([])}>All</button>
+            <button
+              type="button"
+              className="text-[#94a3b8] font-semibold"
+              onClick={() => onChange(options.length ? [`__nomatch__${Math.random()}`] : [])}
+            >
+              Clear
+            </button>
+          </div>
+          <div className="overflow-y-auto p-1">
+            {options.map((opt) => {
+              const checked = isAll || selected.includes(opt);
+              return (
+                <label key={opt} className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-[#f8fafc] cursor-pointer text-[#334155]">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => {
+                      if (isAll) onChange(options.filter((o) => o !== opt));
+                      else if (selected.includes(opt)) {
+                        const next = selected.filter((v) => v !== opt);
+                        onChange(next.length ? next : []);
+                      } else onChange([...selected, opt]);
+                    }}
+                    className="rounded border-[#cbd5e1]"
+                  />
+                  <span className="truncate">{opt}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </span>
+  );
+}
+
 // Part-detail modal for a single crate — opened via "View details" in the
-// summary table above.
+// summary table above. Each column header has an Excel-style filter.
 function CrateDetailModal({ crate, crateOptions, onMovePart, onClose }) {
+  const [columnFilters, setColumnFilters] = useState({});
+
+  // Reset filters whenever a different crate is opened.
+  useEffect(() => { setColumnFilters({}); }, [crate?.crate_no]);
+
+  const matchesColumnFilters = useCallback((part, exceptKey) => {
+    return TABLE_COLUMNS.every((c) => {
+      if (c.key === exceptKey) return true;
+      const sel = columnFilters[c.key] || [];
+      if (!sel.length) return true;
+      return sel.includes(String(part[c.key] ?? ''));
+    });
+  }, [columnFilters]);
+
+  const columnOptions = useMemo(() => {
+    if (!crate) return {};
+    const out = {};
+    for (const c of TABLE_COLUMNS) {
+      const values = new Set();
+      for (const p of crate.parts) {
+        if (matchesColumnFilters(p, c.key)) values.add(String(p[c.key] ?? ''));
+      }
+      out[c.key] = [...values].sort((a, b) => {
+        const na = parseFloat(a), nb = parseFloat(b);
+        return !isNaN(na) && !isNaN(nb) ? na - nb : a.localeCompare(b);
+      });
+    }
+    return out;
+  }, [crate, matchesColumnFilters]);
+
+  const filteredParts = useMemo(
+    () => (crate ? crate.parts.filter((p) => matchesColumnFilters(p, null)) : []),
+    [crate, matchesColumnFilters],
+  );
+
   if (!crate) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onClose}>
@@ -272,7 +374,9 @@ function CrateDetailModal({ crate, crateOptions, onMovePart, onClose }) {
       >
         <div className="flex items-center gap-4 px-5 py-4 border-b border-[#f1f5f9] flex-wrap">
           <span className="text-sm font-bold text-[#0f172a]">Crate #{crate.crate_no}</span>
-          <span className="text-xs text-[#64748b]">{crate.parts.length} parts</span>
+          <span className="text-xs text-[#64748b]">
+            {filteredParts.length === crate.parts.length ? `${crate.parts.length} parts` : `${filteredParts.length} of ${crate.parts.length} parts`}
+          </span>
           <span className="text-sm font-semibold text-[#1e293b]">{fmt(crate.total_weight_kg)} kg</span>
           <span className="text-xs text-[#94a3b8]">{fmt(crate.total_sqft)} ft²</span>
           <span className="text-xs text-[#94a3b8]">
@@ -297,13 +401,18 @@ function CrateDetailModal({ crate, crateOptions, onMovePart, onClose }) {
                 {TABLE_COLUMNS.map((c) => (
                   <th key={c.key} className={`px-3 py-2 text-left whitespace-nowrap ${c.numeric ? 'text-right' : ''}`}>
                     {c.label}
+                    <ColumnFilterMenu
+                      options={columnOptions[c.key] || []}
+                      selected={columnFilters[c.key] || []}
+                      onChange={(vals) => setColumnFilters((f) => ({ ...f, [c.key]: vals }))}
+                    />
                   </th>
                 ))}
                 <th className="px-3 py-2 text-left whitespace-nowrap">Move to</th>
               </tr>
             </thead>
             <tbody>
-              {crate.parts.map((p) => (
+              {filteredParts.map((p) => (
                 <tr key={p.id} className="border-t border-[#f8fafc] hover:bg-[#f8fafc]">
                   {TABLE_COLUMNS.map((c) => (
                     <td key={c.key} className={`px-3 py-1.5 whitespace-nowrap text-[#334155] ${c.numeric ? 'text-right font-medium' : ''}`}>
@@ -361,7 +470,7 @@ const CrateFilterPlanner = ({ projectId }) => {
   const [labelsTotalParts, setLabelsTotalParts] = useState(0);
   const [loadingMoreLabels, setLoadingMoreLabels] = useState(false);
   const [exportingLabels, setExportingLabels] = useState(false);
-  const labelSentinelRef = useRef(null);
+  const [exportElapsedSec, setExportElapsedSec] = useState(0);
 
   // Revoke every batch blob URL when the component unmounts.
   useEffect(() => () => { labelBatches.forEach((b) => window.URL.revokeObjectURL(b.url)); }, [labelBatches]);
@@ -551,29 +660,27 @@ const CrateFilterPlanner = ({ projectId }) => {
 
   const labelsLoadedCount = useMemo(() => labelBatches.reduce((s, b) => s + b.count, 0), [labelBatches]);
 
-  // IntersectionObserver on a sentinel at the bottom of the preview list —
-  // scrolling it into view fetches the next batch, so the whole project's
-  // worth of labels is never generated (or waited on) all at once.
-  useEffect(() => {
-    if (!labelBatches.length || labelsLoadedCount >= labelsTotalParts) return;
-    const sentinel = labelSentinelRef.current;
-    if (!sentinel) return;
-    const observer = new IntersectionObserver((entries) => {
-      if (entries[0].isIntersecting && !loadingMoreLabels) {
-        setLoadingMoreLabels(true);
-        fetchLabelBatch(labelsLoadedCount)
-          .catch((e) => setError(e?.response?.data?.detail || e.message || 'Failed to load more labels'))
-          .finally(() => setLoadingMoreLabels(false));
-      }
-    }, { threshold: 0.1 });
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [labelBatches.length, labelsLoadedCount, labelsTotalParts, loadingMoreLabels, fetchLabelBatch]);
+  // "Load more" is an explicit button, not scroll-triggered — each batch is
+  // its own embedded PDF viewer with its own internal scrollbar, which
+  // captures mouse-wheel input before it ever reaches the outer container,
+  // so a scroll-into-view sentinel below the iframe is unreachable by
+  // scrolling over it. A button sidesteps that entirely.
+  const handleLoadMoreLabels = useCallback(() => {
+    if (loadingMoreLabels || labelsLoadedCount >= labelsTotalParts) return;
+    setLoadingMoreLabels(true);
+    fetchLabelBatch(labelsLoadedCount)
+      .catch((e) => setError(e?.response?.data?.detail || e.message || 'Failed to load more labels'))
+      .finally(() => setLoadingMoreLabels(false));
+  }, [loadingMoreLabels, labelsLoadedCount, labelsTotalParts, fetchLabelBatch]);
 
   const handleDownloadLabels = useCallback(() => {
     if (!crates.length) return;
     setExportingLabels(true);
+    setExportElapsedSec(0);
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => {
+      setExportElapsedSec(Math.round((Date.now() - startedAt) / 1000));
+    }, 1000);
     axios
       .post(
         `${API_BASE}/projects/${projectId}/process-labels/export`,
@@ -591,6 +698,7 @@ const CrateFilterPlanner = ({ projectId }) => {
         window.setTimeout(() => window.URL.revokeObjectURL(url), 1500);
       })
       .catch((e) => setError(e?.response?.data?.detail || e.message || 'Failed to download process labels'))
+      .finally(() => window.clearInterval(timer))
       .finally(() => setExportingLabels(false));
   }, [projectId, crates.length, crateSpecs]);
 
@@ -759,8 +867,13 @@ const CrateFilterPlanner = ({ projectId }) => {
                         disabled={exportingLabels}
                         className="rounded-full border border-[#0f172a] bg-white px-5 py-2 text-sm font-semibold text-[#0f172a] shadow-sm transition-all hover:bg-[#f1f5f9] disabled:opacity-50"
                       >
-                        {exportingLabels ? `Generating all ${labelsTotalParts}…` : `Download PDF (all ${labelsTotalParts})`}
+                        {exportingLabels ? `Generating all ${labelsTotalParts}… (${exportElapsedSec}s)` : `Download PDF (all ${labelsTotalParts})`}
                       </button>
+                    )}
+                    {exportingLabels && (
+                      <span className="text-xs text-[#94a3b8]">
+                        Large projects can take several minutes — keep this tab open.
+                      </span>
                     )}
                     {labelBatches.length > 0 && (
                       <span className="text-xs text-[#94a3b8]">
@@ -780,8 +893,15 @@ const CrateFilterPlanner = ({ projectId }) => {
                           />
                         ))}
                         {labelsLoadedCount < labelsTotalParts && (
-                          <div ref={labelSentinelRef} className="py-4 text-center text-xs text-[#94a3b8]">
-                            {loadingMoreLabels ? 'Loading more labels…' : 'Scroll for more'}
+                          <div className="py-4 flex justify-center">
+                            <button
+                              type="button"
+                              onClick={handleLoadMoreLabels}
+                              disabled={loadingMoreLabels}
+                              className="rounded-full border border-[#0f172a] bg-white px-5 py-2 text-xs font-semibold text-[#0f172a] shadow-sm transition-all hover:bg-[#f1f5f9] disabled:opacity-50"
+                            >
+                              {loadingMoreLabels ? 'Loading…' : `Load ${Math.min(LABEL_BATCH_SIZE, labelsTotalParts - labelsLoadedCount)} more`}
+                            </button>
                           </div>
                         )}
                       </div>
