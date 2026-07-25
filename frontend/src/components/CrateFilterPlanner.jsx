@@ -516,7 +516,11 @@ const CrateFilterPlanner = ({ projectId }) => {
       .finally(() => setLoading(false));
   }, [projectId]);
 
-  // Try to restore a saved manual crate plan once parts are loaded.
+  // A saved plan is offered, never applied silently — starting fresh must
+  // actually mean fresh, not "whatever was saved last time" reappearing
+  // without warning.
+  const [savedPlanCandidate, setSavedPlanCandidate] = useState(null);
+
   useEffect(() => {
     if (!projectId || !allParts.length) return;
     axios
@@ -524,18 +528,26 @@ const CrateFilterPlanner = ({ projectId }) => {
       .then((res) => {
         const plan = res.data?.plan;
         if (!plan || !plan.crates?.length) return;
-        const partsById = new Map(allParts.map((p) => [p.id, p]));
-        const restored = plan.crates
-          .map((c) => crateFromParts(c.crate_no, (c.part_ids || []).map((id) => partsById.get(id)).filter(Boolean), DEFAULT_DIM_CONFIG))
-          .filter((c) => c.parts.length > 0);
-        if (restored.length) {
-          setCrates(restored);
-          setTargetWeightKg(plan.target_weight_kg || 1900);
-        }
+        setSavedPlanCandidate(plan);
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, allParts.length]);
+
+  const handleLoadSavedPlan = useCallback(() => {
+    if (!savedPlanCandidate) return;
+    const partsById = new Map(allParts.map((p) => [p.id, p]));
+    const restored = savedPlanCandidate.crates
+      .map((c) => crateFromParts(c.crate_no, (c.part_ids || []).map((id) => partsById.get(id)).filter(Boolean), DEFAULT_DIM_CONFIG))
+      .filter((c) => c.parts.length > 0);
+    setCrates(restored);
+    setTargetWeightKg(savedPlanCandidate.target_weight_kg || 1900);
+    setSavedPlanCandidate(null);
+  }, [savedPlanCandidate, allParts]);
+
+  const handleDiscardSavedPlan = useCallback(() => {
+    setSavedPlanCandidate(null);
+  }, []);
 
   // Editing the dimension config must reflect immediately on every crate already
   // built, not just future auto-bucket rounds — recompute all of them in place.
@@ -752,6 +764,37 @@ const CrateFilterPlanner = ({ projectId }) => {
           rest. Remove a part from a specific crate to send it back to the pool.
         </div>
       </div>
+
+      {savedPlanCandidate && (
+        <div className="rounded-[24px] border border-blue-200 bg-blue-50 px-5 py-4 shadow-sm">
+          <div className="flex items-start gap-4 flex-wrap">
+            <div className="flex-1 min-w-[200px]">
+              <div className="font-semibold text-blue-900">Saved crate plan found</div>
+              <div className="mt-1 text-sm text-blue-700">
+                Saved {new Date(savedPlanCandidate.saved_at).toLocaleString('en-AU', { dateStyle: 'medium', timeStyle: 'short' })}
+                {' — '}
+                {savedPlanCandidate.crates?.length ?? 0} crate{savedPlanCandidate.crates?.length !== 1 ? 's' : ''}
+              </div>
+            </div>
+            <div className="flex gap-2 flex-shrink-0">
+              <button
+                type="button"
+                onClick={handleLoadSavedPlan}
+                className="rounded-full border border-blue-600 bg-blue-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-blue-700 transition-colors whitespace-nowrap"
+              >
+                Load saved plan
+              </button>
+              <button
+                type="button"
+                onClick={handleDiscardSavedPlan}
+                className="rounded-full border border-blue-200 bg-white px-4 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50 transition-colors whitespace-nowrap"
+              >
+                Start fresh
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-3 text-sm text-red-800">{error}</div>
