@@ -8,6 +8,9 @@ _FOAM_LAYER = 0.75
 _HONEYCOMB_SEP_IN = 1.25
 _FORKLIFT_CLEARANCE_IN = 7.0
 _BASE_SUPPORT_IN = 2.0
+_HEADROOM = 4.0             # matches _HEADROOM below (shared upright-model constant)
+_ROW_SEPARATOR_IN = 0.75    # foam between main-top "rows" stacked along width
+_SIDE_FRAME = 4.0           # framing on the width/row-stack axis
 
 
 def _max_piece_length(pieces: List[Dict[str, Any]]) -> float:
@@ -16,10 +19,12 @@ def _max_piece_length(pieces: List[Dict[str, Any]]) -> float:
     return max(parse_float(p.get("length")) for p in pieces)
 
 
-def _max_piece_width(pieces: List[Dict[str, Any]]) -> float:
-    if not pieces:
-        return 0.0
-    return max(parse_float(p.get("width")) for p in pieces)
+def _piece_short_edge(p: Dict[str, Any]) -> float:
+    L = parse_float(p.get("length"))
+    W = parse_float(p.get("width"))
+    if L > 0 and W > 0:
+        return min(L, W)
+    return max(L, W)
 
 
 def horizontal_crate_dimensions(
@@ -28,7 +33,14 @@ def horizontal_crate_dimensions(
     default_thickness: str,
     wood_thickness: float,
 ) -> Dict[str, float]:
-    """Flat-lay horizontal crate: mains on bottom, splashes in stacked layers."""
+    """
+    Upright crate: main tops stand on edge (short edge = height), stacked
+    side-by-side along the width axis (one "row" per main piece, thickness
+    accumulates into width). Splashes stack on TOP of the main tops, height-wise.
+
+    Mirrors estimateLeaningFamilyBundleDimensions() in
+    frontend/src/utils/crateEstimator.js — keep both in sync manually.
+    """
     all_p = main_pieces + [p for layer in splash_layers for p in layer]
     if not all_p:
         return {
@@ -41,12 +53,11 @@ def horizontal_crate_dimensions(
         }
 
     internal_length = _max_piece_length(all_p) + 6.0
-    internal_width = _max_piece_width(all_p) + 6.0
 
-    if main_pieces:
-        main_h = max(thickness_inches(str(p.get("thickness") or default_thickness)) for p in main_pieces)
-    else:
-        main_h = thickness_inches(default_thickness)
+    # Height: main tops stand upright on their short edge, pallet + headroom below/above,
+    # then splash layers stack on top (each layer already foam-separated).
+    height_ref = main_pieces if main_pieces else all_p
+    main_h = max(_piece_short_edge(p) for p in height_ref)
 
     splash_h = 0.0
     active_layers = [layer for layer in splash_layers if layer]
@@ -56,7 +67,14 @@ def horizontal_crate_dimensions(
         if li + 1 < len(active_layers):
             splash_h += _HONEYCOMB_SEP_IN
 
-    internal_height = max(18.0, main_h + splash_h + 8.0)
+    internal_height = main_h + _BASE_SUPPORT_IN + _HEADROOM + splash_h
+
+    # Width: thickness-stack of main-top "rows" — one slot per main piece, foam between.
+    if main_pieces:
+        row_thicknesses = [thickness_inches(str(p.get("thickness") or default_thickness)) for p in main_pieces]
+        internal_width = sum(row_thicknesses) + max(0, len(main_pieces) - 1) * _ROW_SEPARATOR_IN + _SIDE_FRAME
+    else:
+        internal_width = thickness_inches(default_thickness) + _SIDE_FRAME
 
     return {
         "internal_length": round(internal_length, 1),
@@ -150,7 +168,7 @@ _DEPTH_FRAME          = 4.0     # framing on depth axis
 _LENGTH_CLEARANCE = 2.0     # internal end clearance (1" each end)
 _END_FRAME        = 2.0     # external end-board thickness (1" each end)
 _PALLET_BASE      = 6.0     # pallet / sled base height
-_HEADROOM         = 4.0     # head clearance above slabs
+# _HEADROOM (head clearance above slabs) defined near top of file, shared with horizontal_crate_dimensions
 
 
 def leaned_operational_cassette_dimensions(
@@ -185,8 +203,9 @@ def leaned_operational_cassette_dimensions(
             "wood_thickness": wood_thickness,
         }
 
-    # Height derives from main pieces (tops); splash pieces are shallow and don't dictate H
+    # Height derives from main pieces (tops); splash pieces (rare for islands) stack on top.
     main_pieces = [p for p in pieces if str(p.get("role", "main")) != "splash"]
+    splash_pieces = [p for p in pieces if str(p.get("role", "main")) == "splash"]
     ref_pieces = main_pieces if main_pieces else pieces
 
     stack_depth = 0.0
@@ -212,8 +231,11 @@ def leaned_operational_cassette_dimensions(
     separators = max(0, n - 1) * _ISLAND_SEPARATOR_IN
     internal_width = stack_depth + separators + _DEPTH_FRAME
 
-    # H — height: short edge upright (no lean correction)
-    internal_height = max_short + _PALLET_BASE + _HEADROOM
+    # H — height: short edge upright, plus any splash pieces stacked on top (foam + thickness each)
+    splash_h = sum(
+        _FOAM_LAYER + thickness_inches(str(p.get("thickness") or default_thickness)) for p in splash_pieces
+    )
+    internal_height = max_short + _PALLET_BASE + _HEADROOM + splash_h
 
     return {
         "internal_length": round(internal_length, 1),
@@ -232,34 +254,12 @@ def island_vertical_dimensions(
     wood_thickness: float,
 ) -> Dict[str, float]:
     """
-    Vertical cassette: slabs on long edge — tall crate, narrow depth along container length from back wall.
+    Island crate, human-facing physical dimensions: slabs stand upright on
+    their short edge. Delegates to leaned_operational_cassette_dimensions()
+    (the correct upright axis model, also used by the Draft Crate UI/export)
+    so the auto-generated crate plan and the draft-crate builder agree.
     """
-    if not pieces:
-        return {
-            "internal_length": 0.0,
-            "internal_width": 0.0,
-            "internal_height": 0.0,
-            "external_length": 0.0,
-            "external_width": 0.0,
-            "external_height": 0.0,
-        }
-
-    n = len(pieces)
-    t = max(thickness_inches(str(p.get("thickness") or default_thickness)) for p in pieces)
-    # Depth along container x (from back): slab thickness stack + framing
-    internal_length = min(92.0, 8.0 + n * (t + 0.05))
-    internal_width = _max_piece_width(pieces) + 6.0
-    internal_height = _max_piece_length(pieces) + 10.0
-
-    return {
-        "internal_length": round(internal_length, 1),
-        "internal_width": round(internal_width, 1),
-        "internal_height": round(internal_height, 1),
-        "external_length": round(internal_length + _WALL, 1),
-        "external_width": round(internal_width + _WALL, 1),
-        "external_height": round(internal_height + _HEIGHT_TOP, 1),
-        "wood_thickness": wood_thickness,
-    }
+    return leaned_operational_cassette_dimensions(pieces, default_thickness, wood_thickness)
 
 
 def total_piece_weight(pieces: List[Dict[str, Any]], material: str, thickness: str, color: str) -> float:

@@ -279,13 +279,13 @@ function isSideSplashPiece(piece) {
 
 // ─── Rectangular family bundle geometry (Kitchen / Vanity) ─────────────────
 // Warehouse model: tops stand upright, flush against internal wall supports.
-// No lean angle. Splashes and multi-top separation accumulate on DEPTH — not HEIGHT.
+// No lean angle. Back/side splashes always stack ON TOP of the main tops,
+// height-wise — mirrors horizontal_crate_dimensions() in
+// backend/app/services/planner_v3/dimensions.py. Keep both in sync manually.
 //
 //   L (length):  max slab long edge + end clearance  [long edge on pallet]
-//   H (height):  max TOP short edge + pallet + headroom  [upright, no correction]
-//   D (depth):   Σ top thicknesses + inter-top foam + splash depths + framing
-//
-// Build sequence preserved: tops → foam → back splash → foam → side splash (depth order).
+//   H (height):  max TOP short edge + pallet + headroom + back/side splash (stacked on top)
+//   D (depth):   Σ main-top thicknesses + inter-top foam + framing  [one "row" per main top]
 
 function pieceLongShort(piece) {
   const L = parseFloat(piece.length) || 0;
@@ -320,20 +320,23 @@ export function estimateLeaningFamilyBundleDimensions(pieces, layerGapIn = HORIZ
   }
 
   const intL = maxLong + HORIZ_LENGTH_CLEAR;
-  const intH = maxTopShort + PALLET_BASE + HEADROOM;
 
+  // H — height: main top short edge + pallet/headroom, then splashes stack ON TOP.
+  let intH = maxTopShort + PALLET_BASE + HEADROOM;
+  if (backSplash.length > 0) {
+    intH += gap + Math.max(...backSplash.map((p) => parseThicknessIn(p.thickness)));
+  }
+  if (sideSplash.length > 0) {
+    intH += gap + Math.max(...sideSplash.map((p) => parseThicknessIn(p.thickness)));
+  }
+
+  // D — depth/width: thickness-stack of main-top "rows" only (splashes no longer contribute here).
   let depth = DEPTH_FRAME;
   if (mainTops.length > 0) {
     mainTops.forEach((p, i) => {
       depth += parseThicknessIn(p.thickness);
       if (i > 0) depth += gap;
     });
-  }
-  if (backSplash.length > 0) {
-    depth += gap + Math.max(...backSplash.map((p) => parseThicknessIn(p.thickness)));
-  }
-  if (sideSplash.length > 0) {
-    depth += gap + Math.max(...sideSplash.map((p) => parseThicknessIn(p.thickness)));
   }
 
   const intW = depth;
