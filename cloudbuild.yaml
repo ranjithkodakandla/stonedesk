@@ -27,6 +27,8 @@ steps:
       - --region=asia-south1
       - --platform=managed
       - --allow-unauthenticated
+      - --min-instances=1
+      - --max-instances=10
       - --update-env-vars=MONGODB_DB=virgin
       # MONGODB_URI and CORS_ORIGINS are already set on the live service and are
       # intentionally left untouched here — --update-env-vars merges rather than
@@ -63,6 +65,8 @@ steps:
       - --region=asia-south1
       - --platform=managed
       - --allow-unauthenticated
+      - --min-instances=1
+      - --max-instances=10
 
 substitutions:
   _BACKEND_URL: https://stonedesk-backend-149130710868.asia-south1.run.app

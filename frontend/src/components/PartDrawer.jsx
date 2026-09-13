@@ -1,17 +1,35 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { edgeAreaFromMap } from './PiecesGrid';
 
-const EDGE_OPTIONS = ['none', 'polished', 'cut', 'manual'];
-const EDGE_LABELS = { none: '—', polished: 'Polish', cut: 'Cut', manual: 'Manual' };
+const EDGE_OPTIONS = ['none', 'polished', 'flat_chamfer', 'cut', 'manual'];
+const EDGE_LABELS = { none: '—', polished: 'Pencil Round', flat_chamfer: 'Flat Chamfer 1mm', cut: 'Cut', manual: 'Manual' };
 const EDGE_COLORS = {
   none: 'bg-slate-100 text-slate-400 border-slate-200',
   polished: 'bg-blue-100 text-blue-700 border-blue-300',
+  flat_chamfer: 'bg-cyan-100 text-cyan-700 border-cyan-300',
   cut: 'bg-amber-100 text-amber-700 border-amber-300',
   manual: 'bg-emerald-100 text-emerald-700 border-emerald-300',
 };
 
+const SINK_TYPE_OPTIONS = ['No Sink', 'Single Bowl', 'Double Bowl'];
+const HOLE_COUNT_OPTIONS = ['-', '0', '1', '2', '3', '4', '5', '6', '7', '8'];
+const GROOVE_COUNT_OPTIONS = ['-', '0', '1', '2', '3', '4', '5', '6', '7', '8'];
+
 const DEFAULT_EDGE_MAP = { top: 'none', bottom: 'none', left: 'none', right: 'none' };
 const DEFAULT_RADIUS_CORNERS = { top_left: false, top_right: false, bottom_left: false, bottom_right: false };
+
+// Count implied by a "-"/"0"/"1".."8" select value — "-" and "0" both mean "no holes/grooves".
+const countFromOption = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+};
+
+// Pad/truncate an array of {x,y} (or plain string) entries to exactly `n` items.
+const resizeArray = (arr, n, factory) => {
+  const base = Array.isArray(arr) ? arr.slice(0, n) : [];
+  while (base.length < n) base.push(factory());
+  return base;
+};
 
 const Section = ({ id, title, children, defaultOpen = true }) => {
   const [open, setOpen] = useState(defaultOpen);
@@ -38,6 +56,11 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo }) => {
     shape_type: r.shape_type ?? '',
     edge_polish_manual: r.edge_polish_manual ?? '',
     dest_qty_overrides: r.dest_qty_overrides ?? {},
+    sink_numbers: Array.isArray(r.sink_numbers) ? r.sink_numbers : [],
+    tap_hole_diameter: r.tap_hole_diameter ?? '',
+    tap_hole_positions: Array.isArray(r.tap_hole_positions) ? r.tap_hole_positions : [],
+    groove_dimension: r.groove_dimension ?? '',
+    groove_positions: Array.isArray(r.groove_positions) ? r.groove_positions : [],
   });
 
   const [local, setLocal] = useState(() => hydrate(row));
@@ -66,12 +89,46 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo }) => {
     push({ ...local, dest_qty_overrides: overrides });
   };
 
+  // ── Sink type + per-bowl sink number ─────────────────────────────────────
+  const setSinkType = (v) => {
+    const n = v === 'Double Bowl' ? 2 : v === 'Single Bowl' ? 1 : 0;
+    push({ ...local, sink_type: v, sink_numbers: resizeArray(local.sink_numbers, n, () => '') });
+  };
+  const setSinkNumber = (idx, v) => {
+    const next = [...local.sink_numbers];
+    next[idx] = v;
+    push({ ...local, sink_numbers: next });
+  };
+
+  // ── Tap holes: count + shared diameter + per-hole X/Y offset from sink center ──
+  const setTapHoleCount = (v) => {
+    const n = countFromOption(v);
+    push({ ...local, tap_holes: v, tap_hole_positions: resizeArray(local.tap_hole_positions, n, () => ({ x: '', y: '' })) });
+  };
+  const setTapHolePos = (idx, axis, v) => {
+    const next = local.tap_hole_positions.map((p, i) => (i === idx ? { ...p, [axis]: v } : p));
+    push({ ...local, tap_hole_positions: next });
+  };
+
+  // ── Sink grooves: count + shared dimension + per-groove X/Y offset from sink center ──
+  const setGrooveCount = (v) => {
+    const n = countFromOption(v);
+    push({ ...local, grooves: v, groove_positions: resizeArray(local.groove_positions, n, () => ({ x: '', y: '' })) });
+  };
+  const setGroovePos = (idx, axis, v) => {
+    const next = local.groove_positions.map((p, i) => (i === idx ? { ...p, [axis]: v } : p));
+    push({ ...local, groove_positions: next });
+  };
+
   const em = local.edge_map || DEFAULT_EDGE_MAP;
   const rc = local.radius_corners || DEFAULT_RADIUS_CORNERS;
   const activeSides = Object.values(em).filter(v => v !== 'none').length;
   const activeCorners = Object.values(rc).filter(Boolean).length;
   const L = Number(local.length) || 0;
   const W = Number(local.width) || 0;
+  const hasSink = local.sink_type && local.sink_type !== 'No Sink';
+  const tapHoleCount = countFromOption(local.tap_holes);
+  const grooveCount = countFromOption(local.grooves);
 
   const EdgeBtn = ({ side, label }) => {
     const val = em[side] || 'none';
@@ -132,35 +189,33 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo }) => {
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2">
                 <label className="label-text">Sink Type</label>
-                <select value={local.sink_type || 'No Sink'} onChange={e => set('sink_type', e.target.value)} className="input-field">
-                  <option>No Sink</option>
-                  <option>Single Bowl</option>
-                  <option>Double Bowl</option>
-                  <option>ADA</option>
-                  <option>PL-VS3018</option>
-                  <option>PL-3639</option>
+                <select value={local.sink_type || 'No Sink'} onChange={e => setSinkType(e.target.value)} className="input-field">
+                  {SINK_TYPE_OPTIONS.map(v => <option key={v}>{v}</option>)}
                 </select>
               </div>
+
+              {hasSink && (
+                <div className="col-span-2 grid grid-cols-2 gap-3">
+                  {local.sink_numbers.map((num, i) => (
+                    <div key={i}>
+                      <label className="label-text">
+                        Sink Number{local.sink_type === 'Double Bowl' ? ` (Bowl ${i + 1})` : ''}
+                      </label>
+                      <input value={num || ''} onChange={e => setSinkNumber(i, e.target.value)}
+                        className="input-field" placeholder="e.g., S-101" />
+                    </div>
+                  ))}
+                </div>
+              )}
+
               <div>
                 <label className="label-text">Sink Cutouts #</label>
                 <select value={local.sink_cut || '-'} onChange={e => set('sink_cut', e.target.value)} className="input-field">
                   {['-','0','1','2','3'].map(v => <option key={v}>{v}</option>)}
                 </select>
               </div>
-              <div>
-                <label className="label-text">Tap Holes #</label>
-                <select value={local.tap_holes || '-'} onChange={e => set('tap_holes', e.target.value)} className="input-field">
-                  {['-','0','1','2','3','4','5','6'].map(v => <option key={v}>{v}</option>)}
-                </select>
-              </div>
-              <div className="col-span-2">
-                <label className="label-text">Sink Grooves</label>
-                <select value={local.grooves || '-'} onChange={e => set('grooves', e.target.value)} className="input-field">
-                  {['-','0','1','2','3','4'].map(v => <option key={v}>{v}</option>)}
-                </select>
-              </div>
 
-              {local.sink_type && local.sink_type !== 'No Sink' && (
+              {hasSink && (
                 <>
                   <div className="col-span-2 pt-2 border-t border-slate-100 text-[11px] text-slate-500">
                     Sink position — used to place the sink cutout on the process label drawing.
@@ -190,7 +245,99 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo }) => {
             </div>
           </Section>
 
-          {/* Section 2 — Edge Polish */}
+          {/* Section 2 — Tap Holes */}
+          <Section id="section-tap-holes" title="Tap Holes" defaultOpen={false}>
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="label-text">Tap Holes #</label>
+                  <select value={local.tap_holes || '-'} onChange={e => setTapHoleCount(e.target.value)} className="input-field">
+                    {HOLE_COUNT_OPTIONS.map(v => <option key={v}>{v}</option>)}
+                  </select>
+                </div>
+                {tapHoleCount > 0 && (
+                  <div>
+                    <label className="label-text">Hole Diameter (in)</label>
+                    <input type="number" step="0.0625" min="0" value={local.tap_hole_diameter || ''}
+                      onChange={e => set('tap_hole_diameter', e.target.value)} className="input-field" placeholder="e.g., 1.375" />
+                  </div>
+                )}
+              </div>
+              {tapHoleCount > 0 && (
+                <div className="space-y-2">
+                  <p className="text-[11px] text-slate-500">
+                    Offset of each hole from the sink's center point (X = along length, Y = along width).
+                  </p>
+                  {local.tap_hole_positions.map((pos, i) => (
+                    <div key={i} className="grid grid-cols-3 gap-2 items-center">
+                      <span className="text-xs font-medium text-slate-600">Hole {i + 1}</span>
+                      <input type="number" step="0.0625" value={pos.x ?? ''}
+                        onChange={e => setTapHolePos(i, 'x', e.target.value)}
+                        className="input-field" placeholder="X offset" />
+                      <input type="number" step="0.0625" value={pos.y ?? ''}
+                        onChange={e => setTapHolePos(i, 'y', e.target.value)}
+                        className="input-field" placeholder="Y offset" />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </Section>
+
+          {/* Section 3 — Sink Grooves */}
+          <Section id="section-grooves" title="Sink Grooves" defaultOpen={false}>
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="label-text">Grooves #</label>
+                  <select value={local.grooves || '-'} onChange={e => setGrooveCount(e.target.value)} className="input-field">
+                    {GROOVE_COUNT_OPTIONS.map(v => <option key={v}>{v}</option>)}
+                  </select>
+                </div>
+                {grooveCount > 0 && (
+                  <div>
+                    <label className="label-text">Groove Dimension (in)</label>
+                    <input type="number" step="0.0625" min="0" value={local.groove_dimension || ''}
+                      onChange={e => set('groove_dimension', e.target.value)} className="input-field" placeholder="e.g., 0.5" />
+                  </div>
+                )}
+              </div>
+              {grooveCount > 0 && (
+                <div className="space-y-2">
+                  <p className="text-[11px] text-slate-500">
+                    Offset of each groove from the sink's center point (X = along length, Y = along width).
+                  </p>
+                  {local.groove_positions.map((pos, i) => (
+                    <div key={i} className="grid grid-cols-3 gap-2 items-center">
+                      <span className="text-xs font-medium text-slate-600">Groove {i + 1}</span>
+                      <input type="number" step="0.0625" value={pos.x ?? ''}
+                        onChange={e => setGroovePos(i, 'x', e.target.value)}
+                        className="input-field" placeholder="X offset" />
+                      <input type="number" step="0.0625" value={pos.y ?? ''}
+                        onChange={e => setGroovePos(i, 'y', e.target.value)}
+                        className="input-field" placeholder="Y offset" />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </Section>
+
+          {/* Section 4 — Shape */}
+          <Section id="section-shape" title="Shape">
+            <div>
+              <label className="label-text">Shape Type</label>
+              <select value={local.shape_type || ''} onChange={e => set('shape_type', e.target.value)} className="input-field">
+                <option value="">Rectangle (default)</option>
+                <option>L-Shape</option>
+                <option>U-Shape</option>
+                <option>Ogee</option>
+                <option>Custom</option>
+              </select>
+            </div>
+          </Section>
+
+          {/* Section 5 — Edge Polish */}
           <Section id="section-edge" title="Edge Polish">
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
@@ -222,9 +369,9 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo }) => {
             </div>
           </Section>
 
-          {/* Section 3 — Edge Dimensions */}
+          {/* Section 6 — Edge Dimensions */}
           <Section id="section-edge-dims" title="Edge Dimensions">
-            <p className="text-[11px] text-slate-500 mb-4">Click a side to cycle: — → Polish → Cut → Manual → —<br />Top/Bottom = Length side. Left/Right = Width side.</p>
+            <p className="text-[11px] text-slate-500 mb-4">Click a side to cycle: — → Pencil Round → Flat Chamfer 1mm → Cut → Manual → —<br />Top/Bottom = Length side. Left/Right = Width side.</p>
             <div className="flex flex-col items-center gap-2">
               <EdgeBtn side="top" label={`Top  (L${L > 0 ? ` = ${L.toFixed(1)}"` : ''})`} />
               <div className="flex items-stretch gap-2 w-full">
@@ -241,7 +388,7 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo }) => {
             )}
           </Section>
 
-          {/* Section 4 — Radius / Corners */}
+          {/* Section 7 — Radius / Corners */}
           <Section id="section-radius" title="Radius / Corners">
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3">
@@ -271,20 +418,6 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo }) => {
                   </p>
                 )}
               </div>
-            </div>
-          </Section>
-
-          {/* Section 5 — Shape */}
-          <Section id="section-shape" title="Shape" defaultOpen={false}>
-            <div>
-              <label className="label-text">Shape Type</label>
-              <select value={local.shape_type || ''} onChange={e => set('shape_type', e.target.value)} className="input-field">
-                <option value="">Rectangle (default)</option>
-                <option>L-Shape</option>
-                <option>U-Shape</option>
-                <option>Ogee</option>
-                <option>Custom</option>
-              </select>
             </div>
           </Section>
 

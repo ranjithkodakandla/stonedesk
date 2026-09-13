@@ -363,8 +363,13 @@ def piece_response(doc: Dict[str, Any]) -> Dict[str, Any]:
         "shape_type": doc.get("shape_type", ""),
         "sink_type": doc.get("sink_type", "No Sink"),
         "sink_cut": doc.get("sink_cut", "-"),
+        "sink_numbers": doc.get("sink_numbers", []),
         "tap_holes": doc.get("tap_holes", "-"),
+        "tap_hole_diameter": doc.get("tap_hole_diameter"),
+        "tap_hole_positions": doc.get("tap_hole_positions", []),
         "grooves": doc.get("grooves", "-"),
+        "groove_dimension": doc.get("groove_dimension"),
+        "groove_positions": doc.get("groove_positions", []),
         "sink_offset_left": doc.get("sink_offset_left"),
         "sink_offset_right": doc.get("sink_offset_right"),
         "sink_length": doc.get("sink_length"),
@@ -727,8 +732,13 @@ class PieceCreate(BaseModel):
     flat: str = ""
     sink_type: str = "No Sink"
     sink_cut: str = "-"
+    sink_numbers: List[str] = []
     tap_holes: str = "-"
+    tap_hole_diameter: Optional[float] = None
+    tap_hole_positions: List[Dict[str, Any]] = []
     grooves: str = "-"
+    groove_dimension: Optional[float] = None
+    groove_positions: List[Dict[str, Any]] = []
     sink_offset_left: Optional[float] = None
     sink_offset_right: Optional[float] = None
     sink_length: Optional[float] = None
@@ -767,8 +777,13 @@ class PieceUpdate(BaseModel):
     flat: str = ""
     sink_type: str = "No Sink"
     sink_cut: str = "-"
+    sink_numbers: List[str] = []
     tap_holes: str = "-"
+    tap_hole_diameter: Optional[float] = None
+    tap_hole_positions: List[Dict[str, Any]] = []
     grooves: str = "-"
+    groove_dimension: Optional[float] = None
+    groove_positions: List[Dict[str, Any]] = []
     sink_offset_left: Optional[float] = None
     sink_offset_right: Optional[float] = None
     sink_length: Optional[float] = None
@@ -1202,8 +1217,13 @@ def create_piece(project_id: int, piece: PieceCreate):
         "flat": piece.flat,
         "sink_type": piece.sink_type,
         "sink_cut": piece.sink_cut,
+        "sink_numbers": piece.sink_numbers,
         "tap_holes": piece.tap_holes,
+        "tap_hole_diameter": piece.tap_hole_diameter,
+        "tap_hole_positions": piece.tap_hole_positions,
         "grooves": piece.grooves,
+        "groove_dimension": piece.groove_dimension,
+        "groove_positions": piece.groove_positions,
         "sink_offset_left": piece.sink_offset_left,
         "sink_offset_right": piece.sink_offset_right,
         "sink_length": piece.sink_length,
@@ -1252,8 +1272,13 @@ def create_pieces_batch(project_id: int, pieces_data: List[PieceCreate]):
                 "flat": piece.flat,
                 "sink_type": piece.sink_type,
                 "sink_cut": piece.sink_cut,
+                "sink_numbers": piece.sink_numbers,
                 "tap_holes": piece.tap_holes,
+                "tap_hole_diameter": piece.tap_hole_diameter,
+                "tap_hole_positions": piece.tap_hole_positions,
                 "grooves": piece.grooves,
+                "groove_dimension": piece.groove_dimension,
+                "groove_positions": piece.groove_positions,
                 "sink_offset_left": piece.sink_offset_left,
                 "sink_offset_right": piece.sink_offset_right,
                 "sink_length": piece.sink_length,
@@ -1321,8 +1346,13 @@ def get_project_drawings(project_id: int):
                     "qty": 1,
                     "sink_type": p.get("sink_type") or "No Sink",
                     "sink_cut": p.get("sink_cut") or "-",
+                    "sink_numbers": p.get("sink_numbers") or [],
                     "tap_holes": p.get("tap_holes") or "-",
+                    "tap_hole_diameter": p.get("tap_hole_diameter"),
+                    "tap_hole_positions": p.get("tap_hole_positions") or [],
                     "grooves": p.get("grooves") or "-",
+                    "groove_dimension": p.get("groove_dimension"),
+                    "groove_positions": p.get("groove_positions") or [],
                     "edge": p.get("edge") or "None",
                     "edge_area": p.get("edge_area") or "",
                     "edge_map": p.get("edge_map") or {},
@@ -1420,8 +1450,13 @@ def update_piece(piece_id: int, piece: PieceUpdate):
         "flat": piece.flat,
         "sink_type": piece.sink_type,
         "sink_cut": piece.sink_cut,
+        "sink_numbers": piece.sink_numbers,
         "tap_holes": piece.tap_holes,
+        "tap_hole_diameter": piece.tap_hole_diameter,
+        "tap_hole_positions": piece.tap_hole_positions,
         "grooves": piece.grooves,
+        "groove_dimension": piece.groove_dimension,
+        "groove_positions": piece.groove_positions,
         "sink_offset_left": piece.sink_offset_left,
         "sink_offset_right": piece.sink_offset_right,
         "sink_length": piece.sink_length,
@@ -1445,6 +1480,25 @@ def update_piece(piece_id: int, piece: PieceUpdate):
     pieces_col.update_one({"id": piece_id}, {"$set": update})
     clear_manual_container_plan(existing["project_id"])
     return {"message": "ok"}
+
+
+def _fmt_sink_numbers(sink_numbers) -> str:
+    """Sink number(s) assigned per bowl: 'S-101, S-102'"""
+    if not sink_numbers:
+        return ""
+    return ", ".join(str(n) for n in sink_numbers if n)
+
+
+def _fmt_positions(positions) -> str:
+    """Compact hole/groove offsets from sink center: '1: X=3, Y=1 | 2: X=-3, Y=1'"""
+    if not positions:
+        return ""
+    parts = []
+    for i, pos in enumerate(positions):
+        x = (pos or {}).get("x", "")
+        y = (pos or {}).get("y", "")
+        parts.append(f"{i + 1}: X={x}, Y={y}")
+    return " | ".join(parts)
 
 
 def _fmt_edge_map(edge_map) -> str:
@@ -2457,17 +2511,25 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
     page.insert_text((rx0 - 34, (ry0 + ry1) / 2), f'{width:.2f}"', fontsize=8, color=gray, rotate=90)
 
     # Edge polish sides — marked with an X directly on the side to be worked.
+    # Pencil Round / Polish gets a circled X; every other finish (Flat Chamfer,
+    # Cut, Manual) gets a plain X, so the two most-common finishes stay
+    # visually distinct on the shop floor.
+    def _draw_edge_mark(tx, ty, edge_type):
+        if edge_type == "polished":
+            page.draw_circle((tx + 4, ty - 4), 8, color=coral, width=1)
+        page.insert_text((tx, ty), "X", fontsize=13, color=coral, fontname="helv")
+
     edge_map = p.get("edge_map") or {}
     edge_sides = [side for side, v in edge_map.items() if v and v != "none"]
     mid_x, mid_y = (rx0 + rx1) / 2, (ry0 + ry1) / 2
     if edge_map.get("top") and edge_map["top"] != "none":
-        page.insert_text((mid_x - 4, ry0 + 12), "X", fontsize=13, color=coral, fontname="helv")
+        _draw_edge_mark(mid_x - 4, ry0 + 12, edge_map["top"])
     if edge_map.get("bottom") and edge_map["bottom"] != "none":
-        page.insert_text((mid_x - 4, ry1 - 4), "X", fontsize=13, color=coral, fontname="helv")
+        _draw_edge_mark(mid_x - 4, ry1 - 4, edge_map["bottom"])
     if edge_map.get("left") and edge_map["left"] != "none":
-        page.insert_text((rx0 + 4, mid_y + 4), "X", fontsize=13, color=coral, fontname="helv")
+        _draw_edge_mark(rx0 + 4, mid_y + 4, edge_map["left"])
     if edge_map.get("right") and edge_map["right"] != "none":
-        page.insert_text((rx1 - 14, mid_y + 4), "X", fontsize=13, color=coral, fontname="helv")
+        _draw_edge_mark(rx1 - 14, mid_y + 4, edge_map["right"])
 
     # Radius corners — a small arc marks each rounded corner, labeled with the radius.
     radius_corners = p.get("radius_corners") or {}
@@ -2493,6 +2555,11 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
 
     # Sink cutout — positioned from the piece's own left/right offsets when set.
     sink_type = str(p.get("sink_type") or "No Sink")
+    sink_numbers = [str(n) for n in (p.get("sink_numbers") or []) if n]
+    sink_label = f"{sink_type} ({', '.join(sink_numbers)})" if sink_numbers else sink_type
+    # Reference point that tap-hole/groove offsets are measured from: the
+    # sink's own center when a sink is present, otherwise the piece center.
+    ref_cx, ref_cy = mid_x, mid_y
     if sink_type and sink_type != "No Sink":
         off_left = parse_float(p.get("sink_offset_left"))
         off_right = parse_float(p.get("sink_offset_right"))
@@ -2508,9 +2575,10 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
         sx1 = sx0 + sink_len * scale
         sy0 = ry0 + (rh - sink_wid * scale) / 2
         sy1 = sy0 + sink_wid * scale
+        ref_cx, ref_cy = (sx0 + sx1) / 2, (sy0 + sy1) / 2
 
         page.draw_rect(fitz.Rect(sx0, sy0, sx1, sy1), color=coral, width=1)
-        page.insert_text(((sx0 + sx1) / 2 - 22, (sy0 + sy1) / 2 + 3), sink_type, fontsize=7, color=gray)
+        page.insert_text((ref_cx - 22, ref_cy + 3), sink_label, fontsize=7, color=gray)
 
         dim_y = ry1 + 22
         page.draw_line((rx0, dim_y), (sx0, dim_y), color=gray, width=0.5)
@@ -2518,12 +2586,40 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
         page.draw_line((sx1, dim_y), (rx1, dim_y), color=gray, width=0.5)
         page.insert_text(((sx1 + rx1) / 2 - 26, dim_y + 11), f'{off_right:.2f}" from right', fontsize=8, color=gray)
 
+    # Tap holes — small circles at each hole's X/Y offset from the sink
+    # center (X = along length, Y = along width), diameter drawn to scale.
+    tap_hole_positions = p.get("tap_hole_positions") or []
+    tap_hole_diameter = parse_float(p.get("tap_hole_diameter"))
+    for i, pos in enumerate(tap_hole_positions):
+        ox = parse_float((pos or {}).get("x"))
+        oy = parse_float((pos or {}).get("y"))
+        hx, hy = ref_cx + ox * scale, ref_cy + oy * scale
+        r = max(2.5, (tap_hole_diameter * scale) / 2) if tap_hole_diameter > 0 else 3
+        page.draw_circle((hx, hy), r, color=coral, width=0.8)
+        label_y = hy - 2 - r if i % 2 == 0 else hy + 10 + r
+        page.insert_text((hx - 16, label_y), f'X{ox:+.2f}", Y{oy:+.2f}"', fontsize=5.5, color=gray)
+
+    # Sink grooves — short tick marks at each groove's X/Y offset from the
+    # sink center, length drawn to the configured groove dimension.
+    groove_positions = p.get("groove_positions") or []
+    groove_dimension = parse_float(p.get("groove_dimension"))
+    for pos in groove_positions:
+        ox = parse_float((pos or {}).get("x"))
+        oy = parse_float((pos or {}).get("y"))
+        gx, gy = ref_cx + ox * scale, ref_cy + oy * scale
+        half_len = max(4, (groove_dimension * scale) / 2) if groove_dimension > 0 else 5
+        page.draw_line((gx - half_len, gy), (gx + half_len, gy), color=coral, width=1.5)
+        page.insert_text((gx + half_len + 2, gy - 2), f'X{ox:+.2f}", Y{oy:+.2f}"', fontsize=5.5, color=gray)
+
     # Spec table.
     spec_y = 226
     page.draw_line((18, spec_y - 8), (W - 18, spec_y - 8), color=gray, width=0.5)
+    tap_dia_note = f' @ {tap_hole_diameter:.3f}"' if tap_hole_diameter > 0 else ""
+    groove_dim_note = f' @ {groove_dimension:.3f}"' if groove_dimension > 0 else ""
     sink_line = (
-        f"Sink: {sink_type} · {p.get('sink_cut', '-')} cutout(s) · {p.get('tap_holes', '-')} tap hole(s) · "
-        f"{p.get('grooves', '-')} groove(s)"
+        f"Sink: {sink_label} · {p.get('sink_cut', '-')} cutout(s) · "
+        f"{p.get('tap_holes', '-')} tap hole(s){tap_dia_note} · "
+        f"{p.get('grooves', '-')} groove(s){groove_dim_note}"
     )
     page.insert_text((18, spec_y + 8), sink_line, fontsize=8, color=black)
     edge_line = "Edge polish: " + (", ".join(_EDGE_SIDE_LABELS.get(s, s) for s in edge_sides) if edge_sides else "None")
@@ -3673,7 +3769,9 @@ def export_source_data(project_id: int):
             # Dimensions
             "Length (in)", "Width (in)", "Qty", "Sq Ft", "Weight (kg)",
             # Sink
-            "Sink Type", "Sink Cutouts", "Tap Holes", "Grooves",
+            "Sink Type", "Sink Numbers", "Sink Cutouts",
+            "Tap Holes", "Tap Hole Dia (in)", "Tap Hole Positions",
+            "Grooves", "Groove Dia (in)", "Groove Positions",
             # Edge
             "Edge Type", "Edge Sides", "Edge Polish (in)", "Edge Per-Side", "Edge Manual Note",
             # Radius
@@ -3704,7 +3802,9 @@ def export_source_data(project_id: int):
                 p.get("part_no", ""), p.get("part", ""), p.get("category", ""), p.get("drawing", ""), p.get("unit", ""),
                 p.get("building", ""), p.get("floor", ""), p.get("flat", ""),
                 p.get("length", 0), p.get("width", 0), qty, sqft, wt,
-                p.get("sink_type", "No Sink"), p.get("sink_cut", "-"), p.get("tap_holes", "-"), p.get("grooves", "-"),
+                p.get("sink_type", "No Sink"), _fmt_sink_numbers(p.get("sink_numbers")), p.get("sink_cut", "-"),
+                p.get("tap_holes", "-"), p.get("tap_hole_diameter", "") or "", _fmt_positions(p.get("tap_hole_positions")),
+                p.get("grooves", "-"), p.get("groove_dimension", "") or "", _fmt_positions(p.get("groove_positions")),
                 p.get("edge", "None"), p.get("edge_area", ""), round(float(p.get("edge_polish_machine", 0) or 0), 2),
                 _fmt_edge_map(p.get("edge_map")), p.get("edge_polish_manual", ""),
                 p.get("radius_value", ""), _fmt_radius_corners(rc), active_corners or "",
@@ -3872,7 +3972,9 @@ def export_excel(project_id: int):
             # Dimensions
             "Length (in)", "Width (in)", "Qty", "Stone Wt (kg)",
             # Sink
-            "Sink Type", "Cutouts", "Tap Holes", "Grooves",
+            "Sink Type", "Sink Numbers", "Cutouts",
+            "Tap Holes", "Tap Hole Dia (in)", "Tap Hole Positions",
+            "Grooves", "Groove Dia (in)", "Groove Positions",
             # Edge
             "Edge Type", "Edge Sides", "Edge Polish (in)", "Edge Per-Side", "Edge Manual Note",
             # Radius
@@ -3905,8 +4007,9 @@ def export_excel(project_id: int):
                         ),
                         2,
                     ),
-                    piece.get("sink_type", "No Sink"), piece.get("sink_cut", "-"),
-                    piece.get("tap_holes", "-"), piece.get("grooves", "-"),
+                    piece.get("sink_type", "No Sink"), _fmt_sink_numbers(piece.get("sink_numbers")), piece.get("sink_cut", "-"),
+                    piece.get("tap_holes", "-"), piece.get("tap_hole_diameter", "") or "", _fmt_positions(piece.get("tap_hole_positions")),
+                    piece.get("grooves", "-"), piece.get("groove_dimension", "") or "", _fmt_positions(piece.get("groove_positions")),
                     piece.get("edge", "None"), piece.get("edge_area", ""),
                     round(float(piece.get("edge_polish_machine", 0) or 0), 2),
                     _fmt_edge_map(piece.get("edge_map")), piece.get("edge_polish_manual", ""),

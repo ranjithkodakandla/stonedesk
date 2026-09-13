@@ -537,8 +537,13 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
         r.qty = p.qty || 1;
         r.sink_type = p.sink_type || 'No Sink';
         r.sink_cut = p.sink_cut || '-';
+        r.sink_numbers = Array.isArray(p.sink_numbers) ? [...p.sink_numbers] : [];
         r.tap_holes = p.tap_holes || '-';
+        r.tap_hole_diameter = p.tap_hole_diameter || '';
+        r.tap_hole_positions = Array.isArray(p.tap_hole_positions) ? p.tap_hole_positions.map(pos => ({ ...pos })) : [];
         r.grooves = p.grooves || '-';
+        r.groove_dimension = p.groove_dimension || '';
+        r.groove_positions = Array.isArray(p.groove_positions) ? p.groove_positions.map(pos => ({ ...pos })) : [];
         r.edge = p.edge || 'None';
         r.edge_area = p.edge_area || '';
         r.edge_map = p.edge_map ? { ...r.edge_map, ...p.edge_map } : { ...r.edge_map };
@@ -725,8 +730,13 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
         if (opts.specs) {
           r.sink_type = p.sink_type || 'No Sink';
           r.sink_cut = p.sink_cut || '-';
+          r.sink_numbers = Array.isArray(p.sink_numbers) ? [...p.sink_numbers] : [];
           r.tap_holes = p.tap_holes || '-';
+          r.tap_hole_diameter = p.tap_hole_diameter || '';
+          r.tap_hole_positions = Array.isArray(p.tap_hole_positions) ? p.tap_hole_positions.map(pos => ({ ...pos })) : [];
           r.grooves = p.grooves || '-';
+          r.groove_dimension = p.groove_dimension || '';
+          r.groove_positions = Array.isArray(p.groove_positions) ? p.groove_positions.map(pos => ({ ...pos })) : [];
           r.edge = p.edge || 'None';
           r.edge_area = p.edge_area || '';
           r.edge_map = p.edge_map ? { ...r.edge_map, ...p.edge_map } : { ...r.edge_map };
@@ -857,8 +867,13 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
             unit: drawingCtx.unit || '',
             sink_type: row.sink_type || 'No Sink',
             sink_cut: row.sink_cut || '-',
+            sink_numbers: row.sink_numbers || [],
             tap_holes: row.tap_holes || '-',
+            tap_hole_diameter: row.tap_hole_diameter || '',
+            tap_hole_positions: row.tap_hole_positions || [],
             grooves: row.grooves || '-',
+            groove_dimension: row.groove_dimension || '',
+            groove_positions: row.groove_positions || [],
             fragility: drawingCtx.fragility || 'Standard',
             orientation: drawingCtx.orientation || 'Auto',
             delivery_priority: drawingCtx.delivery_priority || 'Standard',

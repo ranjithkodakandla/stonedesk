@@ -93,7 +93,9 @@ const DEFAULT_RADIUS_CORNERS = { top_left: false, top_right: false, bottom_left:
 
 const EMPTY_ROW = {
   part_no: '', part: '', length: '', width: '', thickness: '3CM', qty: 1,
-  sink_type: 'No Sink', sink_cut: '-', tap_holes: '-', grooves: '-',
+  sink_type: 'No Sink', sink_cut: '-', sink_numbers: null,
+  tap_holes: '-', tap_hole_diameter: '', tap_hole_positions: null,
+  grooves: '-', groove_dimension: '', groove_positions: null,
   edge: 'None', edge_area: '',
   edge_map: null,           // will be set in newRow()
   edge_polish_manual: '',
@@ -110,6 +112,9 @@ let rowIdCounter = 1;
 export const newRow = (defaultThickness = '3CM') => ({
   ...EMPTY_ROW,
   thickness: defaultThickness,
+  sink_numbers: [],
+  tap_hole_positions: [],
+  groove_positions: [],
   edge_map: { ...DEFAULT_EDGE_MAP },
   radius_corners: { ...DEFAULT_RADIUS_CORNERS },
   dest_qty_overrides: {},
@@ -185,6 +190,9 @@ export const dupeRow = (row) => ({
   part_no: incrementPartNo(row.part_no),
   edge_map: row.edge_map ? { ...row.edge_map } : { ...DEFAULT_EDGE_MAP },
   radius_corners: row.radius_corners ? { ...row.radius_corners } : { ...DEFAULT_RADIUS_CORNERS },
+  sink_numbers: Array.isArray(row.sink_numbers) ? [...row.sink_numbers] : [],
+  tap_hole_positions: Array.isArray(row.tap_hole_positions) ? row.tap_hole_positions.map(p => ({ ...p })) : [],
+  groove_positions: Array.isArray(row.groove_positions) ? row.groove_positions.map(p => ({ ...p })) : [],
   dest_qty_overrides: { ...(row.dest_qty_overrides || {}) },
   _id: rowIdCounter++,
 });
@@ -506,12 +514,12 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
 
                   <td className="px-1 py-1">
                     <input type="number" step="0.125" value={row.length}
-                      onChange={e => updateRow(row._id, 'length', e.target.value)} className="grid-cell" placeholder="L" />
+                      onChange={e => updateRow(row._id, 'length', e.target.value)} className="grid-cell no-spinner" placeholder="L" />
                   </td>
 
                   <td className="px-1 py-1">
                     <input type="number" step="0.125" value={row.width}
-                      onChange={e => updateRow(row._id, 'width', e.target.value)} className="grid-cell" placeholder="W" />
+                      onChange={e => updateRow(row._id, 'width', e.target.value)} className="grid-cell no-spinner" placeholder="W" />
                   </td>
 
                   <td className="px-1 py-1">

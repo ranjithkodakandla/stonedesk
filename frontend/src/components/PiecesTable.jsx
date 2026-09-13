@@ -321,6 +321,11 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing })
           radius_value: piece.radius_value || '',
           radius_corners: piece.radius_corners || {},
           shape_type: piece.shape_type || '',
+          sink_numbers: piece.sink_numbers || [],
+          tap_hole_diameter: piece.tap_hole_diameter,
+          tap_hole_positions: piece.tap_hole_positions || [],
+          groove_dimension: piece.groove_dimension,
+          groove_positions: piece.groove_positions || [],
         };
 
         if (editMode === 'bulk') {
@@ -441,8 +446,13 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing })
         flat: piece.flat || '',
         sink_type: piece.sink_type || 'No Sink',
         sink_cut: piece.sink_cut || '-',
+        sink_numbers: piece.sink_numbers || [],
         tap_holes: piece.tap_holes || '-',
+        tap_hole_diameter: piece.tap_hole_diameter,
+        tap_hole_positions: piece.tap_hole_positions || [],
         grooves: piece.grooves || '-',
+        groove_dimension: piece.groove_dimension,
+        groove_positions: piece.groove_positions || [],
         fragility: piece.fragility || 'Standard',
         orientation: piece.orientation || 'Auto',
         delivery_priority: piece.delivery_priority || 'Standard',
