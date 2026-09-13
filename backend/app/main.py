@@ -2580,11 +2580,21 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
         page.draw_rect(fitz.Rect(sx0, sy0, sx1, sy1), color=coral, width=1)
         page.insert_text((ref_cx - 22, ref_cy + 3), sink_label, fontsize=7, color=gray)
 
+        # Sink size — length along the top of the cutout, width along its left side.
+        page.draw_line((sx0, sy0 - 8), (sx1, sy0 - 8), color=coral, width=0.5)
+        page.insert_text(((sx0 + sx1) / 2 - 16, sy0 - 11), f'{sink_len:.2f}"', fontsize=7, color=coral)
+        page.draw_line((sx0 - 8, sy0), (sx0 - 8, sy1), color=coral, width=0.5)
+        page.insert_text((sx0 - 30, (sy0 + sy1) / 2), f'{sink_wid:.2f}"', fontsize=7, color=coral, rotate=90)
+
+        # Sink position — actual left/right offsets, always shown (even when
+        # the sink is centered with no explicit offset entered).
+        actual_left = (sx0 - rx0) / scale if scale else 0
+        actual_right = (rx1 - sx1) / scale if scale else 0
         dim_y = ry1 + 22
         page.draw_line((rx0, dim_y), (sx0, dim_y), color=gray, width=0.5)
-        page.insert_text(((rx0 + sx0) / 2 - 24, dim_y + 11), f'{off_left:.2f}" from left', fontsize=8, color=gray)
+        page.insert_text(((rx0 + sx0) / 2 - 24, dim_y + 11), f'{actual_left:.2f}" from left', fontsize=8, color=gray)
         page.draw_line((sx1, dim_y), (rx1, dim_y), color=gray, width=0.5)
-        page.insert_text(((sx1 + rx1) / 2 - 26, dim_y + 11), f'{off_right:.2f}" from right', fontsize=8, color=gray)
+        page.insert_text(((sx1 + rx1) / 2 - 26, dim_y + 11), f'{actual_right:.2f}" from right', fontsize=8, color=gray)
 
     # Tap holes — small circles at each hole's X/Y offset from the sink
     # center (X = along length, Y = along width), diameter drawn to scale.
