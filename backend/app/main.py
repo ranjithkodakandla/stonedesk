@@ -12,7 +12,12 @@ from fastapi import FastAPI, HTTPException, Request, Response, UploadFile, File,
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pymongo import MongoClient, ReturnDocument
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+
+def _blank_to_none(v):
+    """Empty-string form inputs ('') should mean "not set", not a parse error."""
+    return None if v == "" else v
 from .pdf_parser import parse_pdf
 from .nim_parser import parse_page_nim as _parse_page_nim, parse_pdf_nim as _parse_pdf_nim
 from .services.container_planner import build_container_plan
@@ -759,6 +764,12 @@ class PieceCreate(BaseModel):
     shape_type: str = ""
     notes: str = ""
 
+    _blank_floats = field_validator(
+        "tap_hole_diameter", "groove_dimension",
+        "sink_offset_left", "sink_offset_right", "sink_length", "sink_width",
+        mode="before",
+    )(_blank_to_none)
+
 
 class PieceUpdate(BaseModel):
     part: str = ""
@@ -803,6 +814,12 @@ class PieceUpdate(BaseModel):
     radius_corners: Dict[str, bool] = {}
     shape_type: str = ""
     notes: str = ""
+
+    _blank_floats = field_validator(
+        "tap_hole_diameter", "groove_dimension",
+        "sink_offset_left", "sink_offset_right", "sink_length", "sink_width",
+        mode="before",
+    )(_blank_to_none)
 
 
 class ProjectUpdate(BaseModel):
