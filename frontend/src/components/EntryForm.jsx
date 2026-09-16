@@ -538,6 +538,10 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
         r.sink_type = p.sink_type || 'No Sink';
         r.sink_cut = p.sink_cut || '-';
         r.sink_numbers = Array.isArray(p.sink_numbers) ? [...p.sink_numbers] : [];
+        r.sink_offset_left = p.sink_offset_left ?? '';
+        r.sink_offset_right = p.sink_offset_right ?? '';
+        r.sink_length = p.sink_length ?? '';
+        r.sink_width = p.sink_width ?? '';
         r.tap_holes = p.tap_holes || '-';
         r.tap_hole_diameter = p.tap_hole_diameter || '';
         r.tap_hole_positions = Array.isArray(p.tap_hole_positions) ? p.tap_hole_positions.map(pos => ({ ...pos })) : [];
@@ -868,6 +872,10 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
             sink_type: row.sink_type || 'No Sink',
             sink_cut: row.sink_cut || '-',
             sink_numbers: row.sink_numbers || [],
+            sink_offset_left: row.sink_offset_left === '' ? null : row.sink_offset_left,
+            sink_offset_right: row.sink_offset_right === '' ? null : row.sink_offset_right,
+            sink_length: row.sink_length === '' ? null : row.sink_length,
+            sink_width: row.sink_width === '' ? null : row.sink_width,
             tap_holes: row.tap_holes || '-',
             tap_hole_diameter: row.tap_hole_diameter || '',
             tap_hole_positions: row.tap_hole_positions || [],
