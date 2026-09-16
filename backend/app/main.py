@@ -157,6 +157,7 @@ def build_store():
             "custom_colors": mongo_db["custom_colors"],
             "crate_wood_types": mongo_db["crate_wood_types"],
             "cutlist_runs": mongo_db["cutlist_runs"],
+            "cutlist_drafts": mongo_db["cutlist_drafts"],
         }
         return store, "mongo"
     except Exception as e:
@@ -173,6 +174,7 @@ def build_store():
             "custom_colors": InMemoryCollection(),
             "crate_wood_types": InMemoryCollection(),
             "cutlist_runs": InMemoryCollection(),
+            "cutlist_drafts": InMemoryCollection(),
         }, "memory"
 
 
@@ -186,6 +188,7 @@ upload_drafts_col = store["upload_drafts"]
 custom_colors_col = store["custom_colors"]
 crate_wood_types_col = store["crate_wood_types"]
 cutlist_runs_col = store["cutlist_runs"]
+cutlist_drafts_col = store["cutlist_drafts"]
 
 
 def ensure_indexes() -> None:
@@ -2810,14 +2813,27 @@ class CutlistPieceRow(BaseModel):
     stone_color: str = ""
 
 
+class CutlistStockRow(BaseModel):
+    length: float
+    width: float
+    qty: int = 0  # 0/blank = unlimited supply
+    material: str = ""
+    label: str = ""
+
+
 class CutlistGenerateRequest(BaseModel):
     project_id: Optional[int] = None
     source: str = "project"  # 'project' | 'manual'
-    stock_length: float
-    stock_width: float
+    stock_length: Optional[float] = None   # legacy single-stock fallback
+    stock_width: Optional[float] = None    # legacy single-stock fallback
+    stock_sheets: List[CutlistStockRow] = []
     kerf: float = 0.125
     allow_rotate: bool = True
     consider_material: bool = True
+    labels_on_panels: bool = True
+    use_only_one_sheet_from_stock: bool = False
+    edge_banding: bool = False
+    consider_grain_direction: bool = False
     pieces: List[CutlistPieceRow] = []
 
 
@@ -2847,14 +2863,25 @@ def generate_cutlist(body: CutlistGenerateRequest):
         if not body.pieces:
             raise HTTPException(status_code=400, detail="pieces is required when source is 'manual'.")
         piece_rows = [row.model_dump() for row in body.pieces]
+        if body.project_id:
+            project_doc = projects_col.find_one({"id": body.project_id}, {"_id": 0})
+            job_label = (project_doc or {}).get("name") or (project_doc or {}).get("job_number") or job_label
+
+    stock_sheets = [row.model_dump() for row in body.stock_sheets]
+    if not stock_sheets:
+        if not body.stock_length or not body.stock_width:
+            raise HTTPException(status_code=400, detail="Add at least one stock sheet.")
+        stock_sheets = [{"length": body.stock_length, "width": body.stock_width, "qty": 0, "material": "", "label": ""}]
+
+    allow_rotate = body.allow_rotate and not body.consider_grain_direction
 
     result = run_cutlist(
         piece_rows,
-        stock_length=body.stock_length,
-        stock_width=body.stock_width,
+        stock_sheets=stock_sheets,
         kerf=body.kerf,
-        allow_rotate=body.allow_rotate,
+        allow_rotate=allow_rotate,
         consider_material=body.consider_material,
+        use_only_one_sheet_from_stock=body.use_only_one_sheet_from_stock,
     )
 
     run_id = next_sequence("cutlist_run")
@@ -2863,16 +2890,45 @@ def generate_cutlist(body: CutlistGenerateRequest):
         "project_id": body.project_id,
         "job_label": job_label,
         "source": body.source,
-        "stock_length": body.stock_length,
-        "stock_width": body.stock_width,
+        "stock_sheets": stock_sheets,
         "kerf": body.kerf,
-        "allow_rotate": body.allow_rotate,
+        "allow_rotate": allow_rotate,
+        "labels_on_panels": body.labels_on_panels,
+        "use_only_one_sheet_from_stock": body.use_only_one_sheet_from_stock,
+        "edge_banding": body.edge_banding,
+        "consider_grain_direction": body.consider_grain_direction,
         "piece_rows": piece_rows,
         "result": result,
         "created_at": utc_now(),
     }
     cutlist_runs_col.insert_one(doc)
     return {"run_id": run_id, "result": result}
+
+
+class CutlistDraftBody(BaseModel):
+    project_id: Optional[int] = None
+    panels: List[Dict[str, Any]] = []
+    stock_sheets: List[Dict[str, Any]] = []
+    options: Dict[str, Any] = {}
+
+
+@app.get("/api/cutlist/draft")
+def get_cutlist_draft(project_id: Optional[int] = None):
+    doc = cutlist_drafts_col.find_one({"project_id": project_id}, {"_id": 0})
+    return doc or {"project_id": project_id, "panels": [], "stock_sheets": [], "options": {}}
+
+
+@app.put("/api/cutlist/draft")
+def save_cutlist_draft(body: CutlistDraftBody):
+    doc = {
+        "project_id": body.project_id,
+        "panels": body.panels,
+        "stock_sheets": body.stock_sheets,
+        "options": body.options,
+        "updated_at": utc_now(),
+    }
+    cutlist_drafts_col.update_one({"project_id": body.project_id}, {"$set": doc}, upsert=True)
+    return {"saved": True}
 
 
 @app.get("/api/cutlist/{run_id}")
@@ -2967,11 +3023,23 @@ def _build_cutlist_summary_page(page, run_doc: Dict[str, Any]) -> None:
         page.insert_text((320, py), line, fontsize=7, color=black)
         py += 11
 
+    # One entry per distinct stock size actually used (supports multiple
+    # stock-sheet rows, e.g. different materials on different slab sizes).
+    size_counts: Dict[Tuple[float, float], int] = {}
+    for g in run_doc["result"]["groups"]:
+        key = (g.get("stock_length", s["stock_length"]), g.get("stock_width", s["stock_width"]))
+        size_counts[key] = size_counts.get(key, 0) + len(g["sheets"])
+    stock_line = "  \\  ".join(f'{l}\u00d7{w}  x{n}' for (l, w), n in size_counts.items()) or f'{s["stock_length"]}\u00d7{s["stock_width"]}  x{total_sheets}'
     page.insert_text((36, H - 40), "Stock sheets", fontsize=9, color=gray)
-    page.insert_text((120, H - 40), f'{s["stock_length"]}\u00d7{s["stock_width"]}  x{total_sheets}', fontsize=9, color=black)
+    page.insert_text((120, H - 40), stock_line, fontsize=9, color=black)
+
+    if s.get("total_unplaced_pieces"):
+        page.insert_text((36, H - 26), f'{s["total_unplaced_pieces"]} piece(s) did not fit in the available stock quantity.',
+                          fontsize=8, color=(0.75, 0.2, 0.15))
 
 
-def _build_cutlist_sheet_page(page, group: Dict[str, Any], pattern: Dict[str, Any], pattern_no: int) -> None:
+def _build_cutlist_sheet_page(page, group: Dict[str, Any], pattern: Dict[str, Any], pattern_no: int,
+                               labels_on_panels: bool = True) -> None:
     import fitz
     W, H = page.rect.width, page.rect.height
     black = (0.06, 0.09, 0.14)
@@ -3059,20 +3127,21 @@ def _build_cutlist_sheet_page(page, group: Dict[str, Any], pattern: Dict[str, An
         x1, y1 = x0 + p["w"] * scale, y0 + p["h"] * scale
         key = (round(p["w"], 2), round(p["h"], 2))
         page.draw_rect(fitz.Rect(x0, y0, x1, y1), color=black, fill=color_of[key], width=0.6)
-        label = f'{p["w"]:.2f}\u00d7{p["h"]:.2f}'
-        rect_w, rect_h = x1 - x0, y1 - y0
-        fontsize = 6.5
-        label_w = len(label) * fontsize * 0.55
-        if rect_w < label_w and rect_h >= label_w:
-            # Too narrow for the label horizontally but tall enough to
-            # rotate it \u2014 common for 4"-wide offcut strips.
-            page.insert_text(((x0 + x1) / 2 + fontsize * 0.35, (y0 + y1) / 2 + label_w / 2),
-                              label, fontsize=fontsize, color=black, rotate=90)
-        elif rect_w >= label_w:
-            page.insert_text(((x0 + x1) / 2 - label_w / 2, (y0 + y1) / 2), label,
-                              fontsize=fontsize, color=black)
-        # else: piece too small in both dimensions for its label \u2014 skip
-        # rather than overlap the neighboring piece.
+        if labels_on_panels:
+            label = f'{p["w"]:.2f}\u00d7{p["h"]:.2f}'
+            rect_w, rect_h = x1 - x0, y1 - y0
+            fontsize = 6.5
+            label_w = len(label) * fontsize * 0.55
+            if rect_w < label_w and rect_h >= label_w:
+                # Too narrow for the label horizontally but tall enough to
+                # rotate it \u2014 common for 4"-wide offcut strips.
+                page.insert_text(((x0 + x1) / 2 + fontsize * 0.35, (y0 + y1) / 2 + label_w / 2),
+                                  label, fontsize=fontsize, color=black, rotate=90)
+            elif rect_w >= label_w:
+                page.insert_text(((x0 + x1) / 2 - label_w / 2, (y0 + y1) / 2), label,
+                                  fontsize=fontsize, color=black)
+            # else: piece too small in both dimensions for its label \u2014 skip
+            # rather than overlap the neighboring piece.
         if p["y"] <= 0.05:
             page.insert_text(((x0 + x1) / 2 - 10, oy - 4), f'{p["w"]:.2f}', fontsize=6, color=gray)
         if p["x"] <= 0.05:
@@ -3095,7 +3164,7 @@ def export_cutlist_pdf(run_id: int):
     for group in run_doc["result"]["groups"]:
         for i, pattern in enumerate(_dedupe_sheet_patterns(group["sheets"]), start=1):
             page = doc.new_page(width=612, height=792)
-            _build_cutlist_sheet_page(page, group, pattern, i)
+            _build_cutlist_sheet_page(page, group, pattern, i, labels_on_panels=run_doc.get("labels_on_panels", True))
 
     output = BytesIO(doc.tobytes())
     doc.close()

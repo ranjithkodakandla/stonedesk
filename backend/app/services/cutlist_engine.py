@@ -141,9 +141,13 @@ def _reconstruct_cuts(gross_rects: List[Dict[str, Any]], sheet_w: float, sheet_h
 
 
 def _pack_group(pieces: List[Dict[str, Any]], stock_length: float, stock_width: float,
-                 kerf: float, allow_rotate: bool) -> List[Sheet]:
+                 kerf: float, allow_rotate: bool, max_bins: int = None) -> Tuple[List[Sheet], List[Dict[str, Any]]]:
+    """Returns (sheets, unplaced_pieces). unplaced_pieces is only ever
+    non-empty when max_bins caps the available stock short of what's needed
+    (the "use only one sheet from stock" option) — pieces that didn't fit in
+    any bin are reported back instead of silently vanishing."""
     if not pieces:
-        return []
+        return [], []
 
     packer = newPacker(rotation=allow_rotate, pack_algo=GuillotineBssfSas)
     for i, piece in enumerate(pieces):
@@ -153,17 +157,23 @@ def _pack_group(pieces: List[Dict[str, Any]], stock_length: float, stock_width: 
 
     # Enough bins for the worst case (every piece on its own sheet) — rectpack
     # only uses as many as it needs, extras are simply left empty and dropped.
-    for _ in range(len(pieces)):
+    # When max_bins is set (stock qty is limited), cap it there instead so
+    # pieces that don't fit come back as unplaced rather than assuming an
+    # unlimited slab supply.
+    bin_count = len(pieces) if max_bins is None else max(0, min(len(pieces), max_bins))
+    for _ in range(bin_count):
         packer.add_bin(stock_width, stock_length)
     packer.pack()
 
     sheets: List[Sheet] = []
+    placed_rids = set()
     for abin in packer:
         if len(abin) == 0:
             continue
         net_rects = []
         gross_rects = []
         for rect in abin:
+            placed_rids.add(rect.rid)
             piece = pieces[rect.rid]
             rotated = abs(rect.width - kerf - piece["length"]) < 1e-6 and abs(rect.height - kerf - piece["width"]) < 1e-6
             net_rects.append({
@@ -177,7 +187,11 @@ def _pack_group(pieces: List[Dict[str, Any]], stock_length: float, stock_width: 
         sheet.cut_log = _reconstruct_cuts(gross_rects, stock_width, stock_length, kerf)
         sheets.append(sheet)
 
-    return sheets
+    unplaced = [
+        {"length": pieces[i]["length"], "width": pieces[i]["width"], "label": pieces[i]["label"]}
+        for i in range(len(pieces)) if i not in placed_rids
+    ]
+    return sheets, unplaced
 
 
 def _cut_metrics(sheet: Sheet) -> Tuple[int, float]:
@@ -200,17 +214,39 @@ def _build_cuts_table(sheet: Sheet) -> List[Dict[str, Any]]:
     return rows
 
 
-def run_cutlist(piece_rows: List[Dict[str, Any]], stock_length: float, stock_width: float,
+def _stock_for_material(stock_sheets: List[Dict[str, Any]], material: str) -> Dict[str, Any]:
+    """Picks the stock sheet row whose Material label matches this group,
+    falling back to the first stock row — mirrors the reference tool's
+    Stock-sheets grid, where each row can target a specific board material."""
+    material = (material or "").strip().lower()
+    if material:
+        for row in stock_sheets:
+            if str(row.get("material") or "").strip().lower() == material:
+                return row
+    return stock_sheets[0] if stock_sheets else {"length": 0, "width": 0, "qty": 0}
+
+
+def run_cutlist(piece_rows: List[Dict[str, Any]], stock_sheets: List[Dict[str, Any]],
                  kerf: float = 0.125, allow_rotate: bool = True, consider_material: bool = True,
+                 use_only_one_sheet_from_stock: bool = False,
                  time_budget_s: float = 3.0) -> Dict[str, Any]:
     """
     piece_rows: list of {length, width, qty, label?, material?, thickness?, stone_color?}
+    stock_sheets: list of {length, width, qty, material?, label?} — one or
+    more stock board definitions (the reference tool's "Stock sheets" grid).
+    Each piece group is nested against the stock row whose material matches
+    it, falling back to the first stock row.
 
     consider_material: when True (default, and the safe choice for stone —
     different materials/thicknesses/colors physically cannot share a slab),
     groups pieces by (material, thickness, stone_color) and nests each group
     onto its own sheets. When False, mirrors cutlistoptimizer.com's toggle of
     the same name and nests everything together, ignoring stone type.
+
+    use_only_one_sheet_from_stock: caps each group to its matching stock
+    row's Qty (0/blank = unlimited) instead of assuming an endless slab
+    supply — pieces that don't fit come back in that group's
+    "unplaced_pieces" list rather than silently expanding the sheet count.
 
     time_budget_s: unused by the current rectpack-based packer (kept in the
     signature for API stability — the underlying algorithm is a single fast
@@ -233,12 +269,21 @@ def run_cutlist(piece_rows: List[Dict[str, Any]], stock_length: float, stock_wid
     total_wasted_area = 0.0
     total_cuts = 0
     total_cut_length = 0.0
+    total_unplaced = 0
 
     for key, rows in groups.items():
+        material, thickness, stone_color = key
+        stock_row = _stock_for_material(stock_sheets, material)
+        stock_length = float(stock_row.get("length") or 0)
+        stock_width = float(stock_row.get("width") or 0)
+        stock_qty = int(stock_row.get("qty") or 0)
+        max_bins = stock_qty if (use_only_one_sheet_from_stock and stock_qty > 0) else None
+
         expanded = _expand_pieces(rows)
         if not expanded:
             continue
-        sheets = _pack_group(expanded, stock_length, stock_width, kerf, allow_rotate)
+        sheets, unplaced = _pack_group(expanded, stock_length, stock_width, kerf, allow_rotate, max_bins=max_bins)
+        total_unplaced += len(unplaced)
 
         sheet_dicts = []
         group_used = 0.0
@@ -272,20 +317,22 @@ def run_cutlist(piece_rows: List[Dict[str, Any]], stock_length: float, stock_wid
         total_used_area += group_used
         total_wasted_area += group_wasted
 
-        material, thickness, stone_color = key
         result_groups.append({
             "material": material, "thickness": thickness, "stone_color": stone_color,
+            "stock_length": stock_length, "stock_width": stock_width,
             "sheets_used": len(sheets),
             "used_area": round(group_used, 2),
             "wasted_area": round(group_wasted, 2),
             "used_pct": round(100 * group_used / group_area, 1) if group_area else 0,
             "sheets": sheet_dicts,
+            "unplaced_pieces": unplaced,
         })
 
     total_area = total_used_area + total_wasted_area
+    primary_stock = stock_sheets[0] if stock_sheets else {"length": 0, "width": 0}
     summary = {
-        "stock_length": stock_length,
-        "stock_width": stock_width,
+        "stock_length": primary_stock.get("length", 0),
+        "stock_width": primary_stock.get("width", 0),
         "kerf": kerf,
         "total_sheets": total_sheets,
         "total_used_area": round(total_used_area, 2),
@@ -293,6 +340,7 @@ def run_cutlist(piece_rows: List[Dict[str, Any]], stock_length: float, stock_wid
         "total_used_pct": round(100 * total_used_area / total_area, 1) if total_area else 0,
         "total_cuts": total_cuts,
         "total_cut_length": round(total_cut_length, 2),
+        "total_unplaced_pieces": total_unplaced,
     }
 
     return {"groups": result_groups, "summary": summary}
