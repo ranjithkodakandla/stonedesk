@@ -158,6 +158,7 @@ def build_store():
             "crate_wood_types": mongo_db["crate_wood_types"],
             "cutlist_runs": mongo_db["cutlist_runs"],
             "cutlist_drafts": mongo_db["cutlist_drafts"],
+            "cutlist_projects": mongo_db["cutlist_projects"],
         }
         return store, "mongo"
     except Exception as e:
@@ -175,6 +176,7 @@ def build_store():
             "crate_wood_types": InMemoryCollection(),
             "cutlist_runs": InMemoryCollection(),
             "cutlist_drafts": InMemoryCollection(),
+            "cutlist_projects": InMemoryCollection(),
         }, "memory"
 
 
@@ -189,6 +191,7 @@ custom_colors_col = store["custom_colors"]
 crate_wood_types_col = store["crate_wood_types"]
 cutlist_runs_col = store["cutlist_runs"]
 cutlist_drafts_col = store["cutlist_drafts"]
+cutlist_projects_col = store["cutlist_projects"]
 
 
 def ensure_indexes() -> None:
@@ -2529,11 +2532,28 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
 
     page.draw_rect(fitz.Rect(rx0, ry0, rx1, ry1), color=black, width=1.2)
 
+    # Placed label bounding boxes, tracked so every later label (sink dims,
+    # tap holes, grooves, bowl numbers) can dodge collisions with earlier
+    # ones instead of drawing on top of them.
+    placed_label_boxes = []
+
+    def _label_box(x, y, text, fontsize):
+        # Small margin beyond the glyph footprint so labels get real
+        # breathing room instead of clearing collision checks while still
+        # sitting edge-to-edge with a neighbor.
+        margin = 2
+        w = len(text) * fontsize * 0.5
+        h = fontsize * 1.15
+        return (x - margin, y - h - margin, x + w + margin, y + h * 0.25 + margin)
+
     # Overall dimension callouts.
     page.draw_line((rx0, ry0 - 10), (rx1, ry0 - 10), color=gray, width=0.5)
-    page.insert_text(((rx0 + rx1) / 2 - 18, ry0 - 13), f'{length:.2f}"', fontsize=8, color=gray)
+    length_label_pos = ((rx0 + rx1) / 2 - 18, ry0 - 13)
+    page.insert_text(length_label_pos, f'{length:.2f}"', fontsize=8, color=gray)
+    placed_label_boxes.append(_label_box(*length_label_pos, f'{length:.2f}"', 8))
     page.draw_line((rx0 - 14, ry0), (rx0 - 14, ry1), color=gray, width=0.5)
     page.insert_text((rx0 - 34, (ry0 + ry1) / 2), f'{width:.2f}"', fontsize=8, color=gray, rotate=90)
+    placed_label_boxes.append((rx0 - 38, (ry0 + ry1) / 2 - 20, rx0 - 14, (ry0 + ry1) / 2 + 4))
 
     # Edge polish sides — marked with an X directly on the side to be worked.
     # Pencil Round / Polish gets a circled X; every other finish (Flat Chamfer,
@@ -2578,34 +2598,25 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
         label_y = cy + sy * (r_arc + 10) if sy < 0 else cy + sy * (r_arc + 4) + 10
         page.insert_text((label_x, label_y), label, fontsize=7, color=coral)
 
-    # Placed label bounding boxes, tracked so later labels (tap holes) can
-    # dodge collisions with earlier ones (sink dimension text, other holes).
-    placed_label_boxes = []
-
-    def _label_box(x, y, text, fontsize):
-        w = len(text) * fontsize * 0.5
-        h = fontsize * 1.15
-        return (x, y - h, x + w, y + h * 0.25)
-
     def _boxes_overlap(a, b):
         return a[0] < b[2] and a[2] > b[0] and a[1] < b[3] and a[3] > b[1]
 
     def _place_text(x, y, text, fontsize, color, candidates=None):
         """Insert text at (x, y), or the first candidate offset that avoids
-        overlapping a previously placed label, falling back to (x, y)."""
-        box = _label_box(x, y, text, fontsize)
-        chosen = (x, y)
-        if candidates:
-            all_candidates = [(x, y)] + list(candidates)
-            for cx, cy in all_candidates:
-                cbox = _label_box(cx, cy, text, fontsize)
-                if not any(_boxes_overlap(cbox, pb) for pb in placed_label_boxes):
-                    chosen = (cx, cy)
-                    box = cbox
-                    break
-            else:
-                chosen = all_candidates[0]
-                box = _label_box(*chosen, text, fontsize)
+        overlapping a previously placed label. If every candidate collides
+        with something, use the one with the fewest overlaps instead of
+        always falling back to (x, y) — a busier label (sink dims, other
+        holes/grooves) still gets a legible spot rather than stacking."""
+        all_candidates = [(x, y)] + list(candidates or [])
+        chosen, box, best_overlaps = None, None, None
+        for cx, cy in all_candidates:
+            cbox = _label_box(cx, cy, text, fontsize)
+            overlaps = sum(1 for pb in placed_label_boxes if _boxes_overlap(cbox, pb))
+            if overlaps == 0:
+                chosen, box = (cx, cy), cbox
+                break
+            if best_overlaps is None or overlaps < best_overlaps:
+                chosen, box, best_overlaps = (cx, cy), cbox, overlaps
         placed_label_boxes.append(box)
         page.insert_text(chosen, text, fontsize=fontsize, color=color)
 
@@ -2644,8 +2655,13 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
             bx1 = bx0 + bowl_w
             bowl_label = sink_numbers[i] if i < len(sink_numbers) else sink_type
             page.draw_rect(fitz.Rect(bx0, sy0, bx1, sy1), color=coral, width=1)
-            page.insert_text((bx0 + bowl_w / 2 - len(bowl_label) * 2.6, (sy0 + sy1) / 2 + 3),
-                              bowl_label, fontsize=7, color=gray)
+            bowl_cx = bx0 + bowl_w / 2 - len(bowl_label) * 2.6
+            bowl_cy = (sy0 + sy1) / 2 + 3
+            _place_text(bowl_cx, bowl_cy, bowl_label, 7, gray, candidates=[
+                (bowl_cx, bowl_cy - 12),
+                (bowl_cx, bowl_cy + 12),
+                (bowl_cx, sy0 + 12),
+            ])
 
         # Sink size — length along the top of the cutout, width along its left side.
         page.draw_line((sx0, sy0 - 8), (sx1, sy0 - 8), color=coral, width=0.5)
@@ -2694,6 +2710,12 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
             (hx - r - 4 - len(label) * 3, hy - 2),
             (hx - 16, hy - 2 - r - 10),
             (hx - 16, hy + 10 + r + 10),
+            (hx - 16, hy - 2 - r - 20),
+            (hx - 16, hy + 10 + r + 20),
+            (hx + r + 4, hy - 2 - 10),
+            (hx - r - 4 - len(label) * 3, hy + 10),
+            (hx + 20, hy + 10 + r),
+            (hx - 20 - len(label) * 3, hy + 10 + r),
         ]
         cx0, cy0 = candidates[0]
         _place_text(cx0, cy0, label, 5.5, gray, candidates=candidates[1:])
@@ -2709,7 +2731,17 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
         gx, gy = ref_cx + ox * scale, ref_cy + oy * scale
         half_len = max(4, (groove_dimension * scale) / 2) if groove_dimension > 0 else 5
         page.draw_line((gx - half_len, gy), (gx + half_len, gy), color=coral, width=1.5)
-        page.insert_text((gx + half_len + 2, gy - 2), f'X{ox:+.2f}", Y{oy:+.2f}"', fontsize=5.5, color=gray)
+        label = f'X{ox:+.2f}", Y{oy:+.2f}"'
+        candidates = [
+            (gx + half_len + 2, gy - 2),
+            (gx - half_len - 2 - len(label) * 3, gy - 2),
+            (gx + half_len + 2, gy + 9),
+            (gx - half_len - 2 - len(label) * 3, gy + 9),
+            (gx - 16, gy - 10),
+            (gx - 16, gy + 12),
+        ]
+        cx0, cy0 = candidates[0]
+        _place_text(cx0, cy0, label, 5.5, gray, candidates=candidates[1:])
 
     # Spec table.
     spec_y = 226
@@ -2823,6 +2855,7 @@ class CutlistStockRow(BaseModel):
 
 class CutlistGenerateRequest(BaseModel):
     project_id: Optional[int] = None
+    cutlist_id: Optional[int] = None
     source: str = "project"  # 'project' | 'manual'
     stock_length: Optional[float] = None   # legacy single-stock fallback
     stock_width: Optional[float] = None    # legacy single-stock fallback
@@ -2866,6 +2899,9 @@ def generate_cutlist(body: CutlistGenerateRequest):
         if body.project_id:
             project_doc = projects_col.find_one({"id": body.project_id}, {"_id": 0})
             job_label = (project_doc or {}).get("name") or (project_doc or {}).get("job_number") or job_label
+        elif body.cutlist_id:
+            cutlist_doc = cutlist_projects_col.find_one({"id": body.cutlist_id}, {"_id": 0})
+            job_label = (cutlist_doc or {}).get("name") or job_label
 
     stock_sheets = [row.model_dump() for row in body.stock_sheets]
     if not stock_sheets:
@@ -2888,6 +2924,7 @@ def generate_cutlist(body: CutlistGenerateRequest):
     doc = {
         "id": run_id,
         "project_id": body.project_id,
+        "cutlist_id": body.cutlist_id,
         "job_label": job_label,
         "source": body.source,
         "stock_sheets": stock_sheets,
@@ -2907,28 +2944,65 @@ def generate_cutlist(body: CutlistGenerateRequest):
 
 class CutlistDraftBody(BaseModel):
     project_id: Optional[int] = None
+    cutlist_id: Optional[int] = None
     panels: List[Dict[str, Any]] = []
     stock_sheets: List[Dict[str, Any]] = []
     options: Dict[str, Any] = {}
 
 
+def _cutlist_draft_key(project_id: Optional[int], cutlist_id: Optional[int]) -> Dict[str, Any]:
+    """A saved standalone cut list (cutlist_id) takes priority over the
+    legacy single-slot-per-project key so both scopes can share one
+    drafts collection without colliding."""
+    return {"cutlist_id": cutlist_id} if cutlist_id is not None else {"project_id": project_id}
+
+
 @app.get("/api/cutlist/draft")
-def get_cutlist_draft(project_id: Optional[int] = None):
-    doc = cutlist_drafts_col.find_one({"project_id": project_id}, {"_id": 0})
-    return doc or {"project_id": project_id, "panels": [], "stock_sheets": [], "options": {}}
+def get_cutlist_draft(project_id: Optional[int] = None, cutlist_id: Optional[int] = None):
+    key = _cutlist_draft_key(project_id, cutlist_id)
+    doc = cutlist_drafts_col.find_one(key, {"_id": 0})
+    return doc or {**key, "panels": [], "stock_sheets": [], "options": {}}
 
 
 @app.put("/api/cutlist/draft")
 def save_cutlist_draft(body: CutlistDraftBody):
+    key = _cutlist_draft_key(body.project_id, body.cutlist_id)
     doc = {
-        "project_id": body.project_id,
+        **key,
         "panels": body.panels,
         "stock_sheets": body.stock_sheets,
         "options": body.options,
         "updated_at": utc_now(),
     }
-    cutlist_drafts_col.update_one({"project_id": body.project_id}, {"$set": doc}, upsert=True)
+    cutlist_drafts_col.update_one(key, {"$set": doc}, upsert=True)
     return {"saved": True}
+
+
+class CutlistProjectCreate(BaseModel):
+    name: str = ""
+
+
+@app.get("/api/cutlist-projects/")
+def list_cutlist_projects():
+    docs = list(cutlist_projects_col.find({}, {"_id": 0}))
+    docs.sort(key=lambda d: d.get("created_at") or "", reverse=True)
+    return docs
+
+
+@app.post("/api/cutlist-projects/")
+def create_cutlist_project(body: CutlistProjectCreate):
+    cutlist_id = next_sequence("cutlist_project")
+    doc = {"id": cutlist_id, "name": body.name.strip() or f"Cut List {cutlist_id}", "created_at": utc_now()}
+    cutlist_projects_col.insert_one(doc)
+    doc.pop("_id", None)  # insert_one mutates doc in place, adding a non-JSON-serializable ObjectId
+    return doc
+
+
+@app.delete("/api/cutlist-projects/{cutlist_id}")
+def delete_cutlist_project(cutlist_id: int):
+    cutlist_projects_col.delete_one({"id": cutlist_id})
+    cutlist_drafts_col.delete_one({"cutlist_id": cutlist_id})
+    return {"deleted": True}
 
 
 @app.get("/api/cutlist/{run_id}")
@@ -3023,12 +3097,14 @@ def _build_cutlist_summary_page(page, run_doc: Dict[str, Any]) -> None:
         page.insert_text((320, py), line, fontsize=7, color=black)
         py += 11
 
-    # One entry per distinct stock size actually used (supports multiple
-    # stock-sheet rows, e.g. different materials on different slab sizes).
+    # One entry per distinct stock size actually used \u2014 each sheet carries
+    # its own size now that a single run can mix several stock rows (e.g.
+    # several slab sizes of the same undifferentiated material).
     size_counts: Dict[Tuple[float, float], int] = {}
     for g in run_doc["result"]["groups"]:
-        key = (g.get("stock_length", s["stock_length"]), g.get("stock_width", s["stock_width"]))
-        size_counts[key] = size_counts.get(key, 0) + len(g["sheets"])
+        for sheet in g["sheets"]:
+            key = (sheet["stock_length"], sheet["stock_width"])
+            size_counts[key] = size_counts.get(key, 0) + 1
     stock_line = "  \\  ".join(f'{l}\u00d7{w}  x{n}' for (l, w), n in size_counts.items()) or f'{s["stock_length"]}\u00d7{s["stock_width"]}  x{total_sheets}'
     page.insert_text((36, H - 40), "Stock sheets", fontsize=9, color=gray)
     page.insert_text((120, H - 40), stock_line, fontsize=9, color=black)

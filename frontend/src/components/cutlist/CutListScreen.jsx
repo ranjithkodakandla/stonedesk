@@ -26,9 +26,11 @@ const toApiRows = (rows) => rows
     material: r.material || '', label: r.label || '',
   }));
 
-/** mode: 'project' (auto-imports the given project's parts into the grid) | 'manual' (blank grid, CSV import). */
-const CutListScreen = ({ projectId, mode = 'project' }) => {
-  const draftKey = mode === 'project' ? projectId : null;
+/** mode: 'project' (auto-imports the given project's parts into the grid, draft keyed by projectId) |
+ * 'manual' (blank grid, CSV import, draft keyed by cutlistId — one of the saved standalone Cut Lists). */
+const CutListScreen = ({ projectId, cutlistId, mode = 'project' }) => {
+  const draftParams = mode === 'project' ? { project_id: projectId } : { cutlist_id: cutlistId };
+  const draftKey = mode === 'project' ? projectId : cutlistId;
 
   const [panels, setPanels] = useState([]);
   const [stockSheets, setStockSheets] = useState([defaultStockRow()]);
@@ -48,8 +50,7 @@ const CutListScreen = ({ projectId, mode = 'project' }) => {
     setLoaded(false);
     (async () => {
       try {
-        const params = draftKey ? { project_id: draftKey } : {};
-        const { data } = await axios.get(`${API_BASE}/cutlist/draft`, { params });
+        const { data } = await axios.get(`${API_BASE}/cutlist/draft`, { params: draftParams });
         if (cancelled) return;
         if (data?.panels?.length || data?.stock_sheets?.length) {
           setPanels(toGridRows(data.panels));
@@ -79,20 +80,21 @@ const CutListScreen = ({ projectId, mode = 'project' }) => {
   }, [draftKey, mode, projectId]);
 
   // Debounced autosave — any manual edit to the grids or options persists,
-  // so it's there next time this project/session is opened and can be
+  // so it's there next time this project/cut list is opened and can be
   // downloaded later, same as the rest of the project's data.
   useEffect(() => {
     if (!loaded) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
       axios.put(`${API_BASE}/cutlist/draft`, {
-        project_id: draftKey,
+        ...draftParams,
         panels: panels.map(({ id, ...r }) => r),
         stock_sheets: stockSheets.map(({ id, ...r }) => r),
         options,
       }).then(() => setSavedAt(new Date())).catch(() => {});
     }, 800);
     return () => clearTimeout(saveTimer.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [panels, stockSheets, options, loaded, draftKey]);
 
   const handleGenerate = async () => {
@@ -112,7 +114,7 @@ const CutListScreen = ({ projectId, mode = 'project' }) => {
     try {
       const res = await axios.post(`${API_BASE}/cutlist/generate`, {
         source: 'manual',
-        project_id: draftKey,
+        ...draftParams,
         stock_sheets: stockRows,
         kerf: Number(options.kerf) || 0.125,
         allow_rotate: true,
@@ -140,7 +142,15 @@ const CutListScreen = ({ projectId, mode = 'project' }) => {
   const patterns = useMemo(() => (result ? buildPatternList(result) : []), [result]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const patternRefs = useRef([]);
-  useEffect(() => { setSelectedIndex(0); patternRefs.current = []; }, [result]);
+  const resultsRef = useRef(null);
+  useEffect(() => {
+    setSelectedIndex(0);
+    patternRefs.current = [];
+    // Jump straight to the results the moment they're ready — with a large
+    // panel list above it, the results card can render far below the fold
+    // and look like nothing happened otherwise.
+    if (result) resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [result]);
 
   const selectPattern = (idx) => {
     setSelectedIndex(idx);
@@ -181,7 +191,7 @@ const CutListScreen = ({ projectId, mode = 'project' }) => {
       </div>
 
       {result && patterns.length > 0 && (
-        <div className="rounded-3xl border border-slate-200 bg-white p-6">
+        <div ref={resultsRef} className="rounded-3xl border border-slate-200 bg-white p-6">
           <div className="flex items-center justify-between mb-4">
             <div className="text-sm text-slate-500">
               {result.summary.total_sheets} physical sheet{result.summary.total_sheets !== 1 ? 's' : ''} · {patterns.length} pattern{patterns.length !== 1 ? 's' : ''}

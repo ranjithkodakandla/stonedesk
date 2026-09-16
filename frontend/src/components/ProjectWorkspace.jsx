@@ -305,34 +305,34 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
   }
 
   return (
-    <div className="min-h-screen bg-[linear-gradient(180deg,_#f6f8fc,_#f8fafc)] text-[#1e293b]">
-      <div className="mx-auto max-w-[1600px] px-5 py-6 lg:px-8">
-        <div className="rounded-[36px] border border-[#dbe4f0] bg-white shadow-sm">
-
-          {/* ── Header Bar ── */}
-          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#edf2f7] px-6 py-5">
-            <div className="flex items-center gap-5">
+    <div className="min-h-screen bg-[#f8fafc] text-[#1e293b]">
+      <div className="sticky top-0 z-20 bg-[#111827] border-b border-black/20 shadow-sm">
+        <div className="max-w-[1400px] mx-auto px-6 py-3 flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-5">
+            <button
+              type="button"
+              onClick={goBack}
+              className="rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-medium text-white hover:bg-white/20 transition-colors"
+            >
+              ← Back
+            </button>
+            <Logo dark />
+          </div>
+          <div className="flex flex-wrap gap-3">
+            {hasPlan && (
               <button
                 type="button"
-                onClick={goBack}
-                className="rounded-full border border-[#cbd5e1] bg-white px-4 py-2 text-sm font-medium text-[#334155] hover:bg-[#f8fafc]"
+                className="btn-primary bg-[#059669] hover:bg-[#047857]"
+                onClick={exportWorkbook}
               >
-                ← Back
+                Export Final Plan
               </button>
-              <Logo />
-            </div>
-            <div className="flex flex-wrap gap-3">
-              {hasPlan && (
-                <button
-                  type="button"
-                  className="btn-primary bg-[#059669] hover:bg-[#047857]"
-                  onClick={exportWorkbook}
-                >
-                  Export Final Plan
-                </button>
-              )}
-            </div>
+            )}
           </div>
+        </div>
+      </div>
+      <div className="mx-auto max-w-[1400px] px-5 py-6 lg:px-8">
+        <div className="rounded-[36px] border border-[#dbe4f0] bg-white shadow-sm">
 
           {/* ── Project Info Header ── */}
           <div className="border-b border-[#edf2f7] px-6 py-6">

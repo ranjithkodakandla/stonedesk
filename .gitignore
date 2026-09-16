@@ -10,3 +10,5 @@ venv/
 .venv/
 backend/venv/
 backend/.venv/
+# Added by code-review-graph
+.code-review-graph/
