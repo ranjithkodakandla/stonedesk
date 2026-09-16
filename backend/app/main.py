@@ -2825,12 +2825,15 @@ class CutlistGenerateRequest(BaseModel):
 def generate_cutlist(body: CutlistGenerateRequest):
     from .services.cutlist_engine import run_cutlist
 
+    job_label = "Manual Cut List"
     if body.source == "project":
         if not body.project_id:
             raise HTTPException(status_code=400, detail="project_id is required when source is 'project'.")
         pieces = list(pieces_col.find({"project_id": body.project_id}, {"_id": 0}))
         if not pieces:
             raise HTTPException(status_code=400, detail="No pieces found for this project.")
+        project_doc = projects_col.find_one({"id": body.project_id}, {"_id": 0})
+        job_label = (project_doc or {}).get("name") or (project_doc or {}).get("job_number") or job_label
         piece_rows = [
             {
                 "length": p.get("length"), "width": p.get("width"), "qty": p.get("qty", 1),
@@ -2858,11 +2861,13 @@ def generate_cutlist(body: CutlistGenerateRequest):
     doc = {
         "id": run_id,
         "project_id": body.project_id,
+        "job_label": job_label,
         "source": body.source,
         "stock_length": body.stock_length,
         "stock_width": body.stock_width,
         "kerf": body.kerf,
         "allow_rotate": body.allow_rotate,
+        "piece_rows": piece_rows,
         "result": result,
         "created_at": utc_now(),
     }
@@ -2878,85 +2883,202 @@ def get_cutlist_run(run_id: int):
     return doc
 
 
+def _dedupe_sheet_patterns(sheets):
+    """Group physical sheets that share an identical cut pattern -- matches
+    the reference tool's PDF, which prints one page per distinct pattern
+    stamped with how many physical sheets use it, instead of one page per
+    physical sheet."""
+    patterns = {}
+    order = []
+    for sheet in sheets:
+        key = tuple(sorted(
+            (round(p["x"], 2), round(p["y"], 2), round(p["w"], 2), round(p["h"], 2))
+            for p in sheet["placements"]
+        ))
+        if key not in patterns:
+            patterns[key] = {"sheet": sheet, "qty": 0}
+            order.append(key)
+        patterns[key]["qty"] += 1
+    return [patterns[k] for k in order]
+
+
+_PANEL_PALETTE = [
+    (0.80, 0.87, 0.93), (0.93, 0.85, 0.80), (0.85, 0.93, 0.83),
+    (0.93, 0.90, 0.78), (0.87, 0.83, 0.93), (0.93, 0.80, 0.87),
+    (0.80, 0.93, 0.91), (0.90, 0.90, 0.80),
+]
+
+
+def _fmt_num(v) -> str:
+    v = float(v)
+    return f'{v:.0f}' if v == int(v) else f'{v:.3f}'.rstrip('0').rstrip('.')
+
+
+def _panel_list_lines(piece_rows, max_width_chars: int = 70):
+    """'{W}x{L} x{qty} \\ ...' word-wrapped -- the master list of every
+    unique panel size in the job, the "Panels" block on the reference
+    summary page."""
+    parts = [f'{_fmt_num(r["width"])}\u00d7{_fmt_num(r["length"])} x{int(r.get("qty", 1))}' for r in piece_rows]
+    lines, cur = [], ""
+    for part in parts:
+        candidate = f"{cur} \\ {part}" if cur else part
+        if len(candidate) > max_width_chars:
+            lines.append(cur)
+            cur = part
+        else:
+            cur = candidate
+    if cur:
+        lines.append(cur)
+    return lines
+
+
 def _build_cutlist_summary_page(page, run_doc: Dict[str, Any]) -> None:
-    import fitz
     W, H = page.rect.width, page.rect.height
     black = (0.06, 0.09, 0.14)
     gray = (0.4, 0.45, 0.5)
     s = run_doc["result"]["summary"]
+    total_sheets = sum(len(g["sheets"]) for g in run_doc["result"]["groups"])
 
-    page.insert_text((36, 40), "Cut List Summary", fontsize=16, color=black)
+    page.insert_text((36, 40), run_doc.get("job_label") or "Cut List Summary", fontsize=16, color=black)
     page.draw_line((36, 50), (W - 36, 50), color=gray, width=0.5)
+
     rows = [
-        ("Stock sheet", f'{s["stock_length"]}×{s["stock_width"]}'),
-        ("Kerf", f'{s["kerf"]}"'),
-        ("Total sheets used", str(s["total_sheets"])),
-        ("Used area", f'{s["total_used_area"]:.1f} ({s["total_used_pct"]}%)'),
-        ("Wasted area", f'{s["total_wasted_area"]:.1f}'),
+        ("Used stock sheets", str(sum(len(_dedupe_sheet_patterns(g["sheets"])) for g in run_doc["result"]["groups"]))),
+        ("Total used area", f'{s["total_used_area"]:.2f}  {s["total_used_pct"]}%'),
+        ("Total wasted area", f'{s["total_wasted_area"]:.2f}  {round(100 - s["total_used_pct"], 1)}%'),
         ("Total cuts", str(s["total_cuts"])),
-        ("Total cut length", f'{s["total_cut_length"]:.1f}'),
+        ("Total cut length", f'{s["total_cut_length"]:.2f}'),
+        ("Cut / blade / kerf thickness", f'{s["kerf"]}'),
     ]
     y = 76
     for label, val in rows:
-        page.insert_text((36, y), label, fontsize=10, color=gray)
-        page.insert_text((220, y), val, fontsize=10, color=black)
-        y += 18
+        page.insert_text((36, y), label, fontsize=9, color=gray)
+        page.insert_text((220, y), val, fontsize=9, color=black)
+        y += 17
+
+    # Panels -- the master list of every unique panel size ordered, matching
+    # the reference tool's "Panels" block on its summary page.
+    piece_rows = run_doc.get("piece_rows") or []
+    page.insert_text((320, 76), "Panels", fontsize=9, color=gray)
+    py = 92
+    for line in _panel_list_lines(piece_rows, max_width_chars=70):
+        if py > H - 60:
+            break
+        page.insert_text((320, py), line, fontsize=7, color=black)
+        py += 11
+
+    page.insert_text((36, H - 40), "Stock sheets", fontsize=9, color=gray)
+    page.insert_text((120, H - 40), f'{s["stock_length"]}\u00d7{s["stock_width"]}  x{total_sheets}', fontsize=9, color=black)
 
 
-def _build_cutlist_sheet_page(page, group: Dict[str, Any], sheet: Dict[str, Any], sheet_no: int) -> None:
+def _build_cutlist_sheet_page(page, group: Dict[str, Any], pattern: Dict[str, Any], pattern_no: int) -> None:
     import fitz
     W, H = page.rect.width, page.rect.height
     black = (0.06, 0.09, 0.14)
     gray = (0.4, 0.45, 0.5)
-    fill = (0.87, 0.90, 0.97)
+    sheet, qty = pattern["sheet"], pattern["qty"]
+    placements = sheet["placements"]
 
-    page.insert_text((36, 30), f'{group["material"]} {group["thickness"]} {group["stone_color"]} — Sheet #{sheet_no}',
-                      fontsize=11, color=black)
+    title = " ".join(v for v in (group.get("material"), group.get("thickness"), group.get("stone_color")) if v)
+    page.insert_text((36, 30), title or "Cut List", fontsize=11, color=black)
+    page.draw_line((36, 40), (W - 36, 40), color=gray, width=0.5)
 
-    margin = 50
-    diagram_h = 380
-    avail_w, avail_h = W - margin * 2, diagram_h
+    # Unique panel sizes on this one pattern, largest first -- same "Panel /
+    # Qty" breakdown table the reference shows per sheet.
+    size_counts = {}
+    for p in placements:
+        key = (round(p["w"], 2), round(p["h"], 2))
+        size_counts[key] = size_counts.get(key, 0) + 1
+    unique_sizes = sorted(size_counts.keys(), key=lambda k: -(k[0] * k[1]))
+    color_of = {size: _PANEL_PALETTE[i % len(_PANEL_PALETTE)] for i, size in enumerate(unique_sizes)}
+
+    # Left info column.
+    lx, ly = 36, 56
+    col_w = 160
+    info_rows = [
+        ("Stock sheet", f'{sheet["stock_length"]}\u00d7{sheet["stock_width"]}'),
+        ("Qty", str(qty)),
+        ("Used area", f'{sheet["used_area"]:.2f}  {sheet["used_pct"]}%'),
+        ("Wasted area", f'{sheet["wasted_area"]:.2f}  {round(100 - sheet["used_pct"], 1)}%'),
+        ("Cuts", str(len(sheet.get("cuts_table", [])))),
+        ("Panels", str(len(placements))),
+        ("Wasted panels", str(sum(1 for c in sheet.get("cuts_table", []) if "surplus" in str(c.get("note", "")).lower()))),
+    ]
+    for label, val in info_rows:
+        page.insert_text((lx, ly), label, fontsize=8, color=gray)
+        page.insert_text((lx, ly + 10), val, fontsize=8.5, color=black)
+        ly += 24
+
+    ly += 6
+    page.insert_text((lx, ly), "Panel", fontsize=7.5, color=gray)
+    page.insert_text((lx + 70, ly), "Qty", fontsize=7.5, color=gray)
+    page.draw_line((lx, ly + 3), (lx + col_w, ly + 3), color=gray, width=0.4)
+    ly += 13
+    for size in unique_sizes:
+        if ly > H - 240:
+            break
+        sw = fitz.Rect(lx, ly - 6, lx + 8, ly + 2)
+        page.draw_rect(sw, color=black, fill=color_of[size], width=0.4)
+        page.insert_text((lx + 12, ly), f'{size[0]:.2f}\u00d7{size[1]:.2f}', fontsize=7, color=black)
+        page.insert_text((lx + 70, ly), str(size_counts[size]), fontsize=7, color=black)
+        ly += 12
+
+    ly += 10
+    page.insert_text((lx, ly), "Cuts", fontsize=8, color=gray)
+    ly += 12
+    cut_col_x = [lx, lx + 16, lx + 75, lx + 118]
+    for cx, htext in zip(cut_col_x, ["#", "Panel", "Cut", "Result"]):
+        page.insert_text((cx, ly), htext, fontsize=6.5, color=gray)
+    page.draw_line((lx, ly + 3), (lx + col_w, ly + 3), color=gray, width=0.4)
+    ly += 12
+    for row in sheet.get("cuts_table", []):
+        if ly > H - 30:
+            break
+        note = row.get("note", "-")
+        result = f'{row["result"]} \\ {note}' if note and note != "-" else row["result"]
+        for cx, val in zip(cut_col_x, [str(row["n"]), row["panel"], row["cut"], result]):
+            page.insert_text((cx, ly), str(val), fontsize=6.5, color=black)
+        ly += 10.5
+
+    # Right diagram -- the sheet, drawn as large as the remaining page
+    # allows, each unique panel size color-coded and centered-labeled, with
+    # width dimensions along the top edge and height dimensions along the
+    # left edge (only for pieces touching that edge), matching the
+    # reference's dimension-line style.
+    dx0, dy0 = lx + col_w + 30, 60
+    dx1, dy1 = W - 30, H - 30
     stock_l, stock_w = sheet["stock_length"], sheet["stock_width"]
+    avail_w, avail_h = dx1 - dx0 - 20, dy1 - dy0 - 20
     scale = min(avail_w / stock_w, avail_h / stock_l) if stock_l > 0 and stock_w > 0 else 1
-    ox, oy = margin, 55
+    ox, oy = dx0 + 15, dy0 + 15
+
+    page.insert_text((dx1 - 30, dy0 - 6), f'x{qty}', fontsize=9, color=black)
+
+    for p in placements:
+        x0, y0 = ox + p["x"] * scale, oy + p["y"] * scale
+        x1, y1 = x0 + p["w"] * scale, y0 + p["h"] * scale
+        key = (round(p["w"], 2), round(p["h"], 2))
+        page.draw_rect(fitz.Rect(x0, y0, x1, y1), color=black, fill=color_of[key], width=0.6)
+        label = f'{p["w"]:.2f}\u00d7{p["h"]:.2f}'
+        rect_w, rect_h = x1 - x0, y1 - y0
+        fontsize = 6.5
+        label_w = len(label) * fontsize * 0.55
+        if rect_w < label_w and rect_h >= label_w:
+            # Too narrow for the label horizontally but tall enough to
+            # rotate it \u2014 common for 4"-wide offcut strips.
+            page.insert_text(((x0 + x1) / 2 + fontsize * 0.35, (y0 + y1) / 2 + label_w / 2),
+                              label, fontsize=fontsize, color=black, rotate=90)
+        elif rect_w >= label_w:
+            page.insert_text(((x0 + x1) / 2 - label_w / 2, (y0 + y1) / 2), label,
+                              fontsize=fontsize, color=black)
+        # else: piece too small in both dimensions for its label \u2014 skip
+        # rather than overlap the neighboring piece.
+        if p["y"] <= 0.05:
+            page.insert_text(((x0 + x1) / 2 - 10, oy - 4), f'{p["w"]:.2f}', fontsize=6, color=gray)
+        if p["x"] <= 0.05:
+            page.insert_text((ox - 14, (y0 + y1) / 2), f'{p["h"]:.2f}', fontsize=6, color=gray, rotate=90)
 
     page.draw_rect(fitz.Rect(ox, oy, ox + stock_w * scale, oy + stock_l * scale), color=black, width=1)
-    for placement in sheet["placements"]:
-        x0 = ox + placement["x"] * scale
-        y0 = oy + placement["y"] * scale
-        x1 = x0 + placement["w"] * scale
-        y1 = y0 + placement["h"] * scale
-        page.draw_rect(fitz.Rect(x0, y0, x1, y1), color=black, fill=fill, width=0.6)
-        label = f'{placement["w"]:.2f}×{placement["h"]:.2f}'
-        page.insert_text((x0 + 2, y0 + 10), label, fontsize=6, color=gray)
-
-    diagram_bottom = oy + stock_l * scale
-    page.insert_text((ox, diagram_bottom + 16),
-                      f'Used {sheet["used_pct"]}%  ·  Wasted {sheet["wasted_area"]:.1f} sqin',
-                      fontsize=8, color=gray)
-
-    # Cuts table — the literal step-by-step guillotine cut sequence for the
-    # saw operator (# / Panel / Cut / Result), same shape as the
-    # cutlistoptimizer.com PDF this replaces. Straight cuts, in order: cut
-    # #1 always operates on the previous row's "-" (continuing) piece.
-    table_y = max(oy + margin, diagram_bottom + 36)
-    page.insert_text((ox, table_y), "Cuts", fontsize=9, color=black)
-    col_x = [ox, ox + 30, ox + 130, ox + 220, ox + 320]
-    headers = ["#", "Panel", "Cut", "Result", "Note"]
-    header_y = table_y + 16
-    for cx, htext in zip(col_x, headers):
-        page.insert_text((cx, header_y), htext, fontsize=7.5, color=gray)
-    page.draw_line((ox, header_y + 4), (ox + 470, header_y + 4), color=gray, width=0.5)
-
-    row_y = header_y + 16
-    for row in sheet.get("cuts_table", []):
-        if row_y > H - 30:
-            break  # sheet has more cuts than fit one page — diagram + summary numbers still cover it
-        values = [str(row["n"]), row["panel"], row["cut"], row["result"], row["note"]]
-        for cx, val in zip(col_x, values):
-            page.insert_text((cx, row_y), val, fontsize=7.5, color=black)
-        row_y += 13
-
 
 @app.get("/api/cutlist/{run_id}/pdf")
 def export_cutlist_pdf(run_id: int):
@@ -2971,9 +3093,9 @@ def export_cutlist_pdf(run_id: int):
     _build_cutlist_summary_page(page, run_doc)
 
     for group in run_doc["result"]["groups"]:
-        for i, sheet in enumerate(group["sheets"], start=1):
+        for i, pattern in enumerate(_dedupe_sheet_patterns(group["sheets"]), start=1):
             page = doc.new_page(width=612, height=792)
-            _build_cutlist_sheet_page(page, group, sheet, i)
+            _build_cutlist_sheet_page(page, group, pattern, i)
 
     output = BytesIO(doc.tobytes())
     doc.close()
