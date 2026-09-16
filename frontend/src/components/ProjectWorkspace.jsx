@@ -5,6 +5,8 @@ import EntryForm from './EntryForm';
 import UploadWorkspace from './UploadWorkspace';
 import PiecesTable from './PiecesTable';
 import PlannerV3Screen from './PlannerV3Screen';
+import CutListScreen from './cutlist/CutListScreen';
+import SidebarNav from './SidebarNav';
 import { usePlannerStore } from '../store/plannerStore';
 import { formatNumber, getPieceWeight } from '../utils/plannerUtils';
 
@@ -44,7 +46,7 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
   const exportSourceData = usePlannerStore((state) => state.exportSourceData);
   const approveProject = usePlannerStore((state) => state.approveProject);
 
-  const [mainTab, setMainTab] = useState('source-data'); // 'source-data' | 'planning'
+  const [mainTab, setMainTab] = useState('source-data'); // 'source-data' | 'planning' | 'cutlist'
   const [entryMode, setEntryMode] = useState('manual');  // 'manual' | 'upload'
   const [loadedDrawing, setLoadedDrawing] = useState(null);
   const [draftCratePlan, setDraftCratePlan] = useState(null);
@@ -369,164 +371,180 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
             </div>
           </div>
 
-          {/* ── Main Tabs: Source Data | Planning ── */}
-          <div className="border-b border-[#edf2f7] px-6 py-4">
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setMainTab('source-data')}
-                className={`rounded-full px-5 py-2.5 text-sm font-semibold transition-all ${
-                  mainTab === 'source-data'
-                    ? 'bg-[#1d4ed8] text-white shadow-sm'
-                    : 'bg-[#f1f5f9] text-[#334155] hover:bg-[#e2e8f0]'
-                }`}
-              >
-                Source Data
-              </button>
-              <button
-                type="button"
-                disabled={!planningUnlocked}
-                onClick={() => {
-                  if (!planningUnlocked) return;
-                  setMainTab('planning');
-                  if (!hasPlan) setActiveTab('build-plan');
-                }}
-                className={`rounded-full px-5 py-2.5 text-sm font-semibold transition-all ${
-                  mainTab === 'planning'
-                    ? 'bg-[#1d4ed8] text-white shadow-sm'
-                    : !planningUnlocked
-                    ? 'bg-[#f1f5f9] text-[#94a3b8] cursor-not-allowed'
-                    : 'bg-[#f1f5f9] text-[#334155] hover:bg-[#e2e8f0]'
-                }`}
-              >
-                Planning Workspace
-                {!planningUnlocked && (
-                  <span className="ml-2 text-[10px] text-[#94a3b8]">(Approve for packing with parts)</span>
-                )}
-                {planningUnlocked && !hasPlan && (
-                  <span className="ml-2 text-[10px] text-[#64748b]">(Dispatch & build)</span>
-                )}
-              </button>
-              {!planningUnlocked && pieces.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => handleApprove('approved_for_packing')}
-                  className="rounded-full px-5 py-2.5 text-sm font-semibold bg-[#ecfdf5] text-[#047857] border border-[#6ee7b7] hover:bg-[#d1fae5] transition-all"
-                >
-                  Approve for Packing
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* ── Tab Content ── */}
-
-          {/* ▸ Tab 1: Source Data */}
-          {mainTab === 'source-data' && (
-            <>
-              {/* Manual Entry | Automated Upload sub-navigation */}
-              <div className="border-b border-[#edf2f7] px-6 pt-4 pb-0 flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => setEntryMode('manual')}
-                  className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-all -mb-px ${
-                    entryMode === 'manual'
-                      ? 'border-[#1d4ed8] text-[#1d4ed8]'
-                      : 'border-transparent text-[#64748b] hover:text-[#334155]'
-                  }`}>
-                  Manual Entry
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setEntryMode('upload')}
-                  className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-all -mb-px ${
-                    entryMode === 'upload'
-                      ? 'border-[#1d4ed8] text-[#1d4ed8]'
-                      : 'border-transparent text-[#64748b] hover:text-[#334155]'
-                  }`}>
-                  Automated Upload
-                </button>
-              </div>
-
-              <div className="px-6 py-6 pb-64">
-                {entryMode === 'manual' && (
-                  <EntryForm
-                    project={project}
-                    setProject={setProjectDraft}
-                    onDataChange={refreshWorkspace}
-                    loadedDrawing={loadedDrawing}
-                    onLoadedDrawingClear={() => setLoadedDrawing(null)}
-                  />
-                )}
-                {entryMode === 'upload' && (
-                  <UploadWorkspace
-                    project={project}
-                    onDataChange={refreshWorkspace}
-                    onSwitchToManual={() => setEntryMode('manual')}
-                  />
-                )}
-                {/* Manual Entry only — Automated Upload has its own review grid with the same search/checkbox/Edit/Delete pattern for draft rows */}
-                {entryMode === 'manual' && (
-                  <PiecesTable
-                    pieces={pieces}
-                    project={project}
-                    onDelete={deletePiece}
-                    onDataChange={refreshWorkspace}
-                    onLoadDrawing={handleLoadDrawing}
-                  />
-                )}
-              </div>
-
-              {/* Source Data Footer */}
-              <div className="sticky bottom-0 z-20 border-t border-[#edf2f7] bg-white px-6 py-5 rounded-b-[36px]">
-
-                <div className="flex items-center justify-between flex-wrap gap-4">
-                  <div className="text-sm text-[#64748b]">
-                    {pieces.length === 0
-                      ? 'Add parts above to enable plan generation'
-                      : `${totalQty} parts ready • ${formatNumber(totalSqFt)} sq ft • ${formatNumber(totalWeight)} kg`}
-                  </div>
-                  <div className="flex gap-3 flex-wrap">
-                    {pieces.length > 0 && (
+          {/* ── Workspace steps ──────────────────────────────────────────────
+              Each top-level step of the project workflow is one entry in
+              WORKSPACE_STEPS: {key, label, hint, step, disabled?, disabledHint?,
+              banner?, content}. To add a future step (e.g. Production
+              Tracking, Container Booking), append one entry here — the
+              sidebar and content switch below are both driven off this
+              array, no other JSX changes needed. `banner` and `content` stay
+              as closures so they can carry per-step gating logic (disabled
+              states, unlock conditions); `label`/`hint`/`disabled` are plain
+              values consumed directly by SidebarNav. */}
+          {(() => {
+            const WORKSPACE_STEPS = [
+              {
+                key: 'source-data',
+                step: 1,
+                label: 'Source Data',
+                hint: 'Enter or upload parts',
+                content: () => (
+                  <>
+                    {/* Manual Entry | Automated Upload sub-navigation */}
+                    <div className="border-b border-[#edf2f7] px-6 pt-4 pb-0 flex items-center gap-1">
                       <button
                         type="button"
-                        onClick={exportSourceData}
-                        className="rounded-full border border-[#cbd5e1] bg-white px-5 py-3 text-sm font-semibold text-[#334155] hover:bg-[#f8fafc] transition-all"
-                      >
-                        ↓ Download Source Data
+                        onClick={() => setEntryMode('manual')}
+                        className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-all -mb-px ${
+                          entryMode === 'manual'
+                            ? 'border-[#1d4ed8] text-[#1d4ed8]'
+                            : 'border-transparent text-[#64748b] hover:text-[#334155]'
+                        }`}>
+                        Manual Entry
                       </button>
-                    )}
-
-                    {['approved_for_packing', 'crate_planned', 'container_planned'].includes(projectStatus) && (
                       <button
                         type="button"
-                        disabled={pieces.length === 0}
-                        onClick={() => pieces.length > 0 && openPlanningBuild()}
-                        className={`inline-flex items-center gap-2 rounded-full px-8 py-3 text-sm font-semibold text-white shadow-sm transition-all ${
-                          pieces.length === 0
-                            ? 'bg-[#94a3b8] cursor-not-allowed'
-                            : 'bg-[#1d4ed8] hover:bg-[#1e40af] hover:shadow-md'
-                        }`}
-                      >
-                        {hasPlan ? 'Planning: dispatch & build' : 'Planning: generate crate plan →'}
+                        onClick={() => setEntryMode('upload')}
+                        className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-all -mb-px ${
+                          entryMode === 'upload'
+                            ? 'border-[#1d4ed8] text-[#1d4ed8]'
+                            : 'border-transparent text-[#64748b] hover:text-[#334155]'
+                        }`}>
+                        Automated Upload
                       </button>
-                    )}
+                    </div>
+
+                    <div className="px-6 py-6 pb-64">
+                      {entryMode === 'manual' && (
+                        <EntryForm
+                          project={project}
+                          setProject={setProjectDraft}
+                          onDataChange={refreshWorkspace}
+                          loadedDrawing={loadedDrawing}
+                          onLoadedDrawingClear={() => setLoadedDrawing(null)}
+                        />
+                      )}
+                      {entryMode === 'upload' && (
+                        <UploadWorkspace
+                          project={project}
+                          onDataChange={refreshWorkspace}
+                          onSwitchToManual={() => setEntryMode('manual')}
+                        />
+                      )}
+                      {/* Manual Entry only — Automated Upload has its own review grid with the same search/checkbox/Edit/Delete pattern for draft rows */}
+                      {entryMode === 'manual' && (
+                        <PiecesTable
+                          pieces={pieces}
+                          project={project}
+                          onDelete={deletePiece}
+                          onDataChange={refreshWorkspace}
+                          onLoadDrawing={handleLoadDrawing}
+                        />
+                      )}
+                    </div>
+
+                    {/* Source Data Footer */}
+                    <div className="sticky bottom-0 z-20 border-t border-[#edf2f7] bg-white px-6 py-5 rounded-b-[36px]">
+
+                      <div className="flex items-center justify-between flex-wrap gap-4">
+                        <div className="text-sm text-[#64748b]">
+                          {pieces.length === 0
+                            ? 'Add parts above to enable plan generation'
+                            : `${totalQty} parts ready • ${formatNumber(totalSqFt)} sq ft • ${formatNumber(totalWeight)} kg`}
+                        </div>
+                        <div className="flex gap-3 flex-wrap">
+                          {pieces.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={exportSourceData}
+                              className="rounded-full border border-[#cbd5e1] bg-white px-5 py-3 text-sm font-semibold text-[#334155] hover:bg-[#f8fafc] transition-all"
+                            >
+                              ↓ Download Source Data
+                            </button>
+                          )}
+
+                          {['approved_for_packing', 'crate_planned', 'container_planned'].includes(projectStatus) && (
+                            <button
+                              type="button"
+                              disabled={pieces.length === 0}
+                              onClick={() => pieces.length > 0 && openPlanningBuild()}
+                              className={`inline-flex items-center gap-2 rounded-full px-8 py-3 text-sm font-semibold text-white shadow-sm transition-all ${
+                                pieces.length === 0
+                                  ? 'bg-[#94a3b8] cursor-not-allowed'
+                                  : 'bg-[#1d4ed8] hover:bg-[#1e40af] hover:shadow-md'
+                              }`}
+                            >
+                              {hasPlan ? 'Planning: dispatch & build' : 'Planning: generate crate plan →'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                ),
+              },
+              {
+                key: 'planning',
+                step: 2,
+                label: 'Planning Workspace',
+                hint: !planningUnlocked ? 'Locked until approved' : !hasPlan ? 'Dispatch & build' : 'Crate planning',
+                disabled: !planningUnlocked,
+                disabledHint: 'Approve for packing with parts first',
+                banner: () => !planningUnlocked && pieces.length > 0 && (
+                  <div className="flex items-center justify-between gap-4 rounded-2xl border border-[#6ee7b7] bg-[#ecfdf5] px-5 py-4 mb-6">
+                    <span className="text-sm text-[#047857]">Ready to move on? Approve this project's parts to unlock planning.</span>
+                    <button
+                      type="button"
+                      onClick={() => handleApprove('approved_for_packing')}
+                      className="shrink-0 rounded-full px-5 py-2.5 text-sm font-semibold bg-[#059669] text-white hover:bg-[#047857] transition-all"
+                    >
+                      Approve for Packing
+                    </button>
                   </div>
+                ),
+                content: () => planningUnlocked && (
+                  <div className="px-6 py-6">
+                    <PlannerV3Screen
+                      projectId={projectId}
+                      savedPlan={draftCratePlan}
+                      onPlanSaved={setDraftCratePlan}
+                    />
+                  </div>
+                ),
+              },
+              {
+                key: 'cutlist',
+                step: 3,
+                label: 'Cut List',
+                hint: pieces.length === 0 ? 'Add parts first' : 'Nest parts onto slabs',
+                disabled: pieces.length === 0,
+                disabledHint: 'Add parts in Source Data first',
+                content: () => (
+                  <div className="px-6 py-6">
+                    <CutListScreen projectId={projectId} mode="project" />
+                  </div>
+                ),
+              },
+            ];
+
+            const activeStep = WORKSPACE_STEPS.find((s) => s.key === mainTab) || WORKSPACE_STEPS[0];
+            const selectStep = (key) => {
+              const step = WORKSPACE_STEPS.find((s) => s.key === key);
+              if (!step || step.disabled) return;
+              setMainTab(key);
+              if (key === 'planning' && !hasPlan) setActiveTab('build-plan');
+            };
+
+            return (
+              <div className="flex flex-col md:flex-row gap-0 md:gap-6 px-6 py-6">
+                <SidebarNav items={WORKSPACE_STEPS} activeKey={mainTab} onSelect={selectStep} />
+                <div className="flex-1 min-w-0 w-full -mx-6 md:mx-0">
+                  {activeStep.banner && <div className="px-6 md:px-0">{activeStep.banner()}</div>}
+                  {activeStep.content()}
                 </div>
               </div>
-            </>
-          )}
-
-          {/* ▸ Tab 2: Planning Workspace — Crate Planning only, other steps hidden */}
-          {mainTab === 'planning' && planningUnlocked && (
-            <div className="px-6 py-6">
-              <PlannerV3Screen
-                projectId={projectId}
-                savedPlan={draftCratePlan}
-                onPlanSaved={setDraftCratePlan}
-              />
-            </div>
-          )}
+            );
+          })()}
 
         </div>
       </div>

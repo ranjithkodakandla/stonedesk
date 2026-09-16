@@ -156,6 +156,7 @@ def build_store():
             "upload_drafts": mongo_db["upload_drafts"],
             "custom_colors": mongo_db["custom_colors"],
             "crate_wood_types": mongo_db["crate_wood_types"],
+            "cutlist_runs": mongo_db["cutlist_runs"],
         }
         return store, "mongo"
     except Exception as e:
@@ -171,6 +172,7 @@ def build_store():
             "upload_drafts": InMemoryCollection(),
             "custom_colors": InMemoryCollection(),
             "crate_wood_types": InMemoryCollection(),
+            "cutlist_runs": InMemoryCollection(),
         }, "memory"
 
 
@@ -183,6 +185,7 @@ counters_col = store["counters"]
 upload_drafts_col = store["upload_drafts"]
 custom_colors_col = store["custom_colors"]
 crate_wood_types_col = store["crate_wood_types"]
+cutlist_runs_col = store["cutlist_runs"]
 
 
 def ensure_indexes() -> None:
@@ -197,6 +200,8 @@ def ensure_indexes() -> None:
     assignments_col.create_index("id")
     assignments_col.create_index([("project_id", 1), ("piece_id", 1)])
     assignments_col.create_index([("project_id", 1), ("crate_id", 1)])
+    cutlist_runs_col.create_index("id")
+    cutlist_runs_col.create_index([("project_id", 1), ("id", 1)])
     _ensure_unique_index(custom_colors_col, [("material", 1), ("name", 1)])
     _ensure_unique_index(crate_wood_types_col, [("name", 1)])
 
@@ -2570,6 +2575,37 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
         label_y = cy + sy * (r_arc + 10) if sy < 0 else cy + sy * (r_arc + 4) + 10
         page.insert_text((label_x, label_y), label, fontsize=7, color=coral)
 
+    # Placed label bounding boxes, tracked so later labels (tap holes) can
+    # dodge collisions with earlier ones (sink dimension text, other holes).
+    placed_label_boxes = []
+
+    def _label_box(x, y, text, fontsize):
+        w = len(text) * fontsize * 0.5
+        h = fontsize * 1.15
+        return (x, y - h, x + w, y + h * 0.25)
+
+    def _boxes_overlap(a, b):
+        return a[0] < b[2] and a[2] > b[0] and a[1] < b[3] and a[3] > b[1]
+
+    def _place_text(x, y, text, fontsize, color, candidates=None):
+        """Insert text at (x, y), or the first candidate offset that avoids
+        overlapping a previously placed label, falling back to (x, y)."""
+        box = _label_box(x, y, text, fontsize)
+        chosen = (x, y)
+        if candidates:
+            all_candidates = [(x, y)] + list(candidates)
+            for cx, cy in all_candidates:
+                cbox = _label_box(cx, cy, text, fontsize)
+                if not any(_boxes_overlap(cbox, pb) for pb in placed_label_boxes):
+                    chosen = (cx, cy)
+                    box = cbox
+                    break
+            else:
+                chosen = all_candidates[0]
+                box = _label_box(*chosen, text, fontsize)
+        placed_label_boxes.append(box)
+        page.insert_text(chosen, text, fontsize=fontsize, color=color)
+
     # Sink cutout — positioned from the piece's own left/right offsets when set.
     sink_type = str(p.get("sink_type") or "No Sink")
     sink_numbers = [str(n) for n in (p.get("sink_numbers") or []) if n]
@@ -2610,9 +2646,10 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
 
         # Sink size — length along the top of the cutout, width along its left side.
         page.draw_line((sx0, sy0 - 8), (sx1, sy0 - 8), color=coral, width=0.5)
-        page.insert_text(((sx0 + sx1) / 2 - 16, sy0 - 11), f'{sink_len:.2f}"', fontsize=7, color=coral)
+        _place_text((sx0 + sx1) / 2 - 16, sy0 - 11, f'{sink_len:.2f}"', 7, coral)
         page.draw_line((sx0 - 8, sy0), (sx0 - 8, sy1), color=coral, width=0.5)
         page.insert_text((sx0 - 30, (sy0 + sy1) / 2), f'{sink_wid:.2f}"', fontsize=7, color=coral, rotate=90)
+        placed_label_boxes.append((sx0 - 34, sy0 - 4, sx0 - 8, sy1 + 4))
 
         # Sink position — actual left/right offsets, always shown (even when
         # the sink is centered with no explicit offset entered).
@@ -2620,9 +2657,21 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
         actual_right = (rx1 - sx1) / scale if scale else 0
         dim_y = ry1 + 22
         page.draw_line((rx0, dim_y), (sx0, dim_y), color=gray, width=0.5)
-        page.insert_text(((rx0 + sx0) / 2 - 24, dim_y + 11), f'{actual_left:.2f}" from left', fontsize=8, color=gray)
+        _place_text((rx0 + sx0) / 2 - 24, dim_y + 11, f'{actual_left:.2f}" from left', 8, gray)
         page.draw_line((sx1, dim_y), (rx1, dim_y), color=gray, width=0.5)
-        page.insert_text(((sx1 + rx1) / 2 - 26, dim_y + 11), f'{actual_right:.2f}" from right', fontsize=8, color=gray)
+        _place_text((sx1 + rx1) / 2 - 26, dim_y + 11, f'{actual_right:.2f}" from right', 8, gray)
+
+        # Groove around the sink — a continuous outline offset outward from the
+        # cutout perimeter, matching the shop's manual drawings (a drip groove
+        # traced around the sink edge, not just floating tick marks).
+        groove_positions = p.get("groove_positions") or []
+        groove_dimension = parse_float(p.get("groove_dimension"))
+        if groove_positions:
+            standoff = max(4.0, (groove_dimension * scale)) if groove_dimension > 0 else 6.0
+            page.draw_rect(
+                fitz.Rect(sx0 - standoff, sy0 - standoff, sx1 + standoff, sy1 + standoff),
+                color=coral, width=0.8, dashes="[2 2] 0",
+            )
 
     # Tap holes — small circles at each hole's X/Y offset from the sink
     # center (X = along length, Y = along width), diameter drawn to scale.
@@ -2634,11 +2683,21 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
         hx, hy = ref_cx + ox * scale, ref_cy + oy * scale
         r = max(2.5, (tap_hole_diameter * scale) / 2) if tap_hole_diameter > 0 else 3
         page.draw_circle((hx, hy), r, color=coral, width=0.8)
-        label_y = hy - 2 - r if i % 2 == 0 else hy + 10 + r
-        page.insert_text((hx - 16, label_y), f'X{ox:+.2f}", Y{oy:+.2f}"', fontsize=5.5, color=gray)
+        label = f'X{ox:+.2f}", Y{oy:+.2f}"'
+        candidates = [
+            (hx - 16, hy - 2 - r),
+            (hx - 16, hy + 10 + r),
+            (hx + r + 4, hy - 2),
+            (hx - r - 4 - len(label) * 3, hy - 2),
+            (hx - 16, hy - 2 - r - 10),
+            (hx - 16, hy + 10 + r + 10),
+        ]
+        cx0, cy0 = candidates[0]
+        _place_text(cx0, cy0, label, 5.5, gray, candidates=candidates[1:])
 
-    # Sink grooves — short tick marks at each groove's X/Y offset from the
-    # sink center, length drawn to the configured groove dimension.
+    # Sink grooves not tied to the sink perimeter — short tick marks at each
+    # groove's X/Y offset from the sink center (isolated drainboard grooves
+    # etc.); the perimeter groove around the sink itself is drawn above.
     groove_positions = p.get("groove_positions") or []
     groove_dimension = parse_float(p.get("groove_dimension"))
     for pos in groove_positions:
@@ -2738,6 +2797,191 @@ def export_process_labels_pdf(project_id: int, body: Dict):
             "X-Total-Parts": str(total_parts),
             "X-Returned-Parts": str(returned_count),
         },
+    )
+
+
+class CutlistPieceRow(BaseModel):
+    length: float
+    width: float
+    qty: int = 1
+    label: str = ""
+    material: str = ""
+    thickness: str = ""
+    stone_color: str = ""
+
+
+class CutlistGenerateRequest(BaseModel):
+    project_id: Optional[int] = None
+    source: str = "project"  # 'project' | 'manual'
+    stock_length: float
+    stock_width: float
+    kerf: float = 0.125
+    allow_rotate: bool = True
+    consider_material: bool = True
+    pieces: List[CutlistPieceRow] = []
+
+
+@app.post("/api/cutlist/generate")
+def generate_cutlist(body: CutlistGenerateRequest):
+    from .services.cutlist_engine import run_cutlist
+
+    if body.source == "project":
+        if not body.project_id:
+            raise HTTPException(status_code=400, detail="project_id is required when source is 'project'.")
+        pieces = list(pieces_col.find({"project_id": body.project_id}, {"_id": 0}))
+        if not pieces:
+            raise HTTPException(status_code=400, detail="No pieces found for this project.")
+        piece_rows = [
+            {
+                "length": p.get("length"), "width": p.get("width"), "qty": p.get("qty", 1),
+                "label": p.get("part_no") or p.get("part") or "",
+                "material": p.get("material") or "", "thickness": p.get("thickness") or "",
+                "stone_color": p.get("stone_color") or "",
+            }
+            for p in pieces
+        ]
+    else:
+        if not body.pieces:
+            raise HTTPException(status_code=400, detail="pieces is required when source is 'manual'.")
+        piece_rows = [row.model_dump() for row in body.pieces]
+
+    result = run_cutlist(
+        piece_rows,
+        stock_length=body.stock_length,
+        stock_width=body.stock_width,
+        kerf=body.kerf,
+        allow_rotate=body.allow_rotate,
+        consider_material=body.consider_material,
+    )
+
+    run_id = next_sequence("cutlist_run")
+    doc = {
+        "id": run_id,
+        "project_id": body.project_id,
+        "source": body.source,
+        "stock_length": body.stock_length,
+        "stock_width": body.stock_width,
+        "kerf": body.kerf,
+        "allow_rotate": body.allow_rotate,
+        "result": result,
+        "created_at": utc_now(),
+    }
+    cutlist_runs_col.insert_one(doc)
+    return {"run_id": run_id, "result": result}
+
+
+@app.get("/api/cutlist/{run_id}")
+def get_cutlist_run(run_id: int):
+    doc = cutlist_runs_col.find_one({"id": run_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Cut list run not found")
+    return doc
+
+
+def _build_cutlist_summary_page(page, run_doc: Dict[str, Any]) -> None:
+    import fitz
+    W, H = page.rect.width, page.rect.height
+    black = (0.06, 0.09, 0.14)
+    gray = (0.4, 0.45, 0.5)
+    s = run_doc["result"]["summary"]
+
+    page.insert_text((36, 40), "Cut List Summary", fontsize=16, color=black)
+    page.draw_line((36, 50), (W - 36, 50), color=gray, width=0.5)
+    rows = [
+        ("Stock sheet", f'{s["stock_length"]}×{s["stock_width"]}'),
+        ("Kerf", f'{s["kerf"]}"'),
+        ("Total sheets used", str(s["total_sheets"])),
+        ("Used area", f'{s["total_used_area"]:.1f} ({s["total_used_pct"]}%)'),
+        ("Wasted area", f'{s["total_wasted_area"]:.1f}'),
+        ("Total cuts", str(s["total_cuts"])),
+        ("Total cut length", f'{s["total_cut_length"]:.1f}'),
+    ]
+    y = 76
+    for label, val in rows:
+        page.insert_text((36, y), label, fontsize=10, color=gray)
+        page.insert_text((220, y), val, fontsize=10, color=black)
+        y += 18
+
+
+def _build_cutlist_sheet_page(page, group: Dict[str, Any], sheet: Dict[str, Any], sheet_no: int) -> None:
+    import fitz
+    W, H = page.rect.width, page.rect.height
+    black = (0.06, 0.09, 0.14)
+    gray = (0.4, 0.45, 0.5)
+    fill = (0.87, 0.90, 0.97)
+
+    page.insert_text((36, 30), f'{group["material"]} {group["thickness"]} {group["stone_color"]} — Sheet #{sheet_no}',
+                      fontsize=11, color=black)
+
+    margin = 50
+    diagram_h = 380
+    avail_w, avail_h = W - margin * 2, diagram_h
+    stock_l, stock_w = sheet["stock_length"], sheet["stock_width"]
+    scale = min(avail_w / stock_w, avail_h / stock_l) if stock_l > 0 and stock_w > 0 else 1
+    ox, oy = margin, 55
+
+    page.draw_rect(fitz.Rect(ox, oy, ox + stock_w * scale, oy + stock_l * scale), color=black, width=1)
+    for placement in sheet["placements"]:
+        x0 = ox + placement["x"] * scale
+        y0 = oy + placement["y"] * scale
+        x1 = x0 + placement["w"] * scale
+        y1 = y0 + placement["h"] * scale
+        page.draw_rect(fitz.Rect(x0, y0, x1, y1), color=black, fill=fill, width=0.6)
+        label = f'{placement["w"]:.2f}×{placement["h"]:.2f}'
+        page.insert_text((x0 + 2, y0 + 10), label, fontsize=6, color=gray)
+
+    diagram_bottom = oy + stock_l * scale
+    page.insert_text((ox, diagram_bottom + 16),
+                      f'Used {sheet["used_pct"]}%  ·  Wasted {sheet["wasted_area"]:.1f} sqin',
+                      fontsize=8, color=gray)
+
+    # Cuts table — the literal step-by-step guillotine cut sequence for the
+    # saw operator (# / Panel / Cut / Result), same shape as the
+    # cutlistoptimizer.com PDF this replaces. Straight cuts, in order: cut
+    # #1 always operates on the previous row's "-" (continuing) piece.
+    table_y = max(oy + margin, diagram_bottom + 36)
+    page.insert_text((ox, table_y), "Cuts", fontsize=9, color=black)
+    col_x = [ox, ox + 30, ox + 130, ox + 220, ox + 320]
+    headers = ["#", "Panel", "Cut", "Result", "Note"]
+    header_y = table_y + 16
+    for cx, htext in zip(col_x, headers):
+        page.insert_text((cx, header_y), htext, fontsize=7.5, color=gray)
+    page.draw_line((ox, header_y + 4), (ox + 470, header_y + 4), color=gray, width=0.5)
+
+    row_y = header_y + 16
+    for row in sheet.get("cuts_table", []):
+        if row_y > H - 30:
+            break  # sheet has more cuts than fit one page — diagram + summary numbers still cover it
+        values = [str(row["n"]), row["panel"], row["cut"], row["result"], row["note"]]
+        for cx, val in zip(col_x, values):
+            page.insert_text((cx, row_y), val, fontsize=7.5, color=black)
+        row_y += 13
+
+
+@app.get("/api/cutlist/{run_id}/pdf")
+def export_cutlist_pdf(run_id: int):
+    import fitz
+
+    run_doc = cutlist_runs_col.find_one({"id": run_id}, {"_id": 0})
+    if not run_doc:
+        raise HTTPException(status_code=404, detail="Cut list run not found")
+
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+    _build_cutlist_summary_page(page, run_doc)
+
+    for group in run_doc["result"]["groups"]:
+        for i, sheet in enumerate(group["sheets"], start=1):
+            page = doc.new_page(width=612, height=792)
+            _build_cutlist_sheet_page(page, group, sheet, i)
+
+    output = BytesIO(doc.tobytes())
+    doc.close()
+    output.seek(0)
+    return StreamingResponse(
+        output,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="CutList_{run_id}.pdf"'},
     )
 
 

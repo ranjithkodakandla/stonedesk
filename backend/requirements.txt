@@ -12,3 +12,4 @@ python-dotenv==1.0.0
 certifi==2024.8.30
 pymupdf==1.24.14
 pdfplumber==0.11.4
+rectpack==0.2.2

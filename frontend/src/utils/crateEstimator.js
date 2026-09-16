@@ -101,17 +101,23 @@ function stripSplashFromBundle(bundle) {
 }
 
 // ─── Weight batching ──────────────────────────────────────────────────────────
-// Greedy: accumulate bundles until next one would breach targetWeightKg, then start a new batch.
+// Greedy: accumulate bundles until the next one would breach the tolerance-padded
+// target, then start a new batch. The tolerance keeps a small overage (e.g. 9
+// pieces at 1800 kg against a 1600 kg target) in one crate instead of spinning
+// up a second, near-empty one.
 
-function weightBatchBundles(bundles, targetWeightKg) {
+const DEFAULT_OVERAGE_TOLERANCE = 0.12; // allow up to 12% over target before splitting
+
+function weightBatchBundles(bundles, targetWeightKg, overageTolerance = DEFAULT_OVERAGE_TOLERANCE) {
   if (!bundles.length) return [];
+  const cap = targetWeightKg * (1 + overageTolerance);
   const batches = [];
   let current = [];
   let currentWeight = 0;
 
   for (const bundle of bundles) {
     const w = bundle.total_weight_kg || 0;
-    if (currentWeight + w > targetWeightKg && current.length > 0) {
+    if (currentWeight + w > cap && current.length > 0) {
       batches.push(current);
       current = [bundle];
       currentWeight = w;
@@ -126,15 +132,16 @@ function weightBatchBundles(bundles, targetWeightKg) {
 
 // Same greedy-fill idea as weightBatchBundles, but at raw-part granularity
 // (no crate-class splitting — this view is filter-driven, not geometry-driven).
-export function weightBatchParts(parts, targetWeightKg = 1900) {
+export function weightBatchParts(parts, targetWeightKg = 1900, overageTolerance = DEFAULT_OVERAGE_TOLERANCE) {
   if (!parts?.length) return [];
+  const cap = targetWeightKg * (1 + overageTolerance);
   const batches = [];
   let current = [];
   let currentWeight = 0;
 
   for (const part of parts) {
     const w = part.weight_kg || 0;
-    if (currentWeight + w > targetWeightKg && current.length > 0) {
+    if (currentWeight + w > cap && current.length > 0) {
       batches.push(current);
       current = [part];
       currentWeight = w;
@@ -149,13 +156,108 @@ export function weightBatchParts(parts, targetWeightKg = 1900) {
 
 const CLASS_ORDER = ['island_vertical', 'kitchen_vertical', 'vanity_vertical', 'misc'];
 
+// Classes allowed to pull bundles from an adjacent floor (same building) to
+// top up an underloaded crate. Islands and vanities always stay per-floor.
+const CROSS_FLOOR_CLASSES = new Set(['kitchen_vertical']);
+
+function bundleWeight(bundle) {
+  return bundle.total_weight_kg || 0;
+}
+
+function bundleBuilding(bundle) {
+  return String(bundle.building ?? '').trim() || '(no building)';
+}
+
+function bundleFloor(bundle) {
+  const f = bundle.floor;
+  return f === undefined || f === null || f === '' ? null : String(f).trim();
+}
+
+function floorSortValue(floor) {
+  if (floor == null) return Number.POSITIVE_INFINITY;
+  const n = parseFloat(floor);
+  return Number.isFinite(n) ? n : floor;
+}
+
+// Group bundles by building, and (for strict classes) also by floor within
+// each building. Cross-floor classes get one bucket per building, with
+// bundles sorted by floor so adjacent floors sit next to each other for the
+// weight batcher and the later top-up pass.
+function partitionByLocation(bundles, crossFloorAllowed) {
+  const byBuilding = new Map();
+  for (const bundle of bundles) {
+    const b = bundleBuilding(bundle);
+    if (!byBuilding.has(b)) byBuilding.set(b, []);
+    byBuilding.get(b).push(bundle);
+  }
+
+  const partitions = []; // { building, floor|null, bundles }
+  for (const [building, buildingBundles] of byBuilding) {
+    if (crossFloorAllowed) {
+      const sorted = [...buildingBundles].sort(
+        (a, b) => floorSortValue(bundleFloor(a)) - floorSortValue(bundleFloor(b)),
+      );
+      partitions.push({ building, floor: null, bundles: sorted });
+    } else {
+      const byFloor = new Map();
+      for (const bundle of buildingBundles) {
+        const f = bundleFloor(bundle);
+        if (!byFloor.has(f)) byFloor.set(f, []);
+        byFloor.get(f).push(bundle);
+      }
+      for (const [floor, floorBundles] of byFloor) {
+        partitions.push({ building, floor, bundles: floorBundles });
+      }
+    }
+  }
+  return partitions;
+}
+
+// After weight-batching, pull whole bundles from the start of the next
+// floor-group's first batch into an underloaded trailing batch of the
+// current floor-group — "some parts of a floor are partially filled ...
+// pull from adjacent floors." Only used for cross-floor-allowed classes,
+// and only within the same building (floor-ordered groups already adjacent
+// via partitionByLocation's per-building floor sort).
+function topUpAcrossFloors(floorGroupBatches, targetWeightKg, overageTolerance) {
+  const cap = targetWeightKg * (1 + overageTolerance);
+  const underloadedFloor = targetWeightKg * 0.4;
+
+  for (let i = 0; i < floorGroupBatches.length - 1; i++) {
+    const currentBatches = floorGroupBatches[i];
+    const nextBatches = floorGroupBatches[i + 1];
+    if (!currentBatches.length || !nextBatches.length) continue;
+
+    const lastBatch = currentBatches[currentBatches.length - 1];
+    let weight = lastBatch.reduce((s, b) => s + bundleWeight(b), 0);
+    if (weight >= underloadedFloor) continue;
+
+    const nextFirstBatch = nextBatches[0];
+    while (nextFirstBatch.length > 0) {
+      const w = bundleWeight(nextFirstBatch[0]);
+      if (weight + w > cap) break;
+      lastBatch.push(nextFirstBatch.shift());
+      weight += w;
+    }
+    if (nextFirstBatch.length === 0) nextBatches.shift();
+  }
+  return floorGroupBatches;
+}
+
 // ─── Multi-crate batch builder ────────────────────────────────────────────────
 // Phase 1: partition by crate class (island stays isolated from all other categories).
-// Phase 2: weight-batch within each class at targetWeightKg.
+// Phase 2: partition by building — and by floor too, for classes that must never
+//          cross floors (islands, vanities). Kitchen (perimeter + range, already
+//          one class) partitions by building only, floor-sorted, so adjacent
+//          floors can share a crate.
+// Phase 3: weight-batch within each partition at targetWeightKg (with tolerance).
+// Phase 4: for cross-floor-allowed classes, top up an underloaded trailing crate
+//          from the next floor's leftovers within the same building.
 // Returns array of bundle groups — caller assigns IDs and calls buildDraftCrate().
 
-export function batchBundlesIntoCrates(selectedBundles, targetWeightKg = 1900) {
+export function batchBundlesIntoCrates(selectedBundles, targetWeightKg = 1900, options = {}) {
   if (!selectedBundles?.length) return [];
+  const overageTolerance = options.overageTolerance ?? DEFAULT_OVERAGE_TOLERANCE;
 
   const buckets = Object.fromEntries(CLASS_ORDER.map((cls) => [cls, []]));
   for (const bundle of selectedBundles) {
@@ -173,9 +275,34 @@ export function batchBundlesIntoCrates(selectedBundles, targetWeightKg = 1900) {
       : buckets[cls];
 
     if (!bundles.length) continue;
-    const batches = weightBatchBundles(bundles, targetWeightKg);
-    for (const batch of batches) {
-      groups.push({ crateClass: cls, bundles: batch });
+
+    const crossFloorAllowed = CROSS_FLOOR_CLASSES.has(cls);
+    const partitions = partitionByLocation(bundles, crossFloorAllowed);
+
+    if (crossFloorAllowed) {
+      // Group partitions back by building so top-up only ever pulls within
+      // the same building, then batch + top up per building.
+      const byBuilding = new Map();
+      for (const part of partitions) {
+        if (!byBuilding.has(part.building)) byBuilding.set(part.building, []);
+        byBuilding.get(part.building).push(part.bundles);
+      }
+      for (const floorGroups of byBuilding.values()) {
+        const floorGroupBatches = floorGroups.map((g) => weightBatchBundles(g, targetWeightKg, overageTolerance));
+        topUpAcrossFloors(floorGroupBatches, targetWeightKg, overageTolerance);
+        for (const batches of floorGroupBatches) {
+          for (const batch of batches) {
+            if (batch.length) groups.push({ crateClass: cls, bundles: batch });
+          }
+        }
+      }
+    } else {
+      for (const part of partitions) {
+        const batches = weightBatchBundles(part.bundles, targetWeightKg, overageTolerance);
+        for (const batch of batches) {
+          groups.push({ crateClass: cls, bundles: batch });
+        }
+      }
     }
   }
   return groups;
@@ -211,6 +338,35 @@ const WALL_TIMBER      = 3.0;    // structural timber wall each side (depth axis
 const HEIGHT_CAP_TBR   = 6.0;    // top cap timber
 const FORKLIFT_TINE    = 7.0;    // forklift tine clearance
 
+// ─── Row packing (shared by island + kitchen/vanity depth calcs) ────────────
+// Physical reasoning: the crate's row length is fixed by its longest single
+// piece (e.g. a 150" top) — the crate has to be built to that length anyway.
+// Any smaller pieces (e.g. an 80" and a 60") should sit SIDE BY SIDE in that
+// same row instead of each getting its own row, as long as their combined
+// length fits the row budget. Only pieces that don't fit any existing row's
+// remaining length start a new row. Depth is then the sum of each row's
+// tallest thickness (rows stack in depth; pieces within a row do not), not
+// the sum of every individual piece's thickness.
+function packPiecesIntoRows(pieces, rowLengthBudget) {
+  const sorted = [...pieces].sort((a, b) => pieceLongShort(b).long - pieceLongShort(a).long);
+  const rows = [];
+  for (const p of sorted) {
+    const long = pieceLongShort(p).long;
+    const fit = rows.find((row) => row.usedLength + long <= rowLengthBudget);
+    if (fit) {
+      fit.pieces.push(p);
+      fit.usedLength += long;
+    } else {
+      rows.push({ pieces: [p], usedLength: long });
+    }
+  }
+  return rows;
+}
+
+function rowStackDepth(rows) {
+  return rows.reduce((s, row) => s + Math.max(...row.pieces.map((p) => parseThicknessIn(p.thickness))), 0);
+}
+
 export function estimateLeanedCassetteDimensions(pieces) {
   if (!pieces || pieces.length === 0) {
     return {
@@ -223,13 +379,9 @@ export function estimateLeanedCassetteDimensions(pieces) {
   const mainPieces = pieces.filter((p) => (p.role || 'main') !== 'splash');
   const refPieces  = mainPieces.length > 0 ? mainPieces : pieces;
 
-  let stackDepth   = 0;
   let maxLongEdge  = 0;
   let maxShortEdge = 0;
 
-  for (const p of pieces) {
-    stackDepth += parseThicknessIn(p.thickness);
-  }
   for (const p of refPieces) {
     const L = parseFloat(p.length) || 0;
     const W = parseFloat(p.width)  || 0;
@@ -240,8 +392,11 @@ export function estimateLeanedCassetteDimensions(pieces) {
   // L — primary length: fixed by slab footprint, not by slab count
   const intL = maxLongEdge + LENGTH_CLEARANCE;
 
-  // D — cassette depth: grows with slab count and foam separators
-  const intD = stackDepth + Math.max(0, pieces.length - 1) * ISLAND_SEPARATOR_IN + DEPTH_FRAME;
+  // D — cassette depth: smaller pieces pack side by side into the longest
+  // piece's row before a new row is started, so depth grows with row count
+  // (not raw piece count).
+  const rows = packPiecesIntoRows(pieces, maxLongEdge);
+  const intD = rowStackDepth(rows) + Math.max(0, rows.length - 1) * ISLAND_SEPARATOR_IN + DEPTH_FRAME;
 
   // H — height: short edge upright (no lean correction)
   const intH = maxShortEdge + PALLET_BASE + HEADROOM;
@@ -330,13 +485,13 @@ export function estimateLeaningFamilyBundleDimensions(pieces, layerGapIn = HORIZ
     intH += gap + Math.max(...sideSplash.map((p) => parseThicknessIn(p.thickness)));
   }
 
-  // D — depth/width: thickness-stack of main-top "rows" only (splashes no longer contribute here).
+  // D — depth/width: main tops pack side by side into the longest top's row
+  // before a new row is started (same reasoning as the island cassette),
+  // then rows stack in depth. Splashes don't contribute here (see above).
   let depth = DEPTH_FRAME;
   if (mainTops.length > 0) {
-    mainTops.forEach((p, i) => {
-      depth += parseThicknessIn(p.thickness);
-      if (i > 0) depth += gap;
-    });
+    const rows = packPiecesIntoRows(mainTops, maxLong);
+    depth += rowStackDepth(rows) + Math.max(0, rows.length - 1) * gap;
   }
 
   const intW = depth;

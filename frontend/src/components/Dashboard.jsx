@@ -2,11 +2,13 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import Logo from './Logo';
 import ConfigurationScreen from './ConfigurationScreen';
+import CutListScreen from './cutlist/CutListScreen';
+import SidebarNav from './SidebarNav';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
 const Dashboard = ({ onOpenProject }) => {
-  const [view, setView] = useState('projects'); // 'projects' | 'config'
+  const [view, setView] = useState('projects');
   const [projects, setProjects] = useState([]);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newProject, setNewProject] = useState({
@@ -73,43 +75,14 @@ const Dashboard = ({ onOpenProject }) => {
 
   const deleteProject = async (id, e) => {
     e.stopPropagation();
-    if(window.confirm('Delete this project completely?')) {
+    if (window.confirm('Delete this project completely?')) {
       await axios.delete(`${API_BASE}/projects/${id}`);
       fetchProjects();
     }
   };
 
-  return (
-    <div className="min-h-screen bg-[#f8fafc] text-[#1e293b] font-sans p-6 max-w-[1000px] mx-auto">
-      <div className="flex justify-between items-center mb-6 border-b border-[#e2e8f0] pb-6 mt-4">
-        <Logo />
-        {view === 'projects' && (
-          <button onClick={() => setShowCreateForm((prev) => !prev)} className="btn-primary">+ Create New Project</button>
-        )}
-      </div>
-      <div className="flex gap-2 mb-6">
-        <button
-          onClick={() => setView('projects')}
-          className={`rounded-full px-5 py-2.5 text-sm font-semibold transition-all ${
-            view === 'projects' ? 'bg-[#1d4ed8] text-white shadow-sm' : 'bg-[#f1f5f9] text-[#334155] hover:bg-[#e2e8f0]'
-          }`}
-        >
-          Projects
-        </button>
-        <button
-          onClick={() => setView('config')}
-          className={`rounded-full px-5 py-2.5 text-sm font-semibold transition-all ${
-            view === 'config' ? 'bg-[#1d4ed8] text-white shadow-sm' : 'bg-[#f1f5f9] text-[#334155] hover:bg-[#e2e8f0]'
-          }`}
-        >
-          Configuration
-        </button>
-      </div>
-
-      {view === 'config' && <ConfigurationScreen />}
-
-      {view === 'projects' && (
-      <>
+  const ProjectsView = () => (
+    <>
       <h1 className="text-2xl font-bold text-[#1e293b] mb-6">Projects</h1>
       {showCreateForm && (
         <div className="bg-white border border-[#e2e8f0] rounded-lg shadow-sm p-5 mb-6">
@@ -160,8 +133,43 @@ const Dashboard = ({ onOpenProject }) => {
           </tbody>
         </table>
       </div>
-      </>
-      )}
+    </>
+  );
+
+  // ── Dashboard modules ──────────────────────────────────────────────────
+  // Each top-level module is one entry here: {key, label, render, headerAction?}.
+  // To add a future module (Slab Inventory, Suppliers, Production Tracking,
+  // Container Booking, ...), add one entry — the tab bar and content switch
+  // below are both driven off this array, no other JSX changes needed.
+  const MODULES = [
+    {
+      key: 'projects',
+      label: 'Projects',
+      hint: 'Your jobs',
+      render: ProjectsView,
+      headerAction: (
+        <button onClick={() => setShowCreateForm((prev) => !prev)} className="btn-primary">+ Create New Project</button>
+      ),
+    },
+    { key: 'cutlist', label: 'Cut List', hint: 'Nest parts onto slabs', render: () => <CutListScreen mode="manual" /> },
+    { key: 'config', label: 'Configuration', hint: 'Materials & settings', render: ConfigurationScreen },
+  ];
+
+  const activeModule = MODULES.find((m) => m.key === view) || MODULES[0];
+  const ActiveView = activeModule.render;
+
+  return (
+    <div className="min-h-screen bg-[#f8fafc] text-[#1e293b] font-sans p-6 max-w-[1200px] mx-auto">
+      <div className="flex justify-between items-center mb-6 border-b border-[#e2e8f0] pb-6 mt-4">
+        <Logo />
+        {activeModule.headerAction}
+      </div>
+      <div className="flex flex-col md:flex-row gap-6 items-start">
+        <SidebarNav items={MODULES} activeKey={view} onSelect={setView} />
+        <div className="flex-1 min-w-0 w-full">
+          <ActiveView />
+        </div>
+      </div>
     </div>
   );
 };
