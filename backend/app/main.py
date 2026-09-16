@@ -2594,8 +2594,19 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
         sy1 = sy0 + sink_wid * scale
         ref_cx, ref_cy = (sx0 + sx1) / 2, (sy0 + sy1) / 2
 
-        page.draw_rect(fitz.Rect(sx0, sy0, sx1, sy1), color=coral, width=1)
-        page.insert_text((ref_cx - 22, ref_cy + 3), sink_label, fontsize=7, color=gray)
+        # Each bowl gets its own cutout rectangle side by side within the
+        # overall sink envelope (Double Bowl draws two separate cutouts,
+        # matching the shop drawing, instead of one box spanning both).
+        n_bowls = max(1, len(sink_numbers)) if sink_numbers else 1
+        bowl_gap = min(6.0 * scale, (sx1 - sx0) * 0.06) if n_bowls > 1 else 0
+        bowl_w = ((sx1 - sx0) - bowl_gap * (n_bowls - 1)) / n_bowls
+        for i in range(n_bowls):
+            bx0 = sx0 + i * (bowl_w + bowl_gap)
+            bx1 = bx0 + bowl_w
+            bowl_label = sink_numbers[i] if i < len(sink_numbers) else sink_type
+            page.draw_rect(fitz.Rect(bx0, sy0, bx1, sy1), color=coral, width=1)
+            page.insert_text((bx0 + bowl_w / 2 - len(bowl_label) * 2.6, (sy0 + sy1) / 2 + 3),
+                              bowl_label, fontsize=7, color=gray)
 
         # Sink size — length along the top of the cutout, width along its left side.
         page.draw_line((sx0, sy0 - 8), (sx1, sy0 - 8), color=coral, width=0.5)
