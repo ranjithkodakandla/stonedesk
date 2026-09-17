@@ -281,11 +281,14 @@ def _edge_mark_pdf(page, outline, side, to_page, color):
     page.insert_text((px - 3, py + 3), "X", fontsize=9, color=color, fontname="hebo")
 
 
-def render_pdf_bytes(geometry: Dict[str, Any], meta: Optional[Dict[str, Any]] = None) -> bytes:
+def render_pdf_page(doc, geometry: Dict[str, Any], meta: Optional[Dict[str, Any]] = None) -> None:
+    """Renders one drawing as a new page appended to an existing fitz.Document.
+    Shared by render_pdf_bytes (single drawing) and render_pdf_bundle (a
+    whole project's drawings as one multi-page package, matching how real
+    fab drawing sets are delivered — one work ticket per page)."""
     import fitz
 
     meta = meta or {}
-    doc = fitz.open()
     page = doc.new_page(width=792, height=612)  # 11x8.5in landscape @ 72dpi
 
     black = (0.06, 0.09, 0.14)
@@ -430,6 +433,27 @@ def render_pdf_bytes(geometry: Dict[str, Any], meta: Optional[Dict[str, Any]] = 
     page.insert_text((36, 604), "X   Signature of Approval", fontsize=7, color=gray)
     page.insert_text((300, 604), "Date", fontsize=7, color=gray)
 
+
+def render_pdf_bytes(geometry: Dict[str, Any], meta: Optional[Dict[str, Any]] = None) -> bytes:
+    import fitz
+
+    doc = fitz.open()
+    render_pdf_page(doc, geometry, meta)
+    buf = doc.tobytes()
+    doc.close()
+    return buf
+
+
+def render_pdf_bundle(items: List[Dict[str, Any]]) -> bytes:
+    """items: [{"geometry": ..., "meta": ...}, ...] — one page per item, in
+    order, combined into a single downloadable PDF. This is what a customer
+    actually gets today from AutoCAD exports: every part's work ticket as
+    one page in one file, not a separate download per part."""
+    import fitz
+
+    doc = fitz.open()
+    for item in items:
+        render_pdf_page(doc, item["geometry"], item.get("meta"))
     buf = doc.tobytes()
     doc.close()
     return buf

@@ -1,7 +1,7 @@
 import pytest
 
 from app.services import drawing_templates as dt
-from app.services.drawing_engine import render_svg, render_pdf_bytes
+from app.services.drawing_engine import render_svg, render_pdf_bytes, render_pdf_bundle
 
 
 def test_lists_expected_templates():
@@ -106,3 +106,22 @@ def test_island_assembly_never_includes_splash_accessories():
 def test_build_piece_fields_back_compat_returns_top_only():
     fields = dt.build_piece_fields("vanity_top", {"length": 55, "depth": 22.5})
     assert fields["category"] == "Vanity - Top"
+
+
+def test_render_pdf_bundle_produces_one_page_per_item():
+    import fitz
+
+    items = [
+        {"geometry": dt.build_geometry("vanity_top", {"length": 55, "depth": 22.5}), "meta": {"part": "Vanity A"}},
+        {"geometry": dt.build_geometry("island_standard", {"length": 96, "width": 42}), "meta": {"part": "Island A"}},
+        {"geometry": dt.build_geometry("kitchen_l_top", {"left_run": 63, "right_run": 49}), "meta": {"part": "Kitchen A"}},
+    ]
+    pdf_bytes = render_pdf_bundle(items)
+    assert pdf_bytes[:5] == b"%PDF-"
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    assert doc.page_count == 3
+    texts = [doc[i].get_text() for i in range(3)]
+    assert "Vanity A" in texts[0]
+    assert "Island A" in texts[1]
+    assert "Kitchen A" in texts[2]
+    doc.close()

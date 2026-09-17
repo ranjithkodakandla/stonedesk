@@ -1,7 +1,10 @@
 import React, { useMemo, useState } from 'react';
+import axios from 'axios';
 import { templateForPiece, paramsFromPiece, computePreview } from '../../utils/drawingTemplates';
 import DrawingEditor from './DrawingEditor';
 import DrawingPreview from './DrawingPreview';
+
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
 // Drawing Generator is a REVIEW GALLERY first, an editor second:
 //  - "lifecycle" (inside a project): every part already entered in Source
@@ -16,6 +19,36 @@ import DrawingPreview from './DrawingPreview';
 const DrawingGenerator = ({ mode = 'standalone', projectId = null, pieces = [], onAdded = () => {}, onContinue = null }) => {
   const [reviewing, setReviewing] = useState(null); // null = gallery, 'new' = blank editor, else an id
   const [drafts, setDrafts] = useState([]); // standalone-only local review list
+  const [isDownloadingAll, setIsDownloadingAll] = useState(false);
+  const [downloadError, setDownloadError] = useState(null);
+
+  // Combines every generated part into ONE multi-page PDF — one work-ticket
+  // style page per part — matching how customers actually receive a fab
+  // drawing set today (one AutoCAD-exported PDF covering the whole job),
+  // rather than a separate download per piece.
+  const downloadAllDrawings = async () => {
+    if (!projectId) return;
+    setIsDownloadingAll(true);
+    setDownloadError(null);
+    try {
+      const res = await axios.get(`${API_BASE}/projects/${projectId}/drawings/pdf`, { responseType: 'blob' });
+      const url = window.URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'Drawings.pdf';
+      link.click();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      const blob = err.response?.data;
+      let detail = 'Failed to generate the combined PDF.';
+      if (blob instanceof Blob) {
+        try { detail = JSON.parse(await blob.text()).detail || detail; } catch { /* keep default */ }
+      }
+      setDownloadError(detail);
+    } finally {
+      setIsDownloadingAll(false);
+    }
+  };
 
   // Only "top" pieces become cards — a piece's bundled backsplash/side
   // splash accessories are reviewed as part of the top's card, not as
@@ -139,15 +172,35 @@ const DrawingGenerator = ({ mode = 'standalone', projectId = null, pieces = [], 
         </div>
       )}
 
-      {mode === 'lifecycle' && onContinue && (
-        <div className="flex justify-end mt-6">
+      {downloadError && (
+        <div className="mt-4 rounded-xl border border-[#fecaca] bg-[#fef2f2] px-4 py-3 text-sm text-[#b91c1c]">
+          {downloadError}
+        </div>
+      )}
+
+      {mode === 'lifecycle' && items.length > 0 && (
+        <div className="flex justify-end gap-3 mt-6">
           <button
             type="button"
-            onClick={onContinue}
-            className="rounded-full bg-[#1d4ed8] px-6 py-3 text-sm font-semibold text-white shadow-sm hover:bg-[#1e40af]"
+            onClick={downloadAllDrawings}
+            disabled={isDownloadingAll}
+            className={`rounded-full border px-6 py-3 text-sm font-semibold shadow-sm ${
+              isDownloadingAll
+                ? 'border-[#cbd5e1] text-[#94a3b8] cursor-not-allowed'
+                : 'border-[#cbd5e1] bg-white text-[#334155] hover:bg-[#f8fafc]'
+            }`}
           >
-            Continue to Planning →
+            {isDownloadingAll ? 'Generating…' : `↓ Download All Drawings (${items.length} part${items.length === 1 ? '' : 's'})`}
           </button>
+          {onContinue && (
+            <button
+              type="button"
+              onClick={onContinue}
+              className="rounded-full bg-[#1d4ed8] px-6 py-3 text-sm font-semibold text-white shadow-sm hover:bg-[#1e40af]"
+            >
+              Continue to Planning →
+            </button>
+          )}
         </div>
       )}
     </div>

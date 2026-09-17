@@ -28,7 +28,7 @@ from .services.deterministic_packing import (
 from .services.planner_v3 import enrich_layout_with_crates, run_v3_planner
 from .services.planner_v3.dispatch_units import build_dispatch_units_from_pieces
 from .services import drawing_templates
-from .services.drawing_engine import render_svg, render_pdf_bytes
+from .services.drawing_engine import render_svg, render_pdf_bytes, render_pdf_bundle
 from .services.planner_v3.container_layout import linear_manual_sort_placements
 from .services.planning_engine import (
     COLOR_DENSITIES,
@@ -1438,6 +1438,49 @@ def create_piece_from_drawing(project_id: int, req: DrawingToPieceRequest):
         "pieces": [piece_response(d) for d in docs],
         "piece_ids": {d["assembly_role"]: d["id"] for d in docs},
     }
+
+
+@app.get("/api/projects/{project_id}/drawings/pdf")
+def export_project_drawings_pdf(project_id: int):
+    """One combined multi-page PDF for the whole project — every generated
+    part as its own page, in the same style customers already get from
+    AutoCAD exports (see the reference "Concord Crossing" drawing set): one
+    work-ticket-style page per part, not a separate download per piece."""
+    project = projects_col.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    tops = [
+        p for p in pieces_col.find({"project_id": project_id, "assembly_role": "top"}, {"_id": 0})
+        if p.get("drawing_template_id")
+    ]
+    if not tops:
+        raise HTTPException(status_code=400, detail="No generated drawings in this project yet.")
+
+    items = []
+    for piece in sorted(tops, key=lambda p: p.get("id", 0)):
+        try:
+            geometry = drawing_templates.build_geometry(piece["drawing_template_id"], piece.get("drawing_template_params") or {})
+        except drawing_templates.TemplateError:
+            continue
+        items.append({"geometry": geometry, "meta": {
+            "part": piece.get("part"),
+            "building": piece.get("building"), "floor": piece.get("floor"), "flat": piece.get("flat"),
+            "material": piece.get("material") or project.get("material"),
+            "stone_color": piece.get("stone_color") or project.get("stone_color"),
+            "thickness": piece.get("thickness") or project.get("thickness"),
+            "qty": piece.get("qty", 1),
+            "project": project.get("name"),
+            "work_ticket": piece.get("part_no"),
+        }})
+
+    pdf_bytes = render_pdf_bundle(items)
+    filename = f"{(project.get('name') or 'Project').replace(' ', '_')}_Drawings.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.post("/api/projects/{project_id}/pieces/batch")
