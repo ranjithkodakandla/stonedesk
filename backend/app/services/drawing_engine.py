@@ -259,11 +259,13 @@ def _title_block(page, meta: Dict[str, Any]) -> None:
     row(y, "WORK TICKET NUMBER", meta.get("work_ticket"), value_size=13)
 
 
-def _destination_matrix(page, destinations: List[Dict[str, Any]]) -> None:
+def _destination_matrix(page, destinations: List[Dict[str, Any]], start_y: float = 470) -> None:
     """Bottom-left Building x Floor destination table — one cell per
     building/floor combo, listing that cell's flat numbers (not just a
     count) with a Total column/row, matching the real "Bldg #'s" table a
-    Matrix Grid entry in Source Data produces."""
+    Matrix Grid entry in Source Data produces. start_y is caller-provided
+    so it can sit below however many note lines a template drew above it,
+    instead of a fixed position that can collide with them."""
     if not destinations:
         return
     buildings = sorted({d.get("building", "") for d in destinations if d.get("building")})
@@ -272,8 +274,15 @@ def _destination_matrix(page, destinations: List[Dict[str, Any]]) -> None:
         return
     gray = (0.4, 0.45, 0.5)
     black = (0.06, 0.09, 0.14)
-    x0, y0 = 36, 470
-    col_w, row_h, header_h = 46, 30, 14
+    x0, y0 = 36, start_y
+    col_w, header_h = 46, 14
+    # Use the full 30pt row height by default; only shrink it if that would
+    # actually run into the signature line (y=585) — e.g. many floors — so
+    # a normal-sized table isn't needlessly cramped.
+    n_row_slots = len(floors) + 1  # floor rows + the Total row
+    natural_table_h = header_h + 30 * n_row_slots
+    row_h = 30 if y0 + natural_table_h <= 585 else max(14, (585 - y0 - header_h) / n_row_slots)
+    max_flats_per_cell = 3 if row_h >= 26 else (2 if row_h >= 20 else 1)
     total_col_x = x0 + col_w * (len(buildings) + 1)
     table_h = header_h + row_h * (len(floors) + 1)  # + the Total row
 
@@ -305,10 +314,11 @@ def _destination_matrix(page, destinations: List[Dict[str, Any]]) -> None:
         for ci, b in enumerate(buildings):
             flats = cell_flats(b, f)
             row_count += len(flats)
-            for li, flat in enumerate(flats[:3]):
+            for li, flat in enumerate(flats[:max_flats_per_cell]):
                 page.insert_text((x0 + col_w * (ci + 1) + 3, yy + 9 + li * 8), str(flat), fontsize=6.5, color=black)
-            if len(flats) > 3:
-                page.insert_text((x0 + col_w * (ci + 1) + 3, yy + 9 + 3 * 8), f"+{len(flats) - 3}", fontsize=6, color=gray)
+            if len(flats) > max_flats_per_cell:
+                extra = len(flats) - max_flats_per_cell
+                page.insert_text((x0 + col_w * (ci + 1) + 3, yy + 9 + max_flats_per_cell * 8), f"+{extra}", fontsize=6, color=gray)
         page.insert_text((total_col_x + 3, yy + 10), str(row_count), fontsize=7, color=black)
 
     total_y = y0 + header_h + row_h * len(floors)
@@ -509,10 +519,13 @@ def render_pdf_page(doc, geometry: Dict[str, Any], meta: Optional[Dict[str, Any]
         page.insert_text((sx - 6, sy + sh + 14), label, fontsize=6.5, color=gray)
         sx += max(sw + 20, len(label) * 3.3) + 6
 
-    for note_i, note in enumerate(geometry.get("notes", [])):
+    notes = geometry.get("notes") or []
+    for note_i, note in enumerate(notes):
         page.insert_text((36, 470 + note_i * 14), note, fontsize=9, color=gray)
 
-    _destination_matrix(page, meta.get("destinations") or [])
+    # Start below whatever notes are present instead of a fixed y, so the
+    # two never overlap regardless of how many note lines a template has.
+    _destination_matrix(page, meta.get("destinations") or [], start_y=470 + len(notes) * 14 + 20)
 
     page.draw_line((36, 592), (250, 592), color=gray, width=0.6)
     page.insert_text((36, 604), "X   Signature of Approval", fontsize=7, color=gray)
