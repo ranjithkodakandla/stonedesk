@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "stonedesk-frontend",
+      "runtimeExecutable": "/Users/ranjithkodakandla/.local/node/bin/node",
+      "runtimeArgs": ["/Users/ranjithkodakandla/Desktop/Ranjith/Personal/personalProject/stonedesk/frontend/dev-launcher.cjs"],
+      "port": 5173
+    }
+  ]
+}

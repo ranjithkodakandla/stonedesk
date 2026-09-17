@@ -6,6 +6,7 @@ import UploadWorkspace from './UploadWorkspace';
 import PiecesTable from './PiecesTable';
 import PlannerV3Screen from './PlannerV3Screen';
 import CutListScreen from './cutlist/CutListScreen';
+import DrawingGenerator from './drawing/DrawingGenerator';
 import SidebarNav from './SidebarNav';
 import { usePlannerStore } from '../store/plannerStore';
 import { formatNumber, getPieceWeight } from '../utils/plannerUtils';
@@ -484,8 +485,26 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
                 ),
               },
               {
-                key: 'planning',
+                key: 'drawing-generator',
                 step: 2,
+                label: 'Drawing Generator',
+                hint: 'Generate a countertop drawing',
+                content: () => (
+                  <div className="px-6 py-6">
+                    <DrawingGenerator
+                      mode="lifecycle"
+                      projectId={projectId}
+                      project={project}
+                      pieces={pieces}
+                      onAdded={refreshWorkspace}
+                      onContinue={() => setMainTab('planning')}
+                    />
+                  </div>
+                ),
+              },
+              {
+                key: 'planning',
+                step: 3,
                 label: 'Planning Workspace',
                 hint: !planningUnlocked ? 'Locked until approved' : !hasPlan ? 'Dispatch & build' : 'Crate planning',
                 disabled: !planningUnlocked,
@@ -514,7 +533,7 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
               },
               {
                 key: 'cutlist',
-                step: 3,
+                step: 4,
                 label: 'Cut List',
                 hint: pieces.length === 0 ? 'Add parts first' : 'Nest parts onto slabs',
                 disabled: pieces.length === 0,

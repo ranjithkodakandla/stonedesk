@@ -1,6 +1,7 @@
 from copy import deepcopy
 from datetime import date, datetime
 from io import BytesIO
+import json
 import os
 import re
 import time
@@ -27,6 +28,8 @@ from .services.deterministic_packing import (
 )
 from .services.planner_v3 import enrich_layout_with_crates, run_v3_planner
 from .services.planner_v3.dispatch_units import build_dispatch_units_from_pieces
+from .services import drawing_templates
+from .services.drawing_engine import render_svg, render_pdf_bytes, render_pdf_bundle
 from .services.planner_v3.container_layout import linear_manual_sort_placements
 from .services.planning_engine import (
     COLOR_DENSITIES,
@@ -399,6 +402,10 @@ def piece_response(doc: Dict[str, Any]) -> Dict[str, Any]:
         "building": doc.get("building", ""),
         "floor": doc.get("floor", ""),
         "flat": doc.get("flat", ""),
+        "input_source": doc.get("input_source", "manual_entry"),
+        "drawing_template_id": doc.get("drawing_template_id"),
+        "drawing_template_params": doc.get("drawing_template_params"),
+        "assembly_role": doc.get("assembly_role"),
         "created_at": as_iso(doc.get("created_at")),
     }
 
@@ -1223,9 +1230,8 @@ def get_pieces(project_id: int):
     return [piece_response(piece) for piece in pieces]
 
 
-@app.post("/api/projects/{project_id}/pieces/")
-def create_piece(project_id: int, piece: PieceCreate):
-    piece_id = next_sequence("piece")
+def _build_piece_doc(project_id: int, piece: PieceCreate, piece_id: int, extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Canonical piece document shared by manual entry and the drawing generator."""
     edge_polish_machine = piece.edge_polish_machine or calculate_edge_polish_machine(piece.length, piece.width, piece.edge_area)
     doc = {
         "id": piece_id,
@@ -1266,11 +1272,351 @@ def create_piece(project_id: int, piece: PieceCreate):
         "edge_polish_machine": edge_polish_machine,
         "radius": piece.radius,
         "notes": piece.notes,
+        "input_source": "manual_entry",
         "created_at": utc_now(),
     }
+    if extra:
+        doc.update(extra)
+    return doc
+
+
+@app.post("/api/projects/{project_id}/pieces/")
+def create_piece(project_id: int, piece: PieceCreate):
+    piece_id = next_sequence("piece")
+    doc = _build_piece_doc(project_id, piece, piece_id)
     pieces_col.insert_one(doc)
     clear_manual_container_plan(project_id)
     return piece_response(doc)
+
+
+# ── Drawing Generator ────────────────────────────────────────────────────
+# Parametric templates (backend/app/services/drawing_templates.py) produce the
+# SAME canonical piece fields manual Source Data entry produces, so a generated
+# countertop is an ordinary piece (or, for vanity/kitchen tops, an ASSEMBLY of
+# a top plus its bundled backsplash/side-splash pieces) to crate planning /
+# cut list / labels. See drawing_templates.py for the template registry and
+# drawing_engine.py for SVG/PDF rendering.
+class DrawingGenerateRequest(BaseModel):
+    template_id: str
+    params: Dict[str, Any] = {}
+    part: str = ""
+
+
+@app.get("/api/drawing-templates")
+def get_drawing_templates():
+    return drawing_templates.list_templates()
+
+
+@app.post("/api/drawing-generator/preview")
+def preview_drawing(req: DrawingGenerateRequest):
+    try:
+        errors = drawing_templates.validate_params(req.template_id, req.params)
+        geometry = drawing_templates.build_geometry(req.template_id, req.params)
+        assembly = drawing_templates.build_assembly(req.template_id, req.params)
+    except drawing_templates.TemplateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {
+        "geometry": geometry,
+        "svg": render_svg(geometry, {"part": req.part}),
+        "piece_fields": assembly[0]["fields"],
+        "assembly": assembly,
+        "errors": errors,
+    }
+
+
+class DrawingPdfRequest(DrawingGenerateRequest):
+    material: str = ""
+    stone_color: str = ""
+    thickness: str = "2CM"
+    qty: int = 1
+    building: str = ""
+    floor: str = ""
+    flat: str = ""
+    sink_info: str = ""
+    project: str = ""
+    date: str = ""
+    drawn_by: str = ""
+    scale: str = 'NTS'
+    destinations: List[Dict[str, Any]] = []
+
+
+@app.post("/api/drawing-generator/pdf")
+def export_drawing_pdf(req: DrawingPdfRequest):
+    try:
+        template = drawing_templates.get_template(req.template_id)
+        errors = drawing_templates.validate_params(req.template_id, req.params)
+        if errors:
+            raise HTTPException(status_code=400, detail="; ".join(errors))
+        geometry = drawing_templates.build_geometry(req.template_id, req.params)
+    except drawing_templates.TemplateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    pdf_bytes = render_pdf_bytes(geometry, {
+        "part": req.part, "template_name": template["name"],
+        "material": req.material, "stone_color": req.stone_color, "thickness": req.thickness,
+        "qty": req.qty or (len(req.destinations) or 1), "sink_info": req.sink_info, "project": req.project,
+        "building": req.building, "floor": req.floor, "flat": req.flat,
+        "date": req.date, "drawn_by": req.drawn_by, "scale": req.scale,
+        "destinations": req.destinations,
+    })
+    filename = f"{(req.part or template['name']).replace(' ', '_')}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+class DrawingToPieceRequest(BaseModel):
+    template_id: str
+    params: Dict[str, Any] = {}
+    part: str
+    part_no: str = ""
+    qty: int = 1
+    building: str = ""
+    floor: str = ""
+    flat: str = ""
+    unit: str = ""
+    material: str = ""
+    stone_color: str = ""
+    thickness: str = "3CM"
+    piece_ids: Dict[str, int] = {}  # role -> existing piece id, for in-place updates
+    # Matches Source Data's "Single / Comma-List" vs "Matrix Grid" entry: a
+    # non-empty list means this same drawing goes to multiple destinations
+    # (one full assembly per entry), and the combined project PDF renders
+    # them as a Building x Floor matrix instead of a single destination
+    # line — whichever way the data was entered is how it's drawn.
+    destinations: List[Dict[str, str]] = []
+
+
+def _assembly_role_docs(project_id: int, req: "DrawingToPieceRequest", assembly: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Builds/updates the piece docs for an assembly, reusing existing ids by
+    role so re-saving a drawing updates its pieces in place instead of
+    duplicating them, and removes accessory pieces the user has unchecked."""
+    common = {
+        "part_no": req.part_no, "qty": req.qty, "building": req.building, "floor": req.floor,
+        "flat": req.flat, "unit": req.unit, "material": req.material, "stone_color": req.stone_color,
+        "thickness": req.thickness, "drawing": req.part or req.part_no,
+    }
+    kept_roles = {item["role"] for item in assembly}
+    for role, piece_id in (req.piece_ids or {}).items():
+        if role not in kept_roles:
+            pieces_col.delete_one({"id": piece_id, "project_id": project_id})
+
+    docs = []
+    for item in assembly:
+        role, fields = item["role"], item["fields"]
+        # `part` must hold the standardized type (matches Source Data's Part
+        # Type vocabulary, e.g. "Vanity - Top" vs "Vanity - Back Splash", and
+        # what _part_bucket_for_unit reads) rather than the user's job label
+        # — that stays in `drawing`, uniform across the assembly's roles, so
+        # both entry paths use category/part/drawing the same way and
+        # siblings still group by drawing label.
+        piece = PieceCreate(**{**fields, **common, "part": fields.get("category", req.part)})
+        existing_id = (req.piece_ids or {}).get(role)
+        if existing_id and pieces_col.find_one({"id": existing_id, "project_id": project_id}):
+            doc = _build_piece_doc(project_id, piece, existing_id, extra={
+                "input_source": "generated_drawing", "drawing_template_id": req.template_id,
+                "drawing_template_params": req.params, "assembly_role": role,
+            })
+            pieces_col.update_one({"id": existing_id}, {"$set": doc})
+        else:
+            piece_id = next_sequence("piece")
+            doc = _build_piece_doc(project_id, piece, piece_id, extra={
+                "input_source": "generated_drawing", "drawing_template_id": req.template_id,
+                "drawing_template_params": req.params, "assembly_role": role,
+            })
+            pieces_col.insert_one(doc)
+        docs.append(doc)
+    return docs
+
+
+# `part` values that identify a "top" piece drawable by a template — kept in
+# lock-step with pieceCategory in frontend/src/utils/drawingTemplates.js.
+_TOP_TEMPLATE_FOR_PART = {
+    "Kitchen - Island Tops": ("island_standard", "island_with_sink"),
+    "Vanity - Top": ("vanity_top", "vanity_top"),
+    "Kitchen - Perimeter Tops": ("kitchen_l_top", "kitchen_l_top"),
+}
+
+
+def _template_id_for_piece(piece: Dict[str, Any]) -> Optional[str]:
+    """Mirrors frontend templateForPiece's matching rules."""
+    no_sink, with_sink = _TOP_TEMPLATE_FOR_PART.get(piece.get("part"), (None, None))
+    if not no_sink:
+        return None
+    has_sink = bool(piece.get("sink_type")) and piece.get("sink_type") != "No Sink"
+    return with_sink if has_sink else no_sink
+
+
+def _params_from_piece(template_id: str, piece: Dict[str, Any]) -> Dict[str, Any]:
+    """Mirrors each template's paramsFromPiece in drawingTemplates.js — the
+    lossy dimension-based reverse mapping used for pieces the generator
+    didn't itself create (e.g. entered manually in Source Data)."""
+    length, width = piece.get("length"), piece.get("width")
+    common_sink = {
+        "sink_length": piece.get("sink_length"), "sink_width": piece.get("sink_width"),
+        "sink_offset_left": piece.get("sink_offset_left"),
+    }
+    if template_id == "island_standard":
+        return {"length": length, "width": width}
+    if template_id == "island_with_sink":
+        return {"length": length, "width": width, **common_sink}
+    if template_id == "vanity_top":
+        return {"length": length, "depth": width, **common_sink}
+    if template_id == "kitchen_l_top":
+        return {
+            "left_run": length * 0.56 if length else None, "right_run": length * 0.44 if length else None,
+            "depth": width, **common_sink,
+        }
+    return {}
+
+
+def _splash_params_for_piece(piece: Dict[str, Any], project_pieces: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """A manually-entered top has no include_backsplash/include_side_splash
+    flag of its own — infer them from whether the user also entered a
+    matching backsplash/side-splash piece under the same drawing label, so
+    the combined PDF only draws what was actually entered."""
+    drawing_key = piece.get("drawing") or piece.get("part")
+    siblings = [
+        p for p in project_pieces
+        if p.get("id") != piece.get("id") and (p.get("drawing") or p.get("part")) == drawing_key
+    ]
+    backsplash = next((p for p in siblings if "back splash" in str(p.get("part", "")).lower()), None)
+    side_splash = next((p for p in siblings if "side splash" in str(p.get("part", "")).lower()), None)
+    params: Dict[str, Any] = {"include_backsplash": bool(backsplash), "include_side_splash": bool(side_splash)}
+    height = (backsplash or side_splash or {}).get("width")
+    if height:
+        params["splash_height"] = height
+    return params
+
+
+def _reverse_map_piece(piece: Dict[str, Any], project_pieces: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Fills in drawing_template_id/drawing_template_params for a piece that
+    was entered manually (never saved through the Drawing Generator), so it
+    can still be drawn on its own combined-PDF page. Generator-created
+    pieces already carry both fields and pass through unchanged."""
+    if piece.get("drawing_template_id"):
+        return piece
+    template_id = _template_id_for_piece(piece)
+    if not template_id:
+        return None
+    template = drawing_templates.get_template(template_id)
+    defaults = {p["id"]: p["default"] for p in template["parameters"]}
+    params = {**defaults, **_params_from_piece(template_id, piece), **_splash_params_for_piece(piece, project_pieces)}
+    params = {k: v for k, v in params.items() if v is not None}
+    return {**piece, "drawing_template_id": template_id, "drawing_template_params": params}
+
+
+@app.post("/api/projects/{project_id}/pieces/from-drawing")
+def create_piece_from_drawing(project_id: int, req: DrawingToPieceRequest):
+    """Adds a generated drawing's countertop (and any bundled backsplash /
+    side-splash accessories) to a project as normal pieces — the same
+    canonical shape manual entry produces, so they need no special handling
+    anywhere downstream (crate planning, cut list, labels). Passing
+    piece_ids for roles already in the project updates those pieces in
+    place instead of creating duplicates, so re-opening a saved drawing to
+    tweak dimensions or toggle an accessory off doesn't leave orphans."""
+    try:
+        errors = drawing_templates.validate_params(req.template_id, req.params)
+        if errors:
+            raise HTTPException(status_code=400, detail="; ".join(errors))
+        assembly = drawing_templates.build_assembly(req.template_id, req.params)
+    except drawing_templates.TemplateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if req.destinations:
+        # Matrix entry: the same drawing repeats across many building/floor/
+        # flat destinations. Each gets its own full assembly (in-place
+        # update tracking doesn't apply here — this is always a fresh batch,
+        # same as pasting a matrix of rows into Source Data).
+        docs = []
+        for dest in req.destinations:
+            dest_req = req.model_copy(update={
+                "building": dest.get("building", ""), "floor": dest.get("floor", ""),
+                "flat": dest.get("flat", ""), "piece_ids": {},
+            })
+            docs.extend(_assembly_role_docs(project_id, dest_req, assembly))
+    else:
+        docs = _assembly_role_docs(project_id, req, assembly)
+    clear_manual_container_plan(project_id)
+    return {
+        "pieces": [piece_response(d) for d in docs],
+        "piece_ids": {d["assembly_role"]: d["id"] for d in docs},
+    }
+
+
+@app.get("/api/projects/{project_id}/drawings/pdf")
+def export_project_drawings_pdf(project_id: int):
+    """One combined multi-page PDF for the whole project — every generated
+    part as its own page, in the same style customers already get from
+    AutoCAD exports (see the reference "Concord Crossing" drawing set): one
+    work-ticket-style page per part, not a separate download per piece."""
+    project = projects_col.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    project_pieces = list(pieces_col.find({"project_id": project_id}, {"_id": 0}))
+    tops = [
+        mapped for p in project_pieces
+        if p.get("part") in _TOP_TEMPLATE_FOR_PART
+        for mapped in [_reverse_map_piece(p, project_pieces)]
+        if mapped
+    ]
+    if not tops:
+        raise HTTPException(status_code=400, detail="No island, vanity, or kitchen-top parts in this project yet.")
+
+    # Group pieces that are literally the same drawing (same template + same
+    # parameters + same part name) repeated across destinations — matching
+    # Source Data's "Matrix Grid" entry, where one drawing goes to many
+    # building/floor/flat combos. Each group becomes ONE page with a
+    # destination matrix, not one page per destination.
+    groups: Dict[tuple, List[Dict[str, Any]]] = {}
+    for piece in sorted(tops, key=lambda p: p.get("id", 0)):
+        key = (
+            piece["drawing_template_id"],
+            json.dumps(piece.get("drawing_template_params") or {}, sort_keys=True),
+            piece.get("part"),
+        )
+        groups.setdefault(key, []).append(piece)
+
+    items = []
+    for (template_id, params_json, part), group_pieces in groups.items():
+        try:
+            geometry = drawing_templates.build_geometry(template_id, json.loads(params_json))
+        except drawing_templates.TemplateError:
+            continue
+        first = group_pieces[0]
+        destinations = [
+            {"building": p.get("building", ""), "floor": p.get("floor", ""), "flat": p.get("flat", "")}
+            for p in group_pieces if p.get("building") or p.get("floor") or p.get("flat")
+        ]
+        meta = {
+            "part": part,
+            "material": first.get("material") or project.get("material"),
+            "stone_color": first.get("stone_color") or project.get("stone_color"),
+            "thickness": first.get("thickness") or project.get("thickness"),
+            "qty": sum(p.get("qty", 1) for p in group_pieces),
+            "project": project.get("name"),
+            "date": date.today().isoformat(),
+        }
+        if len(destinations) > 1:
+            # Multiple destinations for this exact drawing: show the matrix,
+            # like the reference "Bldg #'s / Floor" table — same shape as a
+            # Matrix Grid entry in Source Data.
+            meta["destinations"] = destinations
+        elif destinations:
+            # A single destination: the simple "DESTINATION" row is enough,
+            # matching a Single / Comma-List entry of one row.
+            meta.update(destinations[0])
+        items.append({"geometry": geometry, "meta": meta})
+
+    pdf_bytes = render_pdf_bundle(items)
+    filename = f"{(project.get('name') or 'Project').replace(' ', '_')}_Drawings.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.post("/api/projects/{project_id}/pieces/batch")
