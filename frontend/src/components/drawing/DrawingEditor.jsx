@@ -27,6 +27,18 @@ const DrawingEditor = ({ mode, projectId, initial, onDone, onCancel }) => {
   const [floor, setFloor] = useState(initial?.floor || '');
   const [flat, setFlat] = useState(initial?.flat || '');
   const [qty, setQty] = useState(initial?.qty || 1);
+  // Mirrors Source Data's "Single / Comma-List" vs "Matrix Grid" entry: one
+  // destination, or the same drawing repeated across many building/floor/
+  // flat combos — the PDF renders whichever shape was actually entered.
+  const [destMode, setDestMode] = useState(initial?.destinations?.length > 1 ? 'matrix' : 'single');
+  const [destMatrixText, setDestMatrixText] = useState(
+    (initial?.destinations || []).map((d) => `${d.building}, ${d.floor}, ${d.flat}`).join('\n')
+  );
+  const parsedDestinations = useMemo(() => destMatrixText
+    .split('\n')
+    .map((line) => line.split(',').map((s) => s.trim()))
+    .filter((parts) => parts.length >= 3 && parts.some(Boolean))
+    .map(([b, f, fl]) => ({ building: b || '', floor: f || '', flat: fl || '' })), [destMatrixText]);
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState(null);
 
@@ -52,8 +64,9 @@ const DrawingEditor = ({ mode, projectId, initial, onDone, onCancel }) => {
 
   const pdfPayload = () => ({
     template_id: templateId, params, part,
-    material, stone_color: stoneColor, thickness, qty,
-    building, floor, flat,
+    material, stone_color: stoneColor, thickness,
+    qty: destMode === 'matrix' ? (parsedDestinations.length || 1) : qty,
+    ...(destMode === 'matrix' ? { destinations: parsedDestinations } : { building, floor, flat }),
     sink_info: sinkInfo, project: projectName, work_ticket: workTicket,
     drawn_by: drawnBy, scale, date: new Date().toISOString().slice(0, 10),
   });
@@ -101,14 +114,22 @@ const DrawingEditor = ({ mode, projectId, initial, onDone, onCancel }) => {
       return;
     }
     if (!projectId) return;
+    if (destMode === 'matrix' && parsedDestinations.length === 0) {
+      setSaveMessage({ type: 'error', text: 'Enter at least one destination (building, floor, flat) — one per line.' });
+      return;
+    }
     setIsSaving(true);
     setSaveMessage(null);
     try {
       const res = await axios.post(`${API_BASE}/projects/${projectId}/pieces/from-drawing`, {
-        template_id: templateId, params, part, qty, building, floor, flat,
-        material, stone_color: stoneColor, thickness, piece_ids: pieceIds,
+        template_id: templateId, params, part,
+        qty: destMode === 'matrix' ? 1 : qty,
+        material, stone_color: stoneColor, thickness,
+        piece_ids: destMode === 'matrix' ? {} : pieceIds,
+        ...(destMode === 'matrix' ? { destinations: parsedDestinations } : { building, floor, flat }),
       });
-      setSaveMessage({ type: 'success', text: `Saved (${res.data.pieces.length} piece${res.data.pieces.length === 1 ? '' : 's'}).` });
+      const destCount = destMode === 'matrix' ? parsedDestinations.length : 1;
+      setSaveMessage({ type: 'success', text: `Saved (${res.data.pieces.length} piece${res.data.pieces.length === 1 ? '' : 's'}${destMode === 'matrix' ? ` across ${destCount} destinations` : ''}).` });
       onDone();
     } catch (err) {
       setSaveMessage({ type: 'error', text: err.response?.data?.detail || 'Failed to save.' });
@@ -151,19 +172,53 @@ const DrawingEditor = ({ mode, projectId, initial, onDone, onCancel }) => {
           </div>
 
           {mode === 'lifecycle' && (
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="block text-xs font-semibold text-[#64748b] mb-1 uppercase tracking-wide">Building</label>
-                <input value={building} onChange={(e) => setBuilding(e.target.value)} className="input-field w-full" />
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-xs font-semibold text-[#64748b] uppercase tracking-wide">Destination</label>
+                <div className="flex rounded-full border border-[#cbd5e1] p-0.5">
+                  {['single', 'matrix'].map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setDestMode(m)}
+                      className={`px-3 py-1 rounded-full text-xs font-semibold capitalize transition-all ${
+                        destMode === m ? 'bg-[#1d4ed8] text-white' : 'text-[#64748b] hover:bg-[#f8fafc]'
+                      }`}
+                    >
+                      {m === 'single' ? 'Single' : 'Matrix Grid'}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div>
-                <label className="block text-xs font-semibold text-[#64748b] mb-1 uppercase tracking-wide">Floor</label>
-                <input value={floor} onChange={(e) => setFloor(e.target.value)} className="input-field w-full" />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-[#64748b] mb-1 uppercase tracking-wide">Flat</label>
-                <input value={flat} onChange={(e) => setFlat(e.target.value)} className="input-field w-full" />
-              </div>
+              {destMode === 'single' ? (
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs text-[#64748b] mb-1">Building</label>
+                    <input value={building} onChange={(e) => setBuilding(e.target.value)} className="input-field w-full" />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-[#64748b] mb-1">Floor</label>
+                    <input value={floor} onChange={(e) => setFloor(e.target.value)} className="input-field w-full" />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-[#64748b] mb-1">Flat</label>
+                    <input value={flat} onChange={(e) => setFlat(e.target.value)} className="input-field w-full" />
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <textarea
+                    value={destMatrixText}
+                    onChange={(e) => setDestMatrixText(e.target.value)}
+                    rows={4}
+                    className="input-field w-full font-mono text-xs"
+                    placeholder={'One destination per line: Building, Floor, Flat\n13, 1, 103\n13, 1, 107\n14, 2, 203'}
+                  />
+                  <p className="text-xs text-[#94a3b8] mt-1">
+                    {parsedDestinations.length} destination{parsedDestinations.length === 1 ? '' : 's'} parsed — this drawing repeats across all of them, and the PDF shows a Building × Floor table instead of a single destination.
+                  </p>
+                </div>
+              )}
             </div>
           )}
 
@@ -251,7 +306,7 @@ const DrawingEditor = ({ mode, projectId, initial, onDone, onCancel }) => {
             </div>
           </details>
 
-          {mode === 'lifecycle' && (
+          {mode === 'lifecycle' && destMode === 'single' && (
             <div>
               <label className="block text-xs font-semibold text-[#64748b] mb-1 uppercase tracking-wide">Qty</label>
               <input type="number" min="1" value={qty} onChange={(e) => setQty(Math.max(1, Number(e.target.value) || 1))} className="input-field w-24" />

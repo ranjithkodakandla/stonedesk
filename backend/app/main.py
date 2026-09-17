@@ -1,6 +1,7 @@
 from copy import deepcopy
 from datetime import date, datetime
 from io import BytesIO
+import json
 import os
 import re
 import time
@@ -1379,6 +1380,12 @@ class DrawingToPieceRequest(BaseModel):
     stone_color: str = ""
     thickness: str = "3CM"
     piece_ids: Dict[str, int] = {}  # role -> existing piece id, for in-place updates
+    # Matches Source Data's "Single / Comma-List" vs "Matrix Grid" entry: a
+    # non-empty list means this same drawing goes to multiple destinations
+    # (one full assembly per entry), and the combined project PDF renders
+    # them as a Building x Floor matrix instead of a single destination
+    # line — whichever way the data was entered is how it's drawn.
+    destinations: List[Dict[str, str]] = []
 
 
 def _assembly_role_docs(project_id: int, req: "DrawingToPieceRequest", assembly: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1436,7 +1443,20 @@ def create_piece_from_drawing(project_id: int, req: DrawingToPieceRequest):
     except drawing_templates.TemplateError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    docs = _assembly_role_docs(project_id, req, assembly)
+    if req.destinations:
+        # Matrix entry: the same drawing repeats across many building/floor/
+        # flat destinations. Each gets its own full assembly (in-place
+        # update tracking doesn't apply here — this is always a fresh batch,
+        # same as pasting a matrix of rows into Source Data).
+        docs = []
+        for dest in req.destinations:
+            dest_req = req.model_copy(update={
+                "building": dest.get("building", ""), "floor": dest.get("floor", ""),
+                "flat": dest.get("flat", ""), "piece_ids": {},
+            })
+            docs.extend(_assembly_role_docs(project_id, dest_req, assembly))
+    else:
+        docs = _assembly_role_docs(project_id, req, assembly)
     clear_manual_container_plan(project_id)
     return {
         "pieces": [piece_response(d) for d in docs],
@@ -1461,22 +1481,50 @@ def export_project_drawings_pdf(project_id: int):
     if not tops:
         raise HTTPException(status_code=400, detail="No generated drawings in this project yet.")
 
-    items = []
+    # Group pieces that are literally the same drawing (same template + same
+    # parameters + same part name) repeated across destinations — matching
+    # Source Data's "Matrix Grid" entry, where one drawing goes to many
+    # building/floor/flat combos. Each group becomes ONE page with a
+    # destination matrix, not one page per destination.
+    groups: Dict[tuple, List[Dict[str, Any]]] = {}
     for piece in sorted(tops, key=lambda p: p.get("id", 0)):
+        key = (
+            piece["drawing_template_id"],
+            json.dumps(piece.get("drawing_template_params") or {}, sort_keys=True),
+            piece.get("part"),
+        )
+        groups.setdefault(key, []).append(piece)
+
+    items = []
+    for (template_id, params_json, part), group_pieces in groups.items():
         try:
-            geometry = drawing_templates.build_geometry(piece["drawing_template_id"], piece.get("drawing_template_params") or {})
+            geometry = drawing_templates.build_geometry(template_id, json.loads(params_json))
         except drawing_templates.TemplateError:
             continue
-        items.append({"geometry": geometry, "meta": {
-            "part": piece.get("part"),
-            "building": piece.get("building"), "floor": piece.get("floor"), "flat": piece.get("flat"),
-            "material": piece.get("material") or project.get("material"),
-            "stone_color": piece.get("stone_color") or project.get("stone_color"),
-            "thickness": piece.get("thickness") or project.get("thickness"),
-            "qty": piece.get("qty", 1),
+        first = group_pieces[0]
+        destinations = [
+            {"building": p.get("building", ""), "floor": p.get("floor", ""), "flat": p.get("flat", "")}
+            for p in group_pieces if p.get("building") or p.get("floor") or p.get("flat")
+        ]
+        meta = {
+            "part": part,
+            "material": first.get("material") or project.get("material"),
+            "stone_color": first.get("stone_color") or project.get("stone_color"),
+            "thickness": first.get("thickness") or project.get("thickness"),
+            "qty": sum(p.get("qty", 1) for p in group_pieces),
             "project": project.get("name"),
-            "work_ticket": piece.get("part_no"),
-        }})
+            "work_ticket": first.get("part_no"),
+        }
+        if len(destinations) > 1:
+            # Multiple destinations for this exact drawing: show the matrix,
+            # like the reference "Bldg #'s / Floor" table — same shape as a
+            # Matrix Grid entry in Source Data.
+            meta["destinations"] = destinations
+        elif destinations:
+            # A single destination: the simple "DESTINATION" row is enough,
+            # matching a Single / Comma-List entry of one row.
+            meta.update(destinations[0])
+        items.append({"geometry": geometry, "meta": meta})
 
     pdf_bytes = render_pdf_bundle(items)
     filename = f"{(project.get('name') or 'Project').replace(' ', '_')}_Drawings.pdf"

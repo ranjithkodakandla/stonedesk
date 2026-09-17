@@ -125,3 +125,33 @@ def test_render_pdf_bundle_produces_one_page_per_item():
     assert "Island A" in texts[1]
     assert "Kitchen A" in texts[2]
     doc.close()
+
+
+def test_render_pdf_bytes_with_single_destination_shows_destination_row():
+    import fitz
+
+    geo = dt.build_geometry("island_standard", {"length": 96, "width": 42})
+    pdf_bytes = render_pdf_bytes(geo, {"part": "Island A", "building": "13", "floor": "1", "flat": "103"})
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    text = doc[0].get_text()
+    doc.close()
+    assert "Bldg 13" in text and "Flat 103" in text
+    assert "Bldg #'s / Floor" not in text  # single destination: no matrix table
+
+
+def test_render_pdf_bytes_with_matrix_destinations_shows_table_not_row():
+    import fitz
+
+    geo = dt.build_geometry("island_standard", {"length": 96, "width": 42})
+    destinations = [
+        {"building": "13", "floor": "1", "flat": "103"},
+        {"building": "13", "floor": "1", "flat": "107"},
+        {"building": "14", "floor": "2", "flat": "203"},
+    ]
+    pdf_bytes = render_pdf_bytes(geo, {"part": "Island A", "destinations": destinations})
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    text = doc[0].get_text()
+    doc.close()
+    assert "Bldg #'s / Floor" in text
+    assert "103" in text and "107" in text and "203" in text
+    assert "3 destinations" in text  # sidebar points at the table instead of listing them inline

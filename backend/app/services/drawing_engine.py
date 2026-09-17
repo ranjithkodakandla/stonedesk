@@ -237,8 +237,14 @@ def _title_block(page, meta: Dict[str, Any]) -> None:
     page.draw_line((x0, y + 4), (x1, y + 4), color=gray, width=0.4)
     y += 16
 
-    destination = " / ".join(f"{label} {v}" for label, v in
-                              (("Bldg", meta.get("building")), ("Fl", meta.get("floor")), ("Flat", meta.get("flat"))) if v)
+    dest_list = meta.get("destinations") or []
+    if len(dest_list) > 1:
+        # Matrix entry: point at the destination table instead of repeating
+        # every building/floor/flat combo in a cramped sidebar row.
+        destination = f"{len(dest_list)} destinations - see table below"
+    else:
+        destination = " / ".join(f"{label} {v}" for label, v in
+                                  (("Bldg", meta.get("building")), ("Fl", meta.get("floor")), ("Flat", meta.get("flat"))) if v)
 
     y = row(y, "MATERIAL THICKNESS", meta.get("thickness") or "2CM")
     y = row(y, "MATERIAL COLOR", meta.get("stone_color"))
@@ -254,7 +260,10 @@ def _title_block(page, meta: Dict[str, Any]) -> None:
 
 
 def _destination_matrix(page, destinations: List[Dict[str, Any]]) -> None:
-    """Bottom-left Building x Floor destination count table, as in the real drawings."""
+    """Bottom-left Building x Floor destination table — one cell per
+    building/floor combo, listing that cell's flat numbers (not just a
+    count) with a Total column/row, matching the real "Bldg #'s" table a
+    Matrix Grid entry in Source Data produces."""
     if not destinations:
         return
     buildings = sorted({d.get("building", "") for d in destinations if d.get("building")})
@@ -263,19 +272,52 @@ def _destination_matrix(page, destinations: List[Dict[str, Any]]) -> None:
         return
     gray = (0.4, 0.45, 0.5)
     black = (0.06, 0.09, 0.14)
-    x0, y0 = 36, 500
-    col_w, row_h = 44, 14
-    page.insert_text((x0, y0 - 14), f"Bldg #'s / Floor  -  {len(destinations)} total", fontsize=8, color=gray)
-    page.insert_text((x0, y0), "Floor", fontsize=7, color=gray)
+    x0, y0 = 36, 470
+    col_w, row_h, header_h = 46, 30, 14
+    total_col_x = x0 + col_w * (len(buildings) + 1)
+    table_h = header_h + row_h * (len(floors) + 1)  # + the Total row
+
+    page.insert_text((x0, y0 - 6), f"Bldg #'s / Floor  ({len(destinations)} total)", fontsize=8, color=gray)
+    y0 += 4
+
+    def cell_flats(building, floor):
+        return [d.get("flat", "") for d in destinations if d.get("building") == building and d.get("floor") == floor and d.get("flat")]
+
+    # Grid: one vertical line per column boundary, one horizontal per row boundary.
+    n_cols = len(buildings) + 2  # Floor label + one per building + Total
+    for ci in range(n_cols + 1):
+        x = x0 + col_w * ci
+        page.draw_line((x, y0), (x, y0 + table_h), color=gray, width=0.4)
+    n_rows = len(floors) + 2  # header + one per floor + Total
+    for ri in range(n_rows + 1):
+        y = y0 + (header_h if ri > 0 else 0) + row_h * max(ri - 1, 0)
+        page.draw_line((x0, y), (x0 + col_w * n_cols, y), color=gray, width=0.4 if ri not in (1,) else 0.6)
+
+    page.insert_text((x0 + 3, y0 + 10), "Floor", fontsize=7, color=gray)
     for ci, b in enumerate(buildings):
-        page.insert_text((x0 + col_w * (ci + 1), y0), str(b), fontsize=7, color=black)
+        page.insert_text((x0 + col_w * (ci + 1) + 3, y0 + 10), str(b), fontsize=7, color=black)
+    page.insert_text((total_col_x + 3, y0 + 10), "Total", fontsize=7, color=gray)
+
     for ri, f in enumerate(floors):
-        yy = y0 + row_h * (ri + 1)
-        page.insert_text((x0, yy), str(f), fontsize=7, color=gray)
+        yy = y0 + header_h + row_h * ri
+        page.insert_text((x0 + 3, yy + 10), str(f), fontsize=7, color=gray)
+        row_count = 0
         for ci, b in enumerate(buildings):
-            count = sum(1 for d in destinations if d.get("building") == b and d.get("floor") == f)
-            if count:
-                page.insert_text((x0 + col_w * (ci + 1), yy), str(count), fontsize=7, color=black)
+            flats = cell_flats(b, f)
+            row_count += len(flats)
+            for li, flat in enumerate(flats[:3]):
+                page.insert_text((x0 + col_w * (ci + 1) + 3, yy + 9 + li * 8), str(flat), fontsize=6.5, color=black)
+            if len(flats) > 3:
+                page.insert_text((x0 + col_w * (ci + 1) + 3, yy + 9 + 3 * 8), f"+{len(flats) - 3}", fontsize=6, color=gray)
+        page.insert_text((total_col_x + 3, yy + 10), str(row_count), fontsize=7, color=black)
+
+    total_y = y0 + header_h + row_h * len(floors)
+    page.draw_line((x0, total_y), (total_col_x + col_w, total_y), color=gray, width=0.6)
+    page.insert_text((x0 + 3, total_y + 10), "Total", fontsize=7, color=gray)
+    for ci, b in enumerate(buildings):
+        count = sum(1 for d in destinations if d.get("building") == b)
+        page.insert_text((x0 + col_w * (ci + 1) + 3, total_y + 10), str(count), fontsize=7, color=black)
+    page.insert_text((total_col_x + 3, total_y + 10), str(len(destinations)), fontsize=7, color=black)
 
 
 def _draw_dimension(page, f, t, offset, side, color, gray):
