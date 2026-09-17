@@ -20,6 +20,12 @@ from typing import Any, Dict, List, Optional
 NA = "N/A"  # avoids the em-dash glyph, which base14 PDF fonts render as a stray bullet
 
 
+def _radius_label(radius: float) -> str:
+    # Real drawings write a sub-1" radius as "R.5 in", not "R.0.5 in".
+    text = f"{radius:g}"
+    return f'R{text[1:] if text.startswith("0.") else text} in'
+
+
 def _unit(a, b):
     dx, dy = b[0] - a[0], b[1] - a[1]
     length = (dx ** 2 + dy ** 2) ** 0.5
@@ -94,6 +100,23 @@ def render_svg(geometry: Dict[str, Any], meta: Optional[Dict[str, Any]] = None) 
 
     for mark in geometry.get("edge_marks") or []:
         parts.append(_edge_mark_svg_label(outline, mark, px))
+
+    if outline and geometry.get("corner_radius"):
+        cx, cy = px(outline[0])
+        label = _radius_label(geometry["corner_radius"])
+        lx, ly = cx - 22, cy + 16
+        parts.append(f'<line x1="{cx:.1f}" y1="{cy:.1f}" x2="{lx:.1f}" y2="{ly:.1f}" stroke="#94a3b8" stroke-width="0.6"/>')
+        parts.append(f'<text x="{lx - len(label) * 3.2:.1f}" y="{ly + 10:.1f}" font-size="7" fill="#94a3b8">{label}</text>')
+
+    tap_hole = geometry.get("tap_hole")
+    if tap_hole:
+        hx, hy = px(tap_hole["pos"])
+        hr = max(tap_hole.get("diameter", 1.5) * scale / 2, 2)
+        parts.append(f'<circle cx="{hx:.1f}" cy="{hy:.1f}" r="{hr:.1f}" fill="none" stroke="#0f172a" stroke-width="0.9"/>')
+        if tap_hole.get("leader_to"):
+            lx2, ly2 = px(tap_hole["leader_to"])
+            parts.append(f'<line x1="{hx:.1f}" y1="{hy:.1f}" x2="{lx2:.1f}" y2="{ly2:.1f}" stroke="#94a3b8" stroke-width="0.5"/>')
+        parts.append(f'<text x="{hx + hr + 4:.1f}" y="{hy - 4:.1f}" font-size="6.5" fill="#64748b">Ø{tap_hole.get("diameter", 1.5):g}"</text>')
 
     for cutout in geometry.get("cutouts", []):
         x, y, cw, ch = cutout["rect"]
@@ -373,6 +396,22 @@ def render_pdf_page(doc, geometry: Dict[str, Any], meta: Optional[Dict[str, Any]
 
     for mark in geometry.get("edge_marks") or []:
         _edge_mark_pdf(page, outline, mark, to_page, black)
+
+    if outline and geometry.get("corner_radius"):
+        corner_px = to_page(outline[0])
+        label = _radius_label(geometry["corner_radius"])
+        leader_end = (corner_px[0] - 22, corner_px[1] + 16)
+        page.draw_line(corner_px, leader_end, color=gray, width=0.5)
+        page.insert_text((leader_end[0] - len(label) * 3.2, leader_end[1] + 10), label, fontsize=7, color=gray)
+
+    tap_hole = geometry.get("tap_hole")
+    if tap_hole:
+        hx, hy = to_page(tap_hole["pos"])
+        hr = max(tap_hole.get("diameter", 1.5) * scale / 2, 2)
+        page.draw_oval(fitz.Rect(hx - hr, hy - hr, hx + hr, hy + hr), color=black, width=0.9)
+        if tap_hole.get("leader_to"):
+            page.draw_line((hx, hy), to_page(tap_hole["leader_to"]), color=gray, width=0.5)
+        page.insert_text((hx + hr + 4, hy - 4), f'Ø{tap_hole.get("diameter", 1.5):g}"', fontsize=6.5, color=gray)
 
     for cutout in geometry.get("cutouts", []):
         x, y, cw, ch = cutout["rect"]

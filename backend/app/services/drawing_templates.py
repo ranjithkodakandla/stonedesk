@@ -54,6 +54,29 @@ def _check_range(errors: List[str], label: str, value: float, lo: float, hi: flo
         errors.append(f'{label} must be between {lo:g}" and {hi:g}".')
 
 
+def _tap_hole_geometry(sink_x: float, sink_y: float, sink_length: float, sink_width: float) -> Dict[str, Any]:
+    """Faucet/tap hole + its offset dimensions and a leader line to the sink
+    cutout — real fab drawings always call this out (Ø1.5" hole, offset from
+    the back edge, offset from the sink's edge) even when the sink cutout
+    itself is "cut by template" and not separately dimensioned."""
+    hole_offset_back = min(3.0, max(sink_y - 0.5, 0.5))
+    hole_x = sink_x + sink_length / 2
+    hole_y = hole_offset_back
+    return {
+        "pos": [hole_x, hole_y],
+        "diameter": 1.5,
+        "leader_to": [sink_x + sink_length * 0.35, sink_y],
+        "dimensions": [
+            {"from": [hole_x, 0], "to": [hole_x, hole_y], "label": f'{hole_offset_back:g}"', "side": "none"},
+            {"from": [hole_x, hole_y], "to": [hole_x, sink_y], "label": f'{max(sink_y - hole_y, 0):g}"', "side": "none"},
+        ],
+    }
+
+
+def _corner_radius_label(radius: float) -> Dict[str, Any]:
+    return {"text": f'R.{radius:g} in', "leader_to": [0, 0], "pos": [-14, 14]}
+
+
 def _top(fields: Dict[str, Any]) -> Dict[str, Any]:
     return {"role": "top", "fields": fields}
 
@@ -130,8 +153,10 @@ def _island_sink_geometry(params: Dict[str, Any]) -> Dict[str, Any]:
         {"from": [0, width], "to": [sink_x, width], "label": f'{sink_offset_left:g}"', "side": "bottom"},
         {"from": [sink_x, width], "to": [sink_x + sink_length, width], "label": f'{sink_length:g}"', "side": "bottom"},
     ]
+    tap_hole = _tap_hole_geometry(sink_x, sink_y, sink_length, sink_width)
+    dimensions += tap_hole.pop("dimensions")
     edge_marks = ["top", "left", "right", "bottom"]
-    return {"width_in": length, "height_in": width, "outline": outline, "cutouts": cutouts, "dimensions": dimensions, "notes": [], "accessories": [], "edge_marks": edge_marks, "corner_radius": 0.5}
+    return {"width_in": length, "height_in": width, "outline": outline, "cutouts": cutouts, "dimensions": dimensions, "notes": [], "accessories": [], "edge_marks": edge_marks, "corner_radius": 0.5, "tap_hole": tap_hole}
 
 
 def _island_sink_constraints(params: Dict[str, Any]) -> List[str]:
@@ -187,17 +212,20 @@ def _vanity_top_geometry(params: Dict[str, Any]) -> Dict[str, Any]:
     sink_x = sink_offset_left
     sink_y = (depth - sink_width) / 2
     cutouts = [{"type": "sink", "shape": "oval", "rect": [sink_x, sink_y, sink_length, sink_width], "label": "Polish"}]
+    tap_hole = _tap_hole_geometry(sink_x, sink_y, sink_length, sink_width)
     dimensions = [
         {"from": [0, 0], "to": [length, 0], "label": f'{length:g}"', "side": "top"},
         {"from": [0, 0], "to": [0, depth], "label": f'{depth:g}"', "side": "left"},
-    ]
+        {"from": [0, depth], "to": [sink_x, depth], "label": f'{sink_offset_left:g}"', "side": "bottom"},
+        {"from": [sink_x, depth], "to": [sink_x + sink_length, depth], "label": f'{sink_length:g}"', "side": "bottom"},
+    ] + tap_hole.pop("dimensions")
     accessories = []
     if include_backsplash:
         accessories.append({"role": "backsplash", "label": f'Backsplash {length:g}" x {splash_height:g}"', "w": length, "h": splash_height})
     if include_side_splash:
         accessories.append({"role": "side_splash_left", "label": f'Side Splash {depth:g}" x {splash_height:g}"', "w": depth, "h": splash_height})
         accessories.append({"role": "side_splash_right", "label": f'Side Splash {depth:g}" x {splash_height:g}"', "w": depth, "h": splash_height})
-    return {"width_in": length, "height_in": depth, "outline": outline, "cutouts": cutouts, "dimensions": dimensions, "notes": [], "accessories": accessories, "edge_marks": ["top", "left", "right", "bottom"], "corner_radius": 0.5}
+    return {"width_in": length, "height_in": depth, "outline": outline, "cutouts": cutouts, "dimensions": dimensions, "notes": [], "accessories": accessories, "edge_marks": ["top", "left", "right", "bottom"], "corner_radius": 0.5, "tap_hole": tap_hole}
 
 
 def _vanity_top_constraints(params: Dict[str, Any]) -> List[str]:
@@ -272,10 +300,13 @@ def _kitchen_l_top_geometry(params: Dict[str, Any]) -> Dict[str, Any]:
     sink_x = sink_offset_left
     sink_y = (depth - sink_width) / 2
     cutouts = [{"type": "sink", "shape": "rounded_rect", "rect": [sink_x, sink_y, sink_length, sink_width], "label": "Polish"}]
+    tap_hole = _tap_hole_geometry(sink_x, sink_y, sink_length, sink_width)
     dimensions = [
         {"from": [0, 0], "to": [total_length, 0], "label": f'{total_length:g}"', "side": "top"},
         {"from": [0, 0], "to": [0, depth], "label": f'{depth:g}"', "side": "left"},
-    ]
+        {"from": [0, depth], "to": [sink_x, depth], "label": f'{sink_offset_left:g}"', "side": "bottom"},
+        {"from": [sink_x, depth], "to": [sink_x + sink_length, depth], "label": f'{sink_length:g}"', "side": "bottom"},
+    ] + tap_hole.pop("dimensions")
     accessories = []
     if include_backsplash:
         accessories.append({"role": "backsplash", "label": f'Backsplash {left_run:g}" x {splash_height:g}"', "w": left_run, "h": splash_height})
@@ -283,7 +314,7 @@ def _kitchen_l_top_geometry(params: Dict[str, Any]) -> Dict[str, Any]:
     if include_side_splash:
         accessories.append({"role": "side_splash_left", "label": f'Side Splash {depth:g}" x {depth:g}"', "w": depth, "h": depth})
         accessories.append({"role": "side_splash_right", "label": f'Side Splash {notch_depth:g}" x {notch_depth:g}"', "w": notch_depth, "h": notch_depth})
-    return {"width_in": total_length, "height_in": depth, "outline": outline, "cutouts": cutouts, "dimensions": dimensions, "notes": [], "accessories": accessories, "edge_marks": ["top", "left", "right", "bottom"], "corner_radius": 0.5}
+    return {"width_in": total_length, "height_in": depth, "outline": outline, "cutouts": cutouts, "dimensions": dimensions, "notes": [], "accessories": accessories, "edge_marks": ["top", "left", "right", "bottom"], "corner_radius": 0.5, "tap_hole": tap_hole}
 
 
 def _kitchen_l_top_constraints(params: Dict[str, Any]) -> List[str]:
