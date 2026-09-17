@@ -38,5 +38,6 @@ jobs:
           gcloud builds submit \
             --project="${{ env.GCP_PROJECT_ID }}" \
             --config=cloudbuild.yaml \
+            --gcs-source-staging-dir=gs://stonedesk-app-ci-staging/source \
             --substitutions=SHORT_SHA=$(git rev-parse --short HEAD) \
             .
