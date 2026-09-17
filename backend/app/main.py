@@ -1290,9 +1290,10 @@ def create_piece(project_id: int, piece: PieceCreate):
 # ── Drawing Generator ────────────────────────────────────────────────────
 # Parametric templates (backend/app/services/drawing_templates.py) produce the
 # SAME canonical piece fields manual Source Data entry produces, so a generated
-# countertop is an ordinary piece to crate planning / cut list / labels. See
-# drawing_templates.py for the template registry and drawing_engine.py for
-# SVG/PDF rendering.
+# countertop is an ordinary piece (or, for vanity/kitchen tops, an ASSEMBLY of
+# a top plus its bundled backsplash/side-splash pieces) to crate planning /
+# cut list / labels. See drawing_templates.py for the template registry and
+# drawing_engine.py for SVG/PDF rendering.
 class DrawingGenerateRequest(BaseModel):
     template_id: str
     params: Dict[str, Any] = {}
@@ -1309,19 +1310,34 @@ def preview_drawing(req: DrawingGenerateRequest):
     try:
         errors = drawing_templates.validate_params(req.template_id, req.params)
         geometry = drawing_templates.build_geometry(req.template_id, req.params)
-        piece_fields = drawing_templates.build_piece_fields(req.template_id, req.params)
+        assembly = drawing_templates.build_assembly(req.template_id, req.params)
     except drawing_templates.TemplateError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {
         "geometry": geometry,
         "svg": render_svg(geometry, {"part": req.part}),
-        "piece_fields": piece_fields,
+        "piece_fields": assembly[0]["fields"],
+        "assembly": assembly,
         "errors": errors,
     }
 
 
+class DrawingPdfRequest(DrawingGenerateRequest):
+    material: str = ""
+    stone_color: str = ""
+    thickness: str = "2CM"
+    qty: int = 1
+    sink_info: str = ""
+    project: str = ""
+    date: str = ""
+    drawn_by: str = ""
+    scale: str = 'NTS'
+    work_ticket: str = ""
+    destinations: List[Dict[str, Any]] = []
+
+
 @app.post("/api/drawing-generator/pdf")
-def export_drawing_pdf(req: DrawingGenerateRequest):
+def export_drawing_pdf(req: DrawingPdfRequest):
     try:
         template = drawing_templates.get_template(req.template_id)
         errors = drawing_templates.validate_params(req.template_id, req.params)
@@ -1330,7 +1346,13 @@ def export_drawing_pdf(req: DrawingGenerateRequest):
         geometry = drawing_templates.build_geometry(req.template_id, req.params)
     except drawing_templates.TemplateError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    pdf_bytes = render_pdf_bytes(geometry, {"part": req.part, "template_name": template["name"]})
+    pdf_bytes = render_pdf_bytes(geometry, {
+        "part": req.part, "template_name": template["name"],
+        "material": req.material, "stone_color": req.stone_color, "thickness": req.thickness,
+        "qty": req.qty or (len(req.destinations) or 1), "sink_info": req.sink_info, "project": req.project,
+        "date": req.date, "drawn_by": req.drawn_by, "scale": req.scale, "work_ticket": req.work_ticket,
+        "destinations": req.destinations,
+    })
     filename = f"{(req.part or template['name']).replace(' ', '_')}.pdf"
     return Response(
         content=pdf_bytes,
@@ -1352,44 +1374,70 @@ class DrawingToPieceRequest(BaseModel):
     material: str = ""
     stone_color: str = ""
     thickness: str = "3CM"
+    piece_ids: Dict[str, int] = {}  # role -> existing piece id, for in-place updates
+
+
+def _assembly_role_docs(project_id: int, req: "DrawingToPieceRequest", assembly: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Builds/updates the piece docs for an assembly, reusing existing ids by
+    role so re-saving a drawing updates its pieces in place instead of
+    duplicating them, and removes accessory pieces the user has unchecked."""
+    common = {
+        "part_no": req.part_no, "qty": req.qty, "building": req.building, "floor": req.floor,
+        "flat": req.flat, "unit": req.unit, "material": req.material, "stone_color": req.stone_color,
+        "thickness": req.thickness, "drawing": req.part or req.part_no,
+    }
+    kept_roles = {item["role"] for item in assembly}
+    for role, piece_id in (req.piece_ids or {}).items():
+        if role not in kept_roles:
+            pieces_col.delete_one({"id": piece_id, "project_id": project_id})
+
+    docs = []
+    for item in assembly:
+        role, fields = item["role"], item["fields"]
+        part_suffix = {"top": "", "backsplash": " - Backsplash", "backsplash_right": " - Backsplash",
+                       "side_splash_left": " - Side Splash L", "side_splash_right": " - Side Splash R"}.get(role, "")
+        piece = PieceCreate(**{**fields, **common, "part": f"{req.part}{part_suffix}"})
+        existing_id = (req.piece_ids or {}).get(role)
+        if existing_id and pieces_col.find_one({"id": existing_id, "project_id": project_id}):
+            doc = _build_piece_doc(project_id, piece, existing_id, extra={
+                "input_source": "generated_drawing", "drawing_template_id": req.template_id,
+                "drawing_template_params": req.params, "assembly_role": role,
+            })
+            pieces_col.update_one({"id": existing_id}, {"$set": doc})
+        else:
+            piece_id = next_sequence("piece")
+            doc = _build_piece_doc(project_id, piece, piece_id, extra={
+                "input_source": "generated_drawing", "drawing_template_id": req.template_id,
+                "drawing_template_params": req.params, "assembly_role": role,
+            })
+            pieces_col.insert_one(doc)
+        docs.append(doc)
+    return docs
 
 
 @app.post("/api/projects/{project_id}/pieces/from-drawing")
 def create_piece_from_drawing(project_id: int, req: DrawingToPieceRequest):
-    """Adds a generated drawing's countertop to a project as a normal piece —
-    the same canonical shape manual entry produces, so it needs no special
-    handling anywhere downstream (crate planning, cut list, labels)."""
+    """Adds a generated drawing's countertop (and any bundled backsplash /
+    side-splash accessories) to a project as normal pieces — the same
+    canonical shape manual entry produces, so they need no special handling
+    anywhere downstream (crate planning, cut list, labels). Passing
+    piece_ids for roles already in the project updates those pieces in
+    place instead of creating duplicates, so re-opening a saved drawing to
+    tweak dimensions or toggle an accessory off doesn't leave orphans."""
     try:
         errors = drawing_templates.validate_params(req.template_id, req.params)
         if errors:
             raise HTTPException(status_code=400, detail="; ".join(errors))
-        piece_fields = drawing_templates.build_piece_fields(req.template_id, req.params)
+        assembly = drawing_templates.build_assembly(req.template_id, req.params)
     except drawing_templates.TemplateError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    piece_data = {
-        **piece_fields,
-        "part": req.part,
-        "part_no": req.part_no,
-        "qty": req.qty,
-        "building": req.building,
-        "floor": req.floor,
-        "flat": req.flat,
-        "unit": req.unit,
-        "material": req.material,
-        "stone_color": req.stone_color,
-        "thickness": req.thickness,
-    }
-    piece = PieceCreate(**piece_data)
-    piece_id = next_sequence("piece")
-    doc = _build_piece_doc(project_id, piece, piece_id, extra={
-        "input_source": "generated_drawing",
-        "drawing_template_id": req.template_id,
-        "drawing_template_params": req.params,
-    })
-    pieces_col.insert_one(doc)
+    docs = _assembly_role_docs(project_id, req, assembly)
     clear_manual_container_plan(project_id)
-    return piece_response(doc)
+    return {
+        "pieces": [piece_response(d) for d in docs],
+        "piece_ids": {d["assembly_role"]: d["id"] for d in docs},
+    }
 
 
 @app.post("/api/projects/{project_id}/pieces/batch")

@@ -69,3 +69,40 @@ def test_render_pdf_bytes_produces_valid_pdf_header():
     geo = dt.build_geometry("island_standard", {"length": 96, "width": 42, "overhang": 12})
     pdf_bytes = render_pdf_bytes(geo, {"part": "Island A"})
     assert pdf_bytes[:5] == b"%PDF-"
+
+
+def test_vanity_top_assembly_bundles_backsplash_and_side_splashes_by_default():
+    assembly = dt.build_assembly("vanity_top", {"length": 55, "depth": 22.5})
+    roles = {item["role"] for item in assembly}
+    assert roles == {"top", "backsplash", "side_splash_left", "side_splash_right"}
+    top = next(i for i in assembly if i["role"] == "top")["fields"]
+    assert top["category"] == "Vanity - Top"
+    backsplash = next(i for i in assembly if i["role"] == "backsplash")["fields"]
+    assert backsplash["category"] == "Vanity - Back Splash"
+    assert backsplash["length"] == 55
+
+
+def test_vanity_top_accessories_can_be_excluded():
+    assembly = dt.build_assembly("vanity_top", {"length": 55, "depth": 22.5, "include_backsplash": False, "include_side_splash": False})
+    roles = {item["role"] for item in assembly}
+    assert roles == {"top"}
+
+
+def test_kitchen_l_top_assembly_bundles_two_backsplashes_and_two_side_splashes():
+    assembly = dt.build_assembly("kitchen_l_top", {"left_run": 63, "right_run": 49, "depth": 25.5})
+    roles = [item["role"] for item in assembly]
+    assert roles.count("backsplash") + roles.count("backsplash_right") == 2
+    assert "side_splash_left" in roles and "side_splash_right" in roles
+    top = next(i for i in assembly if i["role"] == "top")["fields"]
+    assert top["category"] == "Kitchen - Perimeter Tops"
+
+
+def test_island_assembly_never_includes_splash_accessories():
+    # Islands don't get backsplash/side splash in real fab drawings.
+    assembly = dt.build_assembly("island_standard", {"length": 96, "width": 42})
+    assert len(assembly) == 1 and assembly[0]["role"] == "top"
+
+
+def test_build_piece_fields_back_compat_returns_top_only():
+    fields = dt.build_piece_fields("vanity_top", {"length": 55, "depth": 22.5})
+    assert fields["category"] == "Vanity - Top"

@@ -1,13 +1,25 @@
 // Client-side mirror of backend/app/services/drawing_templates.py — kept in
-// lock-step with the same parameter defaults/constraints/geometry formulas so
-// the live preview updates instantly with no network round trip. The server
-// remains the source of truth: validation and canonical piece fields are
-// re-computed server-side on every "Add to Project" / "Download PDF" call.
+// lock-step with the same parameter defaults/constraints/geometry/assembly
+// formulas so the live preview updates instantly with no network round
+// trip. The server remains the source of truth: validation and canonical
+// piece fields are re-computed server-side on every "Add to Project" /
+// "Download PDF" call.
+//
+// Vanity and kitchen tops bundle backsplash + side splash as accessory
+// pieces (matching real StoneDesk fab drawings) rather than as separate
+// templates — include_backsplash / include_side_splash let the user drop
+// either one per job.
 
 const num = (params, key, fallback = 0) => {
   const v = params[key];
   const n = typeof v === 'string' ? parseFloat(v) : v;
   return Number.isFinite(n) ? n : fallback;
+};
+
+const bool = (params, key, fallback = true) => {
+  const v = params[key];
+  if (v === undefined || v === null) return fallback;
+  return !!v;
 };
 
 const checkRange = (errors, label, value, lo, hi) => {
@@ -28,6 +40,7 @@ const islandStandardGeometry = (params) => {
       { from: [0, 0], to: [0, width], label: `${width}"`, side: 'left' },
     ],
     notes: overhang ? [`Overhang: ${overhang}" (relative to cabinet base, not part of cut size)`] : [],
+    accessories: [],
   };
 };
 
@@ -61,6 +74,7 @@ const islandSinkGeometry = (params) => {
       { from: [sinkX, width], to: [sinkX + sinkLength, width], label: `${sinkLength}"`, side: 'bottom' },
     ],
     notes: [],
+    accessories: [],
   };
 };
 
@@ -84,11 +98,131 @@ const islandSinkConstraints = (params) => {
   return errors;
 };
 
+const vanityTopGeometry = (params) => {
+  const length = num(params, 'length', 55);
+  const depth = num(params, 'depth', 22.5);
+  const sinkLength = num(params, 'sink_length', 21.625);
+  const sinkWidth = num(params, 'sink_width', 15);
+  const sinkOffsetLeft = params.sink_offset_left !== '' && params.sink_offset_left != null
+    ? num(params, 'sink_offset_left', (length - sinkLength) / 2)
+    : (length - sinkLength) / 2;
+  const splashHeight = num(params, 'splash_height', 4);
+  const sinkX = sinkOffsetLeft;
+  const sinkY = (depth - sinkWidth) / 2;
+  const accessories = [];
+  if (bool(params, 'include_backsplash', true)) {
+    accessories.push({ role: 'backsplash', label: `Backsplash ${length}" x ${splashHeight}"`, w: length, h: splashHeight });
+  }
+  if (bool(params, 'include_side_splash', true)) {
+    accessories.push({ role: 'side_splash_left', label: `Side Splash ${depth}" x ${splashHeight}"`, w: depth, h: splashHeight });
+    accessories.push({ role: 'side_splash_right', label: `Side Splash ${depth}" x ${splashHeight}"`, w: depth, h: splashHeight });
+  }
+  return {
+    width_in: length,
+    height_in: depth,
+    outline: [[0, 0], [length, 0], [length, depth], [0, depth]],
+    cutouts: [{ type: 'sink', rect: [sinkX, sinkY, sinkLength, sinkWidth], label: 'Sink' }],
+    dimensions: [
+      { from: [0, 0], to: [length, 0], label: `${length}"`, side: 'top' },
+      { from: [0, 0], to: [0, depth], label: `${depth}"`, side: 'left' },
+    ],
+    notes: [],
+    accessories,
+  };
+};
+
+const vanityTopConstraints = (params) => {
+  const errors = [];
+  const length = num(params, 'length', 55);
+  const depth = num(params, 'depth', 22.5);
+  const sinkLength = num(params, 'sink_length', 21.625);
+  const sinkWidth = num(params, 'sink_width', 15);
+  const sinkOffsetLeft = params.sink_offset_left !== '' && params.sink_offset_left != null
+    ? num(params, 'sink_offset_left', (length - sinkLength) / 2)
+    : (length - sinkLength) / 2;
+  const minClear = 3;
+  checkRange(errors, 'Length', length, 24, 120);
+  checkRange(errors, 'Depth', depth, 18, 30);
+  if (sinkLength <= 0 || sinkWidth <= 0) {
+    errors.push('Sink dimensions must be greater than zero.');
+    return errors;
+  }
+  if (sinkOffsetLeft < minClear) errors.push(`Sink is too close to the left edge. Move the sink at least ${minClear}".`);
+  if (sinkOffsetLeft + sinkLength > length - minClear) errors.push(`Sink is too close to the right edge. Move the sink at least ${minClear}" from the right.`);
+  if (sinkWidth > depth - 2 * minClear) errors.push(`Sink is too wide for this vanity depth. Leave at least ${minClear}" front and back.`);
+  return errors;
+};
+
+const kitchenLTopGeometry = (params) => {
+  const leftRun = num(params, 'left_run', 63);
+  const rightRun = num(params, 'right_run', 49);
+  const depth = num(params, 'depth', 44);
+  const notchDepth = num(params, 'notch_depth', 25.5);
+  const sinkLength = num(params, 'sink_length', 33);
+  const sinkWidth = num(params, 'sink_width', 21);
+  const sinkOffsetLeft = params.sink_offset_left !== '' && params.sink_offset_left != null
+    ? num(params, 'sink_offset_left', leftRun / 2 - sinkLength / 2)
+    : leftRun / 2 - sinkLength / 2;
+  const splashHeight = num(params, 'splash_height', 4);
+  const totalLength = leftRun + rightRun;
+  const sinkX = sinkOffsetLeft;
+  const sinkY = (depth - sinkWidth) / 2;
+  const accessories = [];
+  if (bool(params, 'include_backsplash', true)) {
+    accessories.push({ role: 'backsplash', label: `Backsplash ${leftRun}" x ${splashHeight}"`, w: leftRun, h: splashHeight });
+    accessories.push({ role: 'backsplash_right', label: `Backsplash ${rightRun}" x ${splashHeight}"`, w: rightRun, h: splashHeight });
+  }
+  if (bool(params, 'include_side_splash', true)) {
+    accessories.push({ role: 'side_splash_left', label: `Side Splash ${depth}" x ${depth}"`, w: depth, h: depth });
+    accessories.push({ role: 'side_splash_right', label: `Side Splash ${notchDepth}" x ${notchDepth}"`, w: notchDepth, h: notchDepth });
+  }
+  return {
+    width_in: totalLength,
+    height_in: depth,
+    outline: [
+      [0, 0], [totalLength, 0], [totalLength, notchDepth],
+      [leftRun, notchDepth], [leftRun, depth], [0, depth],
+    ],
+    cutouts: [{ type: 'sink', rect: [sinkX, sinkY, sinkLength, sinkWidth], label: 'Sink' }],
+    dimensions: [
+      { from: [0, 0], to: [totalLength, 0], label: `${totalLength}"`, side: 'top' },
+      { from: [0, 0], to: [0, depth], label: `${depth}"`, side: 'left' },
+    ],
+    notes: [],
+    accessories,
+  };
+};
+
+const kitchenLTopConstraints = (params) => {
+  const errors = [];
+  const leftRun = num(params, 'left_run', 63);
+  const rightRun = num(params, 'right_run', 49);
+  const depth = num(params, 'depth', 44);
+  const sinkLength = num(params, 'sink_length', 33);
+  const sinkWidth = num(params, 'sink_width', 21);
+  const sinkOffsetLeft = params.sink_offset_left !== '' && params.sink_offset_left != null
+    ? num(params, 'sink_offset_left', leftRun / 2 - sinkLength / 2)
+    : leftRun / 2 - sinkLength / 2;
+  const minClear = 3;
+  checkRange(errors, 'Left Run', leftRun, 24, 180);
+  checkRange(errors, 'Right Run', rightRun, 18, 120);
+  checkRange(errors, 'Depth', depth, 24, 48);
+  if (sinkLength <= 0 || sinkWidth <= 0) {
+    errors.push('Sink dimensions must be greater than zero.');
+    return errors;
+  }
+  if (sinkOffsetLeft < minClear) errors.push(`Sink is too close to the left edge. Move the sink at least ${minClear}".`);
+  if (sinkOffsetLeft + sinkLength > leftRun - minClear) errors.push(`Sink does not fit on the left run — move it or shorten the sink at least ${minClear}" from the corner.`);
+  if (sinkWidth > depth - 2 * minClear) errors.push(`Sink is too wide for this countertop depth. Leave at least ${minClear}" front and back.`);
+  return errors;
+};
+
 export const DRAWING_TEMPLATES = [
   {
     id: 'island_standard',
     name: 'Standard Island',
     category: 'island',
+    pieceCategory: 'Kitchen - Island Tops',
     parameters: [
       { id: 'length', label: 'Length', unit: 'in', default: 96, min: 24, max: 180 },
       { id: 'width', label: 'Width', unit: 'in', default: 42, min: 18, max: 60 },
@@ -96,11 +230,14 @@ export const DRAWING_TEMPLATES = [
     ],
     geometry: islandStandardGeometry,
     constraints: islandStandardConstraints,
+    matchesPiece: (p) => p.category === 'Kitchen - Island Tops' && (!p.sink_type || p.sink_type === 'No Sink'),
+    paramsFromPiece: (p) => ({ length: p.length, width: p.width }),
   },
   {
     id: 'island_with_sink',
     name: 'Island With Sink',
     category: 'island',
+    pieceCategory: 'Kitchen - Island Tops',
     parameters: [
       { id: 'length', label: 'Length', unit: 'in', default: 96, min: 24, max: 180 },
       { id: 'width', label: 'Width', unit: 'in', default: 42, min: 18, max: 60 },
@@ -111,6 +248,57 @@ export const DRAWING_TEMPLATES = [
     ],
     geometry: islandSinkGeometry,
     constraints: islandSinkConstraints,
+    matchesPiece: (p) => p.category === 'Kitchen - Island Tops' && p.sink_type && p.sink_type !== 'No Sink',
+    paramsFromPiece: (p) => ({
+      length: p.length, width: p.width, sink_length: p.sink_length, sink_width: p.sink_width,
+      sink_offset_left: p.sink_offset_left,
+    }),
+  },
+  {
+    id: 'vanity_top',
+    name: 'Vanity Top',
+    category: 'vanity',
+    pieceCategory: 'Vanity - Top',
+    parameters: [
+      { id: 'length', label: 'Length', unit: 'in', default: 55, min: 24, max: 120 },
+      { id: 'depth', label: 'Depth', unit: 'in', default: 22.5, min: 18, max: 30 },
+      { id: 'sink_length', label: 'Sink Length', unit: 'in', default: 21.625, min: 12, max: 48 },
+      { id: 'sink_width', label: 'Sink Width', unit: 'in', default: 15, min: 10, max: 24 },
+      { id: 'sink_offset_left', label: 'Sink Offset (from left edge)', unit: 'in', default: '', min: 0, max: 120, optional: true },
+      { id: 'splash_height', label: 'Splash Height', unit: 'in', default: 4, min: 2, max: 6 },
+      { id: 'include_backsplash', label: 'Include Backsplash', type: 'boolean', default: true },
+      { id: 'include_side_splash', label: 'Include Side Splashes', type: 'boolean', default: true },
+    ],
+    geometry: vanityTopGeometry,
+    constraints: vanityTopConstraints,
+    paramsFromPiece: (p) => ({
+      length: p.length, depth: p.width, sink_length: p.sink_length, sink_width: p.sink_width,
+      sink_offset_left: p.sink_offset_left,
+    }),
+  },
+  {
+    id: 'kitchen_l_top',
+    name: 'Kitchen Top (L-Shape)',
+    category: 'kitchen',
+    pieceCategory: 'Kitchen - Perimeter Tops',
+    parameters: [
+      { id: 'left_run', label: 'Left Run', unit: 'in', default: 63, min: 24, max: 180 },
+      { id: 'right_run', label: 'Right Run', unit: 'in', default: 49, min: 18, max: 120 },
+      { id: 'depth', label: 'Depth', unit: 'in', default: 44, min: 24, max: 48 },
+      { id: 'notch_depth', label: 'Notch Depth', unit: 'in', default: 25.5, min: 12, max: 48 },
+      { id: 'sink_length', label: 'Sink Length', unit: 'in', default: 33, min: 18, max: 48 },
+      { id: 'sink_width', label: 'Sink Width', unit: 'in', default: 21, min: 14, max: 30 },
+      { id: 'sink_offset_left', label: 'Sink Offset (from left corner)', unit: 'in', default: '', min: 0, max: 180, optional: true },
+      { id: 'splash_height', label: 'Splash Height', unit: 'in', default: 4, min: 2, max: 6 },
+      { id: 'include_backsplash', label: 'Include Backsplash', type: 'boolean', default: true },
+      { id: 'include_side_splash', label: 'Include Side Splashes', type: 'boolean', default: true },
+    ],
+    geometry: kitchenLTopGeometry,
+    constraints: kitchenLTopConstraints,
+    paramsFromPiece: (p) => ({
+      left_run: p.length ? p.length * 0.56 : 63, right_run: p.length ? p.length * 0.44 : 49,
+      depth: p.width, sink_length: p.sink_length, sink_width: p.sink_width, sink_offset_left: p.sink_offset_left,
+    }),
   },
 ];
 
@@ -126,3 +314,18 @@ export const computePreview = (templateId, params) => {
     errors: template.constraints(params),
   };
 };
+
+// Reverse-maps an existing canonical piece (from Source Data, manual or
+// generated) back onto a template + params, so the Drawing Generator can
+// load and let a user view/edit dimensions already entered rather than
+// forcing re-entry of the same numbers.
+export const templateForPiece = (piece) => {
+  if (!piece) return null;
+  const byCategory = DRAWING_TEMPLATES.filter((t) => t.pieceCategory === piece.category);
+  if (!byCategory.length) return null;
+  const specific = byCategory.find((t) => t.matchesPiece && t.matchesPiece(piece));
+  return specific || byCategory[0];
+};
+
+export const paramsFromPiece = (template, piece) =>
+  template && template.paramsFromPiece ? { ...defaultParams(template), ...template.paramsFromPiece(piece) } : defaultParams(template);

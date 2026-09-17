@@ -12,8 +12,12 @@ const DrawingPreview = ({ geometry, title }) => {
   if (!geometry) return null;
   const wIn = geometry.width_in || 96;
   const hIn = geometry.height_in || 42;
-  const vbW = wIn * SCALE + PAD * 2;
-  const vbH = hIn * SCALE + PAD * 2;
+  const accessories = geometry.accessories || [];
+  const accessoryRowH = accessories.length ? 90 : 0;
+  const vbW = Math.max(wIn * SCALE + PAD * 2, 320);
+  const vbH = hIn * SCALE + PAD * 2 + accessoryRowH;
+  let accessoryX = PAD;
+  const accessoryY = hIn * SCALE + PAD + 50;
 
   const dimOffset = (side, [fx, fy], [tx, ty]) => {
     const offset = 16;
@@ -67,6 +71,24 @@ const DrawingPreview = ({ geometry, title }) => {
           </g>
         );
       })}
+      {accessories.length > 0 && (
+        <>
+          <line x1={0} y1={hIn * SCALE + PAD + 20} x2={vbW} y2={hIn * SCALE + PAD + 20} stroke="#e2e8f0" strokeWidth="1" />
+          <text x={PAD} y={hIn * SCALE + PAD + 38} fontSize="9" fill="#94a3b8">Bundled with this top:</text>
+          {accessories.map((acc, i) => {
+            const w = Math.min(acc.w, 60) * 0.9;
+            const h = Math.min(acc.h, 40) * 1.6;
+            const x = accessoryX;
+            accessoryX += w + 28;
+            return (
+              <g key={i}>
+                <rect x={x} y={accessoryY} width={w} height={h} fill="#f8fafc" stroke="#64748b" strokeWidth="1" />
+                <text x={x} y={accessoryY - 6} fontSize="8" fill="#64748b">{acc.label}</text>
+              </g>
+            );
+          })}
+        </>
+      )}
     </svg>
   );
 };
