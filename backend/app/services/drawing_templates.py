@@ -89,6 +89,20 @@ def _corner_radius_label(radius: float) -> Dict[str, Any]:
 SINK_SHAPES = ["oval", "round", "rectangle"]
 
 
+def _cooktop_cutout(x: float, y: float, w: float, d: float, total_length: float) -> Dict[str, Any]:
+    """A cooktop cutout is a separate, sharp-cornered rectangular hole from
+    the sink — Haven's kitchen tops call one out (e.g. "30" ELECTRIC
+    COOKTOP") independent of any sink. Returns the cutout plus the offset
+    dimension locating it along the front edge, mirroring how the sink's
+    own offset-from-edge dimension is drawn."""
+    cutout = {"type": "cooktop", "shape": "rect", "rect": [x, y, w, d], "label": "Cooktop"}
+    dimensions = [
+        {"from": [0, y + d], "to": [x, y + d], "label": f'{x:g}"', "side": "bottom"},
+        {"from": [x, y + d], "to": [x + w, y + d], "label": f'{w:g}"', "side": "bottom"},
+    ]
+    return {"cutout": cutout, "dimensions": dimensions}
+
+
 def _sink_shape_param(default: str) -> Dict[str, Any]:
     # Sink SHAPE is the real distinguishing trait across real fab drawings —
     # e.g. Concord Crossing uses an oval undermount, Saltwell Springs a
@@ -136,6 +150,7 @@ def _island_standard_geometry(params: Dict[str, Any]) -> Dict[str, Any]:
     length = _num(params, "length", 96)
     width = _num(params, "width", 42)
     overhang = _num(params, "overhang", 12)
+    include_cooktop = _bool(params, "include_cooktop", False)
 
     outline = [[0, 0], [length, 0], [length, width], [0, width]]
     dimensions = [
@@ -145,25 +160,57 @@ def _island_standard_geometry(params: Dict[str, Any]) -> Dict[str, Any]:
     notes = []
     if overhang:
         notes.append(f'Overhang: {overhang:g}" (relative to cabinet base, not part of cut size)')
-    return {"width_in": length, "height_in": width, "outline": outline, "cutouts": [], "dimensions": dimensions, "notes": notes, "accessories": [], "edge_marks": ["top", "left", "right", "bottom"], "corner_radius": 0.5}
+    cutouts = []
+    if include_cooktop:
+        # A cooktop cutout is a separate, real capability from a sink — e.g.
+        # Haven's kitchen tops call out a "30" ELECTRIC COOKTOP" cutout on
+        # an otherwise blank island top, independent of any sink.
+        cooktop_w = _num(params, "cooktop_width", 30)
+        cooktop_d = _num(params, "cooktop_depth", 21)
+        cooktop_offset_left = _num(params, "cooktop_offset_left", (length - cooktop_w) / 2)
+        cooktop_y = (width - cooktop_d) / 2
+        cooktop = _cooktop_cutout(cooktop_offset_left, cooktop_y, cooktop_w, cooktop_d, length)
+        cutouts.append(cooktop["cutout"])
+        dimensions += cooktop["dimensions"]
+    return {"width_in": length, "height_in": width, "outline": outline, "cutouts": cutouts, "dimensions": dimensions, "notes": notes, "accessories": [], "edge_marks": ["top", "left", "right", "bottom"], "corner_radius": 0.5}
 
 
 def _island_standard_constraints(params: Dict[str, Any]) -> List[str]:
     errors: List[str] = []
-    _check_range(errors, "Length", _num(params, "length", 96), 24, 180)
-    _check_range(errors, "Width", _num(params, "width", 42), 18, 60)
+    length = _num(params, "length", 96)
+    width = _num(params, "width", 42)
+    _check_range(errors, "Length", length, 24, 180)
+    _check_range(errors, "Width", width, 18, 60)
     _check_range(errors, "Overhang", _num(params, "overhang", 12), 0, 18)
+    if _bool(params, "include_cooktop", False):
+        cooktop_w = _num(params, "cooktop_width", 30)
+        cooktop_d = _num(params, "cooktop_depth", 21)
+        cooktop_offset_left = _num(params, "cooktop_offset_left", (length - cooktop_w) / 2)
+        min_clear = 3.0
+        if cooktop_w <= 0 or cooktop_d <= 0:
+            errors.append("Cooktop dimensions must be greater than zero.")
+        elif cooktop_offset_left < min_clear or cooktop_offset_left + cooktop_w > length - min_clear:
+            errors.append(f'Cooktop is too close to an edge. Leave at least {min_clear:g}" on each side.')
+        elif cooktop_d > width - 2 * min_clear:
+            errors.append(f'Cooktop is too deep for this countertop. Leave at least {min_clear:g}" front and back.')
     return errors
 
 
 def _island_standard_assembly(params: Dict[str, Any]) -> List[Dict[str, Any]]:
+    length = _num(params, "length", 96)
+    include_cooktop = _bool(params, "include_cooktop", False)
+    notes = f'Overhang {_num(params, "overhang", 12):g}"'
+    if include_cooktop:
+        cooktop_w = _num(params, "cooktop_width", 30)
+        cooktop_d = _num(params, "cooktop_depth", 21)
+        notes += f', {cooktop_w:g}"x{cooktop_d:g}" cooktop cutout'
     return [_top({
         "category": "Kitchen - Island Tops",
         "shape_type": "Rectangle",
-        "length": _num(params, "length", 96),
+        "length": length,
         "width": _num(params, "width", 42),
         "sink_type": "No Sink",
-        "notes": f'Overhang {_num(params, "overhang", 12):g}"',
+        "notes": notes,
     })]
 
 
@@ -240,19 +287,28 @@ def _vanity_top_geometry(params: Dict[str, Any]) -> Dict[str, Any]:
     splash_height = _num(params, "splash_height", 4)
     include_backsplash = _bool(params, "include_backsplash", True)
     include_side_splash = _bool(params, "include_side_splash", True)
+    include_sink = _bool(params, "include_sink", True)
 
     sink_shape = params.get("sink_shape", "oval")
     outline = [[0, 0], [length, 0], [length, depth], [0, depth]]
     sink_x = sink_offset_left
     sink_y = (depth - sink_width) / 2
-    cutouts = [_sink_cutout(sink_shape, sink_x, sink_y, sink_length, sink_width)]
-    tap_hole = _tap_hole_geometry(sink_x, sink_y, sink_length, sink_width)
+    cutouts = []
     dimensions = [
         {"from": [0, 0], "to": [length, 0], "label": f'{length:g}"', "side": "top"},
         {"from": [0, 0], "to": [0, depth], "label": f'{depth:g}"', "side": "left"},
-        {"from": [0, depth], "to": [sink_x, depth], "label": f'{sink_offset_left:g}"', "side": "bottom"},
-        {"from": [sink_x, depth], "to": [sink_x + sink_length, depth], "label": f'{sink_length:g}"', "side": "bottom"},
-    ] + tap_hole.pop("dimensions")
+    ]
+    tap_hole = None
+    if include_sink:
+        # "ISLAND/VANITY BLANKS" in real fab drawings (e.g. Haven) are the
+        # same top with no sink cutout at all — a blank slab, not a
+        # separate template. include_sink=False renders exactly that.
+        cutouts.append(_sink_cutout(sink_shape, sink_x, sink_y, sink_length, sink_width))
+        tap_hole = _tap_hole_geometry(sink_x, sink_y, sink_length, sink_width)
+        dimensions += [
+            {"from": [0, depth], "to": [sink_x, depth], "label": f'{sink_offset_left:g}"', "side": "bottom"},
+            {"from": [sink_x, depth], "to": [sink_x + sink_length, depth], "label": f'{sink_length:g}"', "side": "bottom"},
+        ] + tap_hole.pop("dimensions")
     accessories = []
     if include_backsplash:
         accessories.append({"role": "backsplash", "label": f'Backsplash {length:g}" x {splash_height:g}"', "w": length, "h": splash_height})
@@ -266,12 +322,14 @@ def _vanity_top_constraints(params: Dict[str, Any]) -> List[str]:
     errors: List[str] = []
     length = _num(params, "length", 55)
     depth = _num(params, "depth", 22.5)
+    _check_range(errors, "Length", length, 24, 120)
+    _check_range(errors, "Depth", depth, 18, 30)
+    if not _bool(params, "include_sink", True):
+        return errors
     sink_length = _num(params, "sink_length", 21.625)
     sink_width = _num(params, "sink_width", 15)
     sink_offset_left = _num(params, "sink_offset_left", (length - sink_length) / 2)
     min_clear = 3.0
-    _check_range(errors, "Length", length, 24, 120)
-    _check_range(errors, "Depth", depth, 18, 30)
     if sink_length <= 0 or sink_width <= 0:
         errors.append("Sink dimensions must be greater than zero.")
         return errors
@@ -287,22 +345,27 @@ def _vanity_top_constraints(params: Dict[str, Any]) -> List[str]:
 def _vanity_top_assembly(params: Dict[str, Any]) -> List[Dict[str, Any]]:
     length = _num(params, "length", 55)
     depth = _num(params, "depth", 22.5)
-    sink_length = _num(params, "sink_length", 21.625)
-    sink_offset_left = _num(params, "sink_offset_left", (length - sink_length) / 2)
-    sink_offset_right = length - sink_offset_left - sink_length
     splash_height = _num(params, "splash_height", 4)
+    include_sink = _bool(params, "include_sink", True)
 
-    assembly = [_top({
-        "category": "Vanity - Top",
-        "shape_type": "Rectangle",
-        "length": length,
-        "width": depth,
-        "sink_type": "Undermount",
-        "sink_length": sink_length,
-        "sink_width": _num(params, "sink_width", 15),
-        "sink_offset_left": sink_offset_left,
-        "sink_offset_right": sink_offset_right,
-    })]
+    if include_sink:
+        sink_length = _num(params, "sink_length", 21.625)
+        sink_offset_left = _num(params, "sink_offset_left", (length - sink_length) / 2)
+        top_fields = {
+            "category": "Vanity - Top", "shape_type": "Rectangle", "length": length, "width": depth,
+            "sink_type": "Undermount", "sink_length": sink_length,
+            "sink_width": _num(params, "sink_width", 15),
+            "sink_offset_left": sink_offset_left,
+            "sink_offset_right": length - sink_offset_left - sink_length,
+        }
+    else:
+        # "Blank" vanity — same top, no sink cutout (e.g. Haven's "VANITY
+        # BLANKS" pages), matching the manual-entry model's own "No Sink".
+        top_fields = {
+            "category": "Vanity - Top", "shape_type": "Rectangle", "length": length, "width": depth,
+            "sink_type": "No Sink",
+        }
+    assembly = [_top(top_fields)]
     if _bool(params, "include_backsplash", True):
         assembly.append(_backsplash("Vanity - Back Splash", length, splash_height))
     if _bool(params, "include_side_splash", True):
@@ -416,6 +479,10 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"id": "length", "label": "Length", "unit": "in", "type": "dimension", "default": 96, "min": 24, "max": 180, "required": True},
             {"id": "width", "label": "Width", "unit": "in", "type": "dimension", "default": 42, "min": 18, "max": 60, "required": True},
             {"id": "overhang", "label": "Overhang", "unit": "in", "type": "dimension", "default": 12, "min": 0, "max": 18, "required": False},
+            {"id": "include_cooktop", "label": "Include Cooktop Cutout", "type": "boolean", "default": False},
+            {"id": "cooktop_width", "label": "Cooktop Width", "unit": "in", "type": "dimension", "default": 30, "min": 15, "max": 48, "required": False},
+            {"id": "cooktop_depth", "label": "Cooktop Depth", "unit": "in", "type": "dimension", "default": 21, "min": 15, "max": 30, "required": False},
+            {"id": "cooktop_offset_left", "label": "Cooktop Offset (from left edge)", "unit": "in", "type": "dimension", "default": None, "min": 0, "max": 180, "required": False},
         ],
         "geometry_fn": _island_standard_geometry,
         "constraints_fn": _island_standard_constraints,
@@ -450,6 +517,7 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"id": "sink_offset_left", "label": "Sink Offset (from left edge)", "unit": "in", "type": "dimension", "default": None, "min": 0, "max": 120, "required": False},
             {"id": "splash_height", "label": "Splash Height", "unit": "in", "type": "dimension", "default": 4, "min": 2, "max": 6, "required": False},
             _sink_shape_param("oval"),
+            {"id": "include_sink", "label": "Include Sink", "type": "boolean", "default": True},
             {"id": "include_backsplash", "label": "Include Backsplash", "type": "boolean", "default": True},
             {"id": "include_side_splash", "label": "Include Side Splashes", "type": "boolean", "default": True},
         ],

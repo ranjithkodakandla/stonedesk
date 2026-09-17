@@ -133,6 +133,14 @@ def render_svg(geometry: Dict[str, Any], meta: Optional[Dict[str, Any]] = None) 
                 f'<rect x="{px0:.1f}" y="{py0:.1f}" width="{w_px:.1f}" height="{h_px:.1f}" rx="{min(w_px, h_px) * 0.18:.1f}" '
                 f'fill="white" stroke="#334155" stroke-width="1.2"/>'
             )
+        elif cutout.get("type") == "cooktop":
+            # Solid line, sharp corners — a cooktop cutout is a clean cut,
+            # not "cut by template" like a sink, so it reads differently
+            # from the dashed sink cutout convention.
+            parts.append(
+                f'<rect x="{px0:.1f}" y="{py0:.1f}" width="{w_px:.1f}" height="{h_px:.1f}" '
+                f'fill="white" stroke="#0f172a" stroke-width="1.2"/>'
+            )
         else:
             parts.append(
                 f'<rect x="{px0:.1f}" y="{py0:.1f}" width="{w_px:.1f}" height="{h_px:.1f}" '
@@ -486,6 +494,8 @@ def render_pdf_page(doc, geometry: Dict[str, Any], meta: Optional[Dict[str, Any]
             page.draw_oval(fitz.Rect(*p0, *p1), color=gray, width=1.0)
         elif shape == "rounded_rect":
             page.draw_rect(fitz.Rect(*p0, *p1), color=gray, width=1.0, radius=0.15)
+        elif cutout.get("type") == "cooktop":
+            page.draw_rect(fitz.Rect(*p0, *p1), color=black, width=1.0)
         else:
             page.draw_rect(fitz.Rect(*p0, *p1), color=gray, width=1.0, dashes="[2 2] 0")
         label = cutout.get("label")

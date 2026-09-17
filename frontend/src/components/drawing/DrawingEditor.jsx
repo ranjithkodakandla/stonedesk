@@ -269,7 +269,7 @@ const DrawingEditor = ({ mode, projectId, initial, onDone, onCancel }) => {
 
           {template.parameters.some((p) => p.type === 'boolean') && (
             <div>
-              <label className="block text-xs font-semibold text-[#64748b] mb-2 uppercase tracking-wide">Bundled Pieces</label>
+              <label className="block text-xs font-semibold text-[#64748b] mb-2 uppercase tracking-wide">Options</label>
               <div className="flex flex-wrap gap-4">
                 {template.parameters.filter((p) => p.type === 'boolean').map((p) => (
                   <label key={p.id} className="flex items-center gap-2 text-sm text-[#334155]">
@@ -283,7 +283,9 @@ const DrawingEditor = ({ mode, projectId, initial, onDone, onCancel }) => {
                   </label>
                 ))}
               </div>
-              <p className="text-xs text-[#94a3b8] mt-1">Cut from the same job as the top — uncheck if not needed (e.g. against an existing wall).</p>
+              <p className="text-xs text-[#94a3b8] mt-1">
+                Include Sink off produces a blank top (no cutout) — e.g. a spare vanity/island blank. Backsplash/side splash are cut from the same job as the top — uncheck either if not needed (e.g. against an existing wall).
+              </p>
             </div>
           )}
 

@@ -184,3 +184,44 @@ def test_sink_shape_defaults_differ_sensibly_by_template():
     assert vanity_default["default"] == "oval"
     assert kitchen_default["default"] == "rectangle"
     assert set(vanity_default["options"]) == {"oval", "round", "rectangle"}
+
+
+def test_vanity_top_include_sink_false_produces_a_blank_top():
+    # Matches Haven's "VANITY BLANKS" pages: same top, no sink cutout.
+    geo = dt.build_geometry("vanity_top", {"length": 55, "depth": 22.5, "include_sink": False})
+    fields = dt.build_piece_fields("vanity_top", {"length": 55, "depth": 22.5, "include_sink": False})
+    assert geo["cutouts"] == []
+    assert geo["tap_hole"] is None
+    assert fields["sink_type"] == "No Sink"
+    assert "sink_length" not in fields
+
+
+def test_vanity_top_include_sink_false_skips_sink_validation():
+    errors = dt.validate_params("vanity_top", {"length": 55, "depth": 22.5, "include_sink": False, "sink_length": -5})
+    assert errors == []
+
+
+def test_vanity_top_include_sink_true_is_unchanged_default_behavior():
+    fields = dt.build_piece_fields("vanity_top", {"length": 55, "depth": 22.5})
+    assert fields["sink_type"] == "Undermount"
+    assert fields["sink_length"] == 21.625
+
+
+def test_island_cooktop_cutout_is_a_separate_capability_from_sink():
+    geo = dt.build_geometry("island_standard", {"length": 96, "width": 42, "include_cooktop": True, "cooktop_width": 30, "cooktop_depth": 21})
+    assert len(geo["cutouts"]) == 1
+    cutout = geo["cutouts"][0]
+    assert cutout["type"] == "cooktop"
+    assert cutout["rect"][2:] == [30, 21]
+    fields = dt.build_piece_fields("island_standard", {"length": 96, "width": 42, "include_cooktop": True, "cooktop_width": 30, "cooktop_depth": 21})
+    assert "cooktop cutout" in fields["notes"]
+
+
+def test_island_without_cooktop_has_no_cutouts():
+    geo = dt.build_geometry("island_standard", {"length": 96, "width": 42})
+    assert geo["cutouts"] == []
+
+
+def test_island_cooktop_rejects_position_too_close_to_edge():
+    errors = dt.validate_params("island_standard", {"length": 96, "width": 42, "include_cooktop": True, "cooktop_width": 30, "cooktop_offset_left": 1})
+    assert any("too close to an edge" in e for e in errors)

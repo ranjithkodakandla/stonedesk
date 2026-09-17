@@ -128,6 +128,7 @@ const vanityTopGeometry = (params) => {
   const splashHeight = num(params, 'splash_height', 4);
   const sinkX = sinkOffsetLeft;
   const sinkY = (depth - sinkWidth) / 2;
+  const includeSink = bool(params, 'include_sink', true);
   const accessories = [];
   if (bool(params, 'include_backsplash', true)) {
     accessories.push({ role: 'backsplash', label: `Backsplash ${length}" x ${splashHeight}"`, w: length, h: splashHeight });
@@ -140,7 +141,10 @@ const vanityTopGeometry = (params) => {
     width_in: length,
     height_in: depth,
     outline: [[0, 0], [length, 0], [length, depth], [0, depth]],
-    cutouts: [sinkCutout(params.sink_shape || 'oval', sinkX, sinkY, sinkLength, sinkWidth)],
+    // "ISLAND/VANITY BLANKS" in real fab drawings are the same top with no
+    // sink cutout — include_sink=false renders exactly that, not a
+    // separate template.
+    cutouts: includeSink ? [sinkCutout(params.sink_shape || 'oval', sinkX, sinkY, sinkLength, sinkWidth)] : [],
     dimensions: [
       { from: [0, 0], to: [length, 0], label: `${length}"`, side: 'top' },
       { from: [0, 0], to: [0, depth], label: `${depth}"`, side: 'left' },
@@ -156,14 +160,15 @@ const vanityTopConstraints = (params) => {
   const errors = [];
   const length = num(params, 'length', 55);
   const depth = num(params, 'depth', 22.5);
+  checkRange(errors, 'Length', length, 24, 120);
+  checkRange(errors, 'Depth', depth, 18, 30);
+  if (!bool(params, 'include_sink', true)) return errors;
   const sinkLength = num(params, 'sink_length', 21.625);
   const sinkWidth = num(params, 'sink_width', 15);
   const sinkOffsetLeft = params.sink_offset_left !== '' && params.sink_offset_left != null
     ? num(params, 'sink_offset_left', (length - sinkLength) / 2)
     : (length - sinkLength) / 2;
   const minClear = 3;
-  checkRange(errors, 'Length', length, 24, 120);
-  checkRange(errors, 'Depth', depth, 18, 30);
   if (sinkLength <= 0 || sinkWidth <= 0) {
     errors.push('Sink dimensions must be greater than zero.');
     return errors;
@@ -291,6 +296,7 @@ export const DRAWING_TEMPLATES = [
       { id: 'sink_offset_left', label: 'Sink Offset (from left edge)', unit: 'in', default: '', min: 0, max: 120, optional: true },
       { id: 'splash_height', label: 'Splash Height', unit: 'in', default: 4, min: 2, max: 6 },
       { id: 'sink_shape', label: 'Sink Shape', type: 'select', options: SINK_SHAPES, default: 'oval' },
+      { id: 'include_sink', label: 'Include Sink', type: 'boolean', default: true },
       { id: 'include_backsplash', label: 'Include Backsplash', type: 'boolean', default: true },
       { id: 'include_side_splash', label: 'Include Side Splashes', type: 'boolean', default: true },
     ],
