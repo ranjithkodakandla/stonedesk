@@ -1336,7 +1336,6 @@ class DrawingPdfRequest(DrawingGenerateRequest):
     date: str = ""
     drawn_by: str = ""
     scale: str = 'NTS'
-    work_ticket: str = ""
     destinations: List[Dict[str, Any]] = []
 
 
@@ -1355,7 +1354,7 @@ def export_drawing_pdf(req: DrawingPdfRequest):
         "material": req.material, "stone_color": req.stone_color, "thickness": req.thickness,
         "qty": req.qty or (len(req.destinations) or 1), "sink_info": req.sink_info, "project": req.project,
         "building": req.building, "floor": req.floor, "flat": req.flat,
-        "date": req.date, "drawn_by": req.drawn_by, "scale": req.scale, "work_ticket": req.work_ticket,
+        "date": req.date, "drawn_by": req.drawn_by, "scale": req.scale,
         "destinations": req.destinations,
     })
     filename = f"{(req.part or template['name']).replace(' ', '_')}.pdf"
@@ -1513,7 +1512,7 @@ def export_project_drawings_pdf(project_id: int):
             "thickness": first.get("thickness") or project.get("thickness"),
             "qty": sum(p.get("qty", 1) for p in group_pieces),
             "project": project.get("name"),
-            "work_ticket": first.get("part_no"),
+            "date": date.today().isoformat(),
         }
         if len(destinations) > 1:
             # Multiple destinations for this exact drawing: show the matrix,

@@ -246,6 +246,14 @@ def _title_block(page, meta: Dict[str, Any]) -> None:
         destination = " / ".join(f"{label} {v}" for label, v in
                                   (("Bldg", meta.get("building")), ("Fl", meta.get("floor")), ("Flat", meta.get("flat"))) if v)
 
+    from datetime import date as _date
+
+    # "NTS" (Not To Scale) is a real drafting convention, not a placeholder
+    # — spell it out unless the user actually typed a scale ratio, so it
+    # doesn't read like an unexplained default.
+    scale_value = meta.get("scale") or ""
+    scale_display = "NTS (Not To Scale)" if scale_value.upper() in ("", "NTS") else scale_value
+
     y = row(y, "MATERIAL THICKNESS", meta.get("thickness") or "2CM")
     y = row(y, "MATERIAL COLOR", meta.get("stone_color"))
     y = row(y, "QUANTITY", meta.get("qty", 1))
@@ -253,10 +261,9 @@ def _title_block(page, meta: Dict[str, Any]) -> None:
     y = row(y, "SINK INFO", meta.get("sink_info"), value_size=9)
     y = row(y, "PROJECT", meta.get("project"), value_size=9)
     y = row(y, "TITLE", meta.get("part") or meta.get("template_name"), value_size=9)
-    y = row(y, "DATE", meta.get("date"))
+    y = row(y, "DATE", meta.get("date") or _date.today().isoformat())
     y = row(y, "DRAWN BY", meta.get("drawn_by"))
-    y = row(y, "SCALE", meta.get("scale") or "NTS")
-    row(y, "WORK TICKET NUMBER", meta.get("work_ticket"), value_size=13)
+    row(y, "SCALE", scale_display, value_size=9)
 
 
 def _destination_matrix(page, destinations: List[Dict[str, Any]], start_y: float = 470) -> None:
@@ -277,11 +284,12 @@ def _destination_matrix(page, destinations: List[Dict[str, Any]], start_y: float
     x0, y0 = 36, start_y
     col_w, header_h = 46, 14
     # Use the full 30pt row height by default; only shrink it if that would
-    # actually run into the signature line (y=585) — e.g. many floors — so
-    # a normal-sized table isn't needlessly cramped.
+    # actually run past the bottom margin (e.g. many floors) — so a
+    # normal-sized table isn't needlessly cramped.
+    page_bottom = 600
     n_row_slots = len(floors) + 1  # floor rows + the Total row
     natural_table_h = header_h + 30 * n_row_slots
-    row_h = 30 if y0 + natural_table_h <= 585 else max(14, (585 - y0 - header_h) / n_row_slots)
+    row_h = 30 if y0 + natural_table_h <= page_bottom else max(14, (page_bottom - y0 - header_h) / n_row_slots)
     max_flats_per_cell = 3 if row_h >= 26 else (2 if row_h >= 20 else 1)
     total_col_x = x0 + col_w * (len(buildings) + 1)
     table_h = header_h + row_h * (len(floors) + 1)  # + the Total row
@@ -526,10 +534,6 @@ def render_pdf_page(doc, geometry: Dict[str, Any], meta: Optional[Dict[str, Any]
     # Start below whatever notes are present instead of a fixed y, so the
     # two never overlap regardless of how many note lines a template has.
     _destination_matrix(page, meta.get("destinations") or [], start_y=470 + len(notes) * 14 + 20)
-
-    page.draw_line((36, 592), (250, 592), color=gray, width=0.6)
-    page.insert_text((36, 604), "X   Signature of Approval", fontsize=7, color=gray)
-    page.insert_text((300, 604), "Date", fontsize=7, color=gray)
 
 
 def render_pdf_bytes(geometry: Dict[str, Any], meta: Optional[Dict[str, Any]] = None) -> bytes:

@@ -46,7 +46,6 @@ const DrawingEditor = ({ mode, projectId, initial, onDone, onCancel }) => {
   const [stoneColor, setStoneColor] = useState(initial?.stoneColor || '');
   const [thickness, setThickness] = useState(initial?.thickness || '2CM');
   const [sinkInfo, setSinkInfo] = useState(initial?.sinkInfo || '');
-  const [workTicket, setWorkTicket] = useState(initial?.workTicket || '');
   const [drawnBy, setDrawnBy] = useState(initial?.drawnBy || '');
   const [scale, setScale] = useState(initial?.scale || 'NTS');
   const [projectName, setProjectName] = useState(initial?.projectName || '');
@@ -67,7 +66,7 @@ const DrawingEditor = ({ mode, projectId, initial, onDone, onCancel }) => {
     material, stone_color: stoneColor, thickness,
     qty: destMode === 'matrix' ? (parsedDestinations.length || 1) : qty,
     ...(destMode === 'matrix' ? { destinations: parsedDestinations } : { building, floor, flat }),
-    sink_info: sinkInfo, project: projectName, work_ticket: workTicket,
+    sink_info: sinkInfo, project: projectName,
     drawn_by: drawnBy, scale, date: new Date().toISOString().slice(0, 10),
   });
 
@@ -109,7 +108,7 @@ const DrawingEditor = ({ mode, projectId, initial, onDone, onCancel }) => {
       onDone({
         id: initial?.id || `draft-${Date.now()}`,
         templateId, params, part, material, stoneColor, thickness,
-        sinkInfo, workTicket, drawnBy, scale, projectName,
+        sinkInfo, drawnBy, scale, projectName,
       });
       return;
     }
@@ -292,16 +291,18 @@ const DrawingEditor = ({ mode, projectId, initial, onDone, onCancel }) => {
                 <input value={sinkInfo} onChange={(e) => setSinkInfo(e.target.value)} className="input-field w-full" placeholder="Undermount, Model #..." />
               </div>
               <div>
-                <label className="block text-xs text-[#64748b] mb-1">Work Ticket #</label>
-                <input value={workTicket} onChange={(e) => setWorkTicket(e.target.value)} className="input-field w-full" />
-              </div>
-              <div>
                 <label className="block text-xs text-[#64748b] mb-1">Drawn By</label>
                 <input value={drawnBy} onChange={(e) => setDrawnBy(e.target.value)} className="input-field w-full" />
               </div>
               <div>
                 <label className="block text-xs text-[#64748b] mb-1">Scale</label>
-                <input value={scale} onChange={(e) => setScale(e.target.value)} className="input-field w-full" />
+                <input
+                  value={scale}
+                  onChange={(e) => setScale(e.target.value)}
+                  className="input-field w-full"
+                  placeholder='e.g. 1/2" = 1\'-0"'
+                />
+                <p className="text-xs text-[#94a3b8] mt-1">Leave as NTS (Not To Scale) unless this drawing is meant to be measured directly off the page.</p>
               </div>
             </div>
           </details>

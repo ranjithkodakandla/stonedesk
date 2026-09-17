@@ -103,7 +103,6 @@ const DrawingGenerator = ({ mode = 'standalone', projectId = null, project = nul
     stoneColor: draft.stoneColor,
     thickness: draft.thickness,
     sinkInfo: draft.sinkInfo,
-    workTicket: draft.workTicket,
     drawnBy: draft.drawnBy,
     scale: draft.scale,
     projectName: draft.projectName,
