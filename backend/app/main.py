@@ -27,6 +27,8 @@ from .services.deterministic_packing import (
 )
 from .services.planner_v3 import enrich_layout_with_crates, run_v3_planner
 from .services.planner_v3.dispatch_units import build_dispatch_units_from_pieces
+from .services import drawing_templates
+from .services.drawing_engine import render_svg, render_pdf_bytes
 from .services.planner_v3.container_layout import linear_manual_sort_placements
 from .services.planning_engine import (
     COLOR_DENSITIES,
@@ -399,6 +401,9 @@ def piece_response(doc: Dict[str, Any]) -> Dict[str, Any]:
         "building": doc.get("building", ""),
         "floor": doc.get("floor", ""),
         "flat": doc.get("flat", ""),
+        "input_source": doc.get("input_source", "manual_entry"),
+        "drawing_template_id": doc.get("drawing_template_id"),
+        "drawing_template_params": doc.get("drawing_template_params"),
         "created_at": as_iso(doc.get("created_at")),
     }
 
@@ -1223,9 +1228,8 @@ def get_pieces(project_id: int):
     return [piece_response(piece) for piece in pieces]
 
 
-@app.post("/api/projects/{project_id}/pieces/")
-def create_piece(project_id: int, piece: PieceCreate):
-    piece_id = next_sequence("piece")
+def _build_piece_doc(project_id: int, piece: PieceCreate, piece_id: int, extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Canonical piece document shared by manual entry and the drawing generator."""
     edge_polish_machine = piece.edge_polish_machine or calculate_edge_polish_machine(piece.length, piece.width, piece.edge_area)
     doc = {
         "id": piece_id,
@@ -1266,8 +1270,123 @@ def create_piece(project_id: int, piece: PieceCreate):
         "edge_polish_machine": edge_polish_machine,
         "radius": piece.radius,
         "notes": piece.notes,
+        "input_source": "manual_entry",
         "created_at": utc_now(),
     }
+    if extra:
+        doc.update(extra)
+    return doc
+
+
+@app.post("/api/projects/{project_id}/pieces/")
+def create_piece(project_id: int, piece: PieceCreate):
+    piece_id = next_sequence("piece")
+    doc = _build_piece_doc(project_id, piece, piece_id)
+    pieces_col.insert_one(doc)
+    clear_manual_container_plan(project_id)
+    return piece_response(doc)
+
+
+# ── Drawing Generator ────────────────────────────────────────────────────
+# Parametric templates (backend/app/services/drawing_templates.py) produce the
+# SAME canonical piece fields manual Source Data entry produces, so a generated
+# countertop is an ordinary piece to crate planning / cut list / labels. See
+# drawing_templates.py for the template registry and drawing_engine.py for
+# SVG/PDF rendering.
+class DrawingGenerateRequest(BaseModel):
+    template_id: str
+    params: Dict[str, Any] = {}
+    part: str = ""
+
+
+@app.get("/api/drawing-templates")
+def get_drawing_templates():
+    return drawing_templates.list_templates()
+
+
+@app.post("/api/drawing-generator/preview")
+def preview_drawing(req: DrawingGenerateRequest):
+    try:
+        errors = drawing_templates.validate_params(req.template_id, req.params)
+        geometry = drawing_templates.build_geometry(req.template_id, req.params)
+        piece_fields = drawing_templates.build_piece_fields(req.template_id, req.params)
+    except drawing_templates.TemplateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {
+        "geometry": geometry,
+        "svg": render_svg(geometry, {"part": req.part}),
+        "piece_fields": piece_fields,
+        "errors": errors,
+    }
+
+
+@app.post("/api/drawing-generator/pdf")
+def export_drawing_pdf(req: DrawingGenerateRequest):
+    try:
+        template = drawing_templates.get_template(req.template_id)
+        errors = drawing_templates.validate_params(req.template_id, req.params)
+        if errors:
+            raise HTTPException(status_code=400, detail="; ".join(errors))
+        geometry = drawing_templates.build_geometry(req.template_id, req.params)
+    except drawing_templates.TemplateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    pdf_bytes = render_pdf_bytes(geometry, {"part": req.part, "template_name": template["name"]})
+    filename = f"{(req.part or template['name']).replace(' ', '_')}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+class DrawingToPieceRequest(BaseModel):
+    template_id: str
+    params: Dict[str, Any] = {}
+    part: str
+    part_no: str = ""
+    qty: int = 1
+    building: str = ""
+    floor: str = ""
+    flat: str = ""
+    unit: str = ""
+    material: str = ""
+    stone_color: str = ""
+    thickness: str = "3CM"
+
+
+@app.post("/api/projects/{project_id}/pieces/from-drawing")
+def create_piece_from_drawing(project_id: int, req: DrawingToPieceRequest):
+    """Adds a generated drawing's countertop to a project as a normal piece —
+    the same canonical shape manual entry produces, so it needs no special
+    handling anywhere downstream (crate planning, cut list, labels)."""
+    try:
+        errors = drawing_templates.validate_params(req.template_id, req.params)
+        if errors:
+            raise HTTPException(status_code=400, detail="; ".join(errors))
+        piece_fields = drawing_templates.build_piece_fields(req.template_id, req.params)
+    except drawing_templates.TemplateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    piece_data = {
+        **piece_fields,
+        "part": req.part,
+        "part_no": req.part_no,
+        "qty": req.qty,
+        "building": req.building,
+        "floor": req.floor,
+        "flat": req.flat,
+        "unit": req.unit,
+        "material": req.material,
+        "stone_color": req.stone_color,
+        "thickness": req.thickness,
+    }
+    piece = PieceCreate(**piece_data)
+    piece_id = next_sequence("piece")
+    doc = _build_piece_doc(project_id, piece, piece_id, extra={
+        "input_source": "generated_drawing",
+        "drawing_template_id": req.template_id,
+        "drawing_template_params": req.params,
+    })
     pieces_col.insert_one(doc)
     clear_manual_container_plan(project_id)
     return piece_response(doc)

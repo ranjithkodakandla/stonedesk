@@ -3,6 +3,7 @@ import axios from 'axios';
 import Logo from './Logo';
 import ConfigurationScreen from './ConfigurationScreen';
 import CutListLanding from './cutlist/CutListLanding';
+import DrawingGenerator from './drawing/DrawingGenerator';
 import SidebarNav from './SidebarNav';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
@@ -281,6 +282,7 @@ const Dashboard = ({ onOpenProject }) => {
       ),
     },
     { key: 'cutlist', label: 'Cut List', hint: 'Nest parts onto slabs', render: CutListLanding },
+    { key: 'drawing-generator', label: 'Drawing Generator', hint: 'Create a countertop drawing', render: () => <DrawingGenerator mode="standalone" /> },
     { key: 'config', label: 'Configuration', hint: 'Materials & settings', render: ConfigurationScreen },
   ];
 
