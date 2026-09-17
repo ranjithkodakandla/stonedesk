@@ -494,6 +494,7 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
                     <DrawingGenerator
                       mode="lifecycle"
                       projectId={projectId}
+                      project={project}
                       pieces={pieces}
                       onAdded={refreshWorkspace}
                       onContinue={() => setMainTab('planning')}

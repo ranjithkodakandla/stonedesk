@@ -55,20 +55,29 @@ def _check_range(errors: List[str], label: str, value: float, lo: float, hi: flo
 
 
 def _tap_hole_geometry(sink_x: float, sink_y: float, sink_length: float, sink_width: float) -> Dict[str, Any]:
-    """Faucet/tap hole + its offset dimensions and a leader line to the sink
+    """Faucet/tap hole + its offset dimension and a leader line to the sink
     cutout — real fab drawings always call this out (Ø1.5" hole, offset from
-    the back edge, offset from the sink's edge) even when the sink cutout
-    itself is "cut by template" and not separately dimensioned."""
+    the back edge) even when the sink cutout itself is "cut by template" and
+    not separately dimensioned.
+
+    The offset dimension is drawn beside the hole (shifted by half the sink
+    width, a value that itself comes from the entered sink dimensions —
+    never a fixed pixel nudge) rather than straight through its centerline,
+    because the hole sits on the countertop's own horizontal centerline for
+    a centered sink — exactly where the top-edge "X" finish mark also
+    lands. Offsetting the dimension line, not just its label, keeps the
+    tick marks and text clear of that mark instead of overlapping it.
+    """
     hole_offset_back = min(3.0, max(sink_y - 0.5, 0.5))
     hole_x = sink_x + sink_length / 2
     hole_y = hole_offset_back
+    dim_x = hole_x + sink_width / 2 + 1.5
     return {
         "pos": [hole_x, hole_y],
         "diameter": 1.5,
         "leader_to": [sink_x + sink_length * 0.35, sink_y],
         "dimensions": [
-            {"from": [hole_x, 0], "to": [hole_x, hole_y], "label": f'{hole_offset_back:g}"', "side": "none"},
-            {"from": [hole_x, hole_y], "to": [hole_x, sink_y], "label": f'{max(sink_y - hole_y, 0):g}"', "side": "none"},
+            {"from": [dim_x, 0], "to": [dim_x, hole_y], "label": f'{hole_offset_back:g}"', "side": "none"},
         ],
     }
 

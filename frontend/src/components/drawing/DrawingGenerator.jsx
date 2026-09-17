@@ -16,7 +16,7 @@ const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 //    to pull from, so the user adds parts here directly, but the same
 //    review-gallery pattern applies: add a part, it joins the list, review
 //    /edit/download any of them before leaving the page.
-const DrawingGenerator = ({ mode = 'standalone', projectId = null, pieces = [], onAdded = () => {}, onContinue = null }) => {
+const DrawingGenerator = ({ mode = 'standalone', projectId = null, project = null, pieces = [], onAdded = () => {}, onContinue = null }) => {
   const [reviewing, setReviewing] = useState(null); // null = gallery, 'new' = blank editor, else an id
   const [drafts, setDrafts] = useState([]); // standalone-only local review list
   const [isDownloadingAll, setIsDownloadingAll] = useState(false);
@@ -60,6 +60,10 @@ const DrawingGenerator = ({ mode = 'standalone', projectId = null, pieces = [], 
 
   const items = mode === 'lifecycle' ? drawablePieces : drafts;
 
+  // Material/color/thickness/project name are project-level facts, already
+  // captured once in Source Data / the project record — a piece being
+  // reviewed here falls back to those instead of a generic hardcoded
+  // default, so the user never has to re-type what's already on file.
   const buildInitialFromPiece = (piece) => {
     const matched = templateForPiece(piece);
     if (!matched) return null;
@@ -76,12 +80,20 @@ const DrawingGenerator = ({ mode = 'standalone', projectId = null, pieces = [], 
       floor: piece.floor || '',
       flat: piece.flat || '',
       qty: piece.qty || 1,
-      material: piece.material || 'Granite',
-      stoneColor: piece.stone_color || '',
-      thickness: piece.thickness || '2CM',
+      material: piece.material || project?.material || 'Granite',
+      stoneColor: piece.stone_color || project?.stone_color || '',
+      thickness: piece.thickness || project?.thickness || '2CM',
+      projectName: project?.name || '',
       pieceIds,
     };
   };
+
+  const newDrawingDefaults = () => (mode === 'lifecycle' && project ? {
+    material: project.material || 'Granite',
+    thickness: project.thickness || '2CM',
+    stoneColor: project.stone_color || '',
+    projectName: project.name || '',
+  } : null);
 
   const buildInitialFromDraft = (draft) => draft && {
     templateId: draft.templateId,
@@ -100,7 +112,7 @@ const DrawingGenerator = ({ mode = 'standalone', projectId = null, pieces = [], 
 
   if (reviewing !== null) {
     const initial = reviewing === 'new'
-      ? null
+      ? newDrawingDefaults()
       : mode === 'lifecycle'
         ? buildInitialFromPiece(items.find((p) => String(p.id) === String(reviewing)))
         : buildInitialFromDraft(drafts.find((d) => d.id === reviewing));
