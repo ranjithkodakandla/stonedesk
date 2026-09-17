@@ -26,6 +26,21 @@ const checkRange = (errors, label, value, lo, hi) => {
   if (value < lo || value > hi) errors.push(`${label} must be between ${lo}" and ${hi}".`);
 };
 
+export const SINK_SHAPES = ['oval', 'round', 'rectangle'];
+
+// Sink SHAPE (not dimension) is what actually distinguishes the same
+// countertop category across real fab drawings — Concord uses an oval
+// undermount, Saltwell a round one, Haven/Deforest a rectangular one, all
+// at different sizes. Mirrors drawing_templates.py::_sink_cutout.
+const sinkCutout = (shape, x, y, w, h) => {
+  if (shape === 'round') {
+    const d = Math.max(w, h);
+    const cx = x + w / 2, cy = y + h / 2;
+    return { type: 'sink', shape: 'oval', rect: [cx - d / 2, cy - d / 2, d, d], label: 'Polish' };
+  }
+  return { type: 'sink', shape: shape === 'oval' ? 'oval' : 'rounded_rect', rect: [x, y, w, h], label: 'Polish' };
+};
+
 const islandStandardGeometry = (params) => {
   const length = num(params, 'length', 96);
   const width = num(params, 'width', 42);
@@ -68,7 +83,7 @@ const islandSinkGeometry = (params) => {
     width_in: length,
     height_in: width,
     outline: [[0, 0], [length, 0], [length, width], [0, width]],
-    cutouts: [{ type: 'sink', shape: 'oval', rect: [sinkX, sinkY, sinkLength, sinkWidth], label: 'Polish' }],
+    cutouts: [sinkCutout(params.sink_shape || 'oval', sinkX, sinkY, sinkLength, sinkWidth)],
     dimensions: [
       { from: [0, 0], to: [length, 0], label: `${length}"`, side: 'top' },
       { from: [0, 0], to: [0, width], label: `${width}"`, side: 'left' },
@@ -125,7 +140,7 @@ const vanityTopGeometry = (params) => {
     width_in: length,
     height_in: depth,
     outline: [[0, 0], [length, 0], [length, depth], [0, depth]],
-    cutouts: [{ type: 'sink', shape: 'oval', rect: [sinkX, sinkY, sinkLength, sinkWidth], label: 'Polish' }],
+    cutouts: [sinkCutout(params.sink_shape || 'oval', sinkX, sinkY, sinkLength, sinkWidth)],
     dimensions: [
       { from: [0, 0], to: [length, 0], label: `${length}"`, side: 'top' },
       { from: [0, 0], to: [0, depth], label: `${depth}"`, side: 'left' },
@@ -189,7 +204,7 @@ const kitchenLTopGeometry = (params) => {
       [0, 0], [totalLength, 0], [totalLength, notchDepth],
       [leftRun, notchDepth], [leftRun, depth], [0, depth],
     ],
-    cutouts: [{ type: 'sink', shape: 'rounded_rect', rect: [sinkX, sinkY, sinkLength, sinkWidth], label: 'Polish' }],
+    cutouts: [sinkCutout(params.sink_shape || 'rectangle', sinkX, sinkY, sinkLength, sinkWidth)],
     dimensions: [
       { from: [0, 0], to: [totalLength, 0], label: `${totalLength}"`, side: 'top' },
       { from: [0, 0], to: [0, depth], label: `${depth}"`, side: 'left' },
@@ -253,6 +268,7 @@ export const DRAWING_TEMPLATES = [
       { id: 'sink_length', label: 'Sink Length', unit: 'in', default: 30, min: 12, max: 48 },
       { id: 'sink_width', label: 'Sink Width', unit: 'in', default: 18, min: 10, max: 30 },
       { id: 'sink_offset_left', label: 'Sink Offset (from left edge)', unit: 'in', default: '', min: 0, max: 180, optional: true },
+      { id: 'sink_shape', label: 'Sink Shape', type: 'select', options: SINK_SHAPES, default: 'oval' },
     ],
     geometry: islandSinkGeometry,
     constraints: islandSinkConstraints,
@@ -274,6 +290,7 @@ export const DRAWING_TEMPLATES = [
       { id: 'sink_width', label: 'Sink Width', unit: 'in', default: 15, min: 10, max: 24 },
       { id: 'sink_offset_left', label: 'Sink Offset (from left edge)', unit: 'in', default: '', min: 0, max: 120, optional: true },
       { id: 'splash_height', label: 'Splash Height', unit: 'in', default: 4, min: 2, max: 6 },
+      { id: 'sink_shape', label: 'Sink Shape', type: 'select', options: SINK_SHAPES, default: 'oval' },
       { id: 'include_backsplash', label: 'Include Backsplash', type: 'boolean', default: true },
       { id: 'include_side_splash', label: 'Include Side Splashes', type: 'boolean', default: true },
     ],
@@ -298,6 +315,7 @@ export const DRAWING_TEMPLATES = [
       { id: 'sink_width', label: 'Sink Width', unit: 'in', default: 21, min: 14, max: 30 },
       { id: 'sink_offset_left', label: 'Sink Offset (from left corner)', unit: 'in', default: '', min: 0, max: 180, optional: true },
       { id: 'splash_height', label: 'Splash Height', unit: 'in', default: 4, min: 2, max: 6 },
+      { id: 'sink_shape', label: 'Sink Shape', type: 'select', options: SINK_SHAPES, default: 'rectangle' },
       { id: 'include_backsplash', label: 'Include Backsplash', type: 'boolean', default: true },
       { id: 'include_side_splash', label: 'Include Side Splashes', type: 'boolean', default: true },
     ],

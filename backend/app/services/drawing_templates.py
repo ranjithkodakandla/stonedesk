@@ -86,6 +86,33 @@ def _corner_radius_label(radius: float) -> Dict[str, Any]:
     return {"text": f'R.{radius:g} in', "leader_to": [0, 0], "pos": [-14, 14]}
 
 
+SINK_SHAPES = ["oval", "round", "rectangle"]
+
+
+def _sink_shape_param(default: str) -> Dict[str, Any]:
+    # Sink SHAPE is the real distinguishing trait across real fab drawings —
+    # e.g. Concord Crossing uses an oval undermount, Saltwell Springs a
+    # round one, Haven/Deforest a rectangular one, all at different sizes.
+    # Making it a selectable parameter (not baked into the template) means
+    # one "Vanity Top" template covers all three instead of needing a
+    # separate near-duplicate template per sink shape.
+    return {"id": "sink_shape", "label": "Sink Shape", "type": "select", "options": SINK_SHAPES, "default": default}
+
+
+def _sink_cutout(sink_shape: str, sink_x: float, sink_y: float, sink_length: float, sink_width: float) -> Dict[str, Any]:
+    """Normalizes a sink cutout for the given shape. A "round" sink is
+    forced to a true circle (width = length) regardless of what the width
+    field holds — the intelligent default the user doesn't have to compute
+    by hand — while oval/rectangle keep their own length x width."""
+    shape = sink_shape if sink_shape in SINK_SHAPES else "oval"
+    if shape == "round":
+        diameter = max(sink_length, sink_width)
+        cx, cy = sink_x + sink_length / 2, sink_y + sink_width / 2
+        return {"type": "sink", "shape": "oval", "rect": [cx - diameter / 2, cy - diameter / 2, diameter, diameter], "label": "Polish"}
+    render_shape = "oval" if shape == "oval" else "rounded_rect"
+    return {"type": "sink", "shape": render_shape, "rect": [sink_x, sink_y, sink_length, sink_width], "label": "Polish"}
+
+
 def _top(fields: Dict[str, Any]) -> Dict[str, Any]:
     return {"role": "top", "fields": fields}
 
@@ -148,14 +175,11 @@ def _island_sink_geometry(params: Dict[str, Any]) -> Dict[str, Any]:
     sink_width = _num(params, "sink_width", 18)
     sink_offset_left = _num(params, "sink_offset_left", (length - sink_length) / 2)
 
+    sink_shape = params.get("sink_shape", "oval")
     outline = [[0, 0], [length, 0], [length, width], [0, width]]
     sink_x = sink_offset_left
     sink_y = (width - sink_width) / 2
-    cutouts = [{
-        "type": "sink", "shape": "oval",
-        "rect": [sink_x, sink_y, sink_length, sink_width],
-        "label": "Polish",
-    }]
+    cutouts = [_sink_cutout(sink_shape, sink_x, sink_y, sink_length, sink_width)]
     dimensions = [
         {"from": [0, 0], "to": [length, 0], "label": f'{length:g}"', "side": "top"},
         {"from": [0, 0], "to": [0, width], "label": f'{width:g}"', "side": "left"},
@@ -217,10 +241,11 @@ def _vanity_top_geometry(params: Dict[str, Any]) -> Dict[str, Any]:
     include_backsplash = _bool(params, "include_backsplash", True)
     include_side_splash = _bool(params, "include_side_splash", True)
 
+    sink_shape = params.get("sink_shape", "oval")
     outline = [[0, 0], [length, 0], [length, depth], [0, depth]]
     sink_x = sink_offset_left
     sink_y = (depth - sink_width) / 2
-    cutouts = [{"type": "sink", "shape": "oval", "rect": [sink_x, sink_y, sink_length, sink_width], "label": "Polish"}]
+    cutouts = [_sink_cutout(sink_shape, sink_x, sink_y, sink_length, sink_width)]
     tap_hole = _tap_hole_geometry(sink_x, sink_y, sink_length, sink_width)
     dimensions = [
         {"from": [0, 0], "to": [length, 0], "label": f'{length:g}"', "side": "top"},
@@ -306,9 +331,10 @@ def _kitchen_l_top_geometry(params: Dict[str, Any]) -> Dict[str, Any]:
         [0, 0], [total_length, 0], [total_length, notch_depth],
         [left_run, notch_depth], [left_run, depth], [0, depth],
     ]
+    sink_shape = params.get("sink_shape", "rectangle")
     sink_x = sink_offset_left
     sink_y = (depth - sink_width) / 2
-    cutouts = [{"type": "sink", "shape": "rounded_rect", "rect": [sink_x, sink_y, sink_length, sink_width], "label": "Polish"}]
+    cutouts = [_sink_cutout(sink_shape, sink_x, sink_y, sink_length, sink_width)]
     tap_hole = _tap_hole_geometry(sink_x, sink_y, sink_length, sink_width)
     dimensions = [
         {"from": [0, 0], "to": [total_length, 0], "label": f'{total_length:g}"', "side": "top"},
@@ -406,6 +432,7 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"id": "sink_length", "label": "Sink Length", "unit": "in", "type": "dimension", "default": 30, "min": 12, "max": 48, "required": True},
             {"id": "sink_width", "label": "Sink Width", "unit": "in", "type": "dimension", "default": 18, "min": 10, "max": 30, "required": True},
             {"id": "sink_offset_left", "label": "Sink Offset (from left edge)", "unit": "in", "type": "dimension", "default": None, "min": 0, "max": 180, "required": False},
+            _sink_shape_param("oval"),
         ],
         "geometry_fn": _island_sink_geometry,
         "constraints_fn": _island_sink_constraints,
@@ -422,6 +449,7 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"id": "sink_width", "label": "Sink Width", "unit": "in", "type": "dimension", "default": 15, "min": 10, "max": 24, "required": True},
             {"id": "sink_offset_left", "label": "Sink Offset (from left edge)", "unit": "in", "type": "dimension", "default": None, "min": 0, "max": 120, "required": False},
             {"id": "splash_height", "label": "Splash Height", "unit": "in", "type": "dimension", "default": 4, "min": 2, "max": 6, "required": False},
+            _sink_shape_param("oval"),
             {"id": "include_backsplash", "label": "Include Backsplash", "type": "boolean", "default": True},
             {"id": "include_side_splash", "label": "Include Side Splashes", "type": "boolean", "default": True},
         ],
@@ -442,6 +470,7 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"id": "sink_width", "label": "Sink Width", "unit": "in", "type": "dimension", "default": 21, "min": 14, "max": 30, "required": True},
             {"id": "sink_offset_left", "label": "Sink Offset (from left corner)", "unit": "in", "type": "dimension", "default": None, "min": 0, "max": 180, "required": False},
             {"id": "splash_height", "label": "Splash Height", "unit": "in", "type": "dimension", "default": 4, "min": 2, "max": 6, "required": False},
+            _sink_shape_param("rectangle"),
             {"id": "include_backsplash", "label": "Include Backsplash", "type": "boolean", "default": True},
             {"id": "include_side_splash", "label": "Include Side Splashes", "type": "boolean", "default": True},
         ],

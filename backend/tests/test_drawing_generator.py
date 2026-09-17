@@ -155,3 +155,32 @@ def test_render_pdf_bytes_with_matrix_destinations_shows_table_not_row():
     assert "Bldg #'s / Floor" in text
     assert "103" in text and "107" in text and "203" in text
     assert "3 destinations" in text  # sidebar points at the table instead of listing them inline
+
+
+def test_sink_shape_is_selectable_and_not_baked_into_the_template():
+    # Same template, same dimensions — only sink_shape differs. Real fab
+    # drawings show the same countertop category (Vanity Top) with an oval,
+    # round, or rectangular sink depending on the project; shape, not
+    # dimension, is what actually distinguishes them.
+    params = {"length": 55, "depth": 22.5, "sink_length": 21.625, "sink_width": 15}
+    oval = dt.build_geometry("vanity_top", {**params, "sink_shape": "oval"})["cutouts"][0]
+    rect = dt.build_geometry("vanity_top", {**params, "sink_shape": "rectangle"})["cutouts"][0]
+    assert oval["shape"] == "oval"
+    assert rect["shape"] == "rounded_rect"
+    assert oval["rect"] == rect["rect"] == [16.6875, 3.75, 21.625, 15.0]
+
+
+def test_round_sink_is_forced_to_a_true_circle():
+    # A "round" sink shouldn't need the user to separately compute a
+    # matching width — StoneDesk should apply that intelligently.
+    geo = dt.build_geometry("vanity_top", {"length": 55, "depth": 22.5, "sink_length": 21.625, "sink_width": 15, "sink_shape": "round"})
+    x, y, w, h = geo["cutouts"][0]["rect"]
+    assert w == h == 21.625
+
+
+def test_sink_shape_defaults_differ_sensibly_by_template():
+    vanity_default = next(p for p in dt.get_template("vanity_top")["parameters"] if p["id"] == "sink_shape")
+    kitchen_default = next(p for p in dt.get_template("kitchen_l_top")["parameters"] if p["id"] == "sink_shape")
+    assert vanity_default["default"] == "oval"
+    assert kitchen_default["default"] == "rectangle"
+    assert set(vanity_default["options"]) == {"oval", "round", "rectangle"}

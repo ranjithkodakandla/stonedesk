@@ -74,7 +74,14 @@ const DrawingGenerator = ({ mode = 'standalone', projectId = null, project = nul
     if (!pieceIds.top) pieceIds.top = piece.id;
     return {
       templateId: matched.id,
-      params: paramsFromPiece(matched, piece),
+      // A piece the generator itself created carries its exact generation
+      // params (including sink_shape) — use those verbatim so re-opening
+      // it doesn't silently reset the sink back to the template default.
+      // Only pieces with no such record (e.g. entered manually) fall back
+      // to the lossy dimension-based reverse mapping.
+      params: piece.drawing_template_id === matched.id && piece.drawing_template_params
+        ? piece.drawing_template_params
+        : paramsFromPiece(matched, piece),
       part: piece.part || '',
       building: piece.building || '',
       floor: piece.floor || '',
@@ -222,7 +229,11 @@ const PartCard = ({ mode, item, onReview }) => {
   const geometry = useMemo(() => {
     if (mode === 'lifecycle') {
       const t = templateForPiece(item);
-      return t ? computePreview(t.id, paramsFromPiece(t, item)).geometry : null;
+      if (!t) return null;
+      const params = item.drawing_template_id === t.id && item.drawing_template_params
+        ? item.drawing_template_params
+        : paramsFromPiece(t, item);
+      return computePreview(t.id, params).geometry;
     }
     return computePreview(item.templateId, item.params).geometry;
   }, [mode, item]);

@@ -224,7 +224,7 @@ const DrawingEditor = ({ mode, projectId, initial, onDone, onCancel }) => {
           <div>
             <label className="block text-xs font-semibold text-[#64748b] mb-2 uppercase tracking-wide">Dimensions</label>
             <div className="grid grid-cols-2 gap-3">
-              {template.parameters.filter((p) => p.type !== 'boolean').map((p) => (
+              {template.parameters.filter((p) => p.type !== 'boolean' && p.type !== 'select').map((p) => (
                 <div key={p.id}>
                   <label className="block text-xs text-[#64748b] mb-1">{p.label}{p.optional ? ' (optional)' : ''}</label>
                   <div className="relative">
@@ -241,6 +241,31 @@ const DrawingEditor = ({ mode, projectId, initial, onDone, onCancel }) => {
               ))}
             </div>
           </div>
+
+          {template.parameters.filter((p) => p.type === 'select').map((p) => (
+            <div key={p.id}>
+              <label className="block text-xs font-semibold text-[#64748b] mb-2 uppercase tracking-wide">{p.label}</label>
+              <div className="flex flex-wrap gap-2">
+                {p.options.map((opt) => (
+                  <button
+                    key={opt}
+                    type="button"
+                    onClick={() => setParam(p.id, opt)}
+                    className={`px-4 py-2 rounded-full text-sm font-medium border capitalize transition-all ${
+                      (params[p.id] ?? p.default) === opt
+                        ? 'bg-[#1d4ed8] text-white border-[#1d4ed8]'
+                        : 'bg-white text-[#334155] border-[#cbd5e1] hover:bg-[#f8fafc]'
+                    }`}
+                  >
+                    {opt}
+                  </button>
+                ))}
+              </div>
+              {(params[p.id] ?? p.default) === 'round' && (
+                <p className="text-xs text-[#94a3b8] mt-1">Round sinks are drawn as a true circle sized to the larger of Sink Length/Width — no need to make them match by hand.</p>
+              )}
+            </div>
+          ))}
 
           {template.parameters.some((p) => p.type === 'boolean') && (
             <div>
@@ -300,7 +325,7 @@ const DrawingEditor = ({ mode, projectId, initial, onDone, onCancel }) => {
                   value={scale}
                   onChange={(e) => setScale(e.target.value)}
                   className="input-field w-full"
-                  placeholder='e.g. 1/2" = 1\'-0"'
+                  placeholder={'e.g. 1/2" = 1\'-0"'}
                 />
                 <p className="text-xs text-[#94a3b8] mt-1">Leave as NTS (Not To Scale) unless this drawing is meant to be measured directly off the page.</p>
               </div>
