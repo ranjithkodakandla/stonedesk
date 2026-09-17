@@ -38,7 +38,7 @@ jobs:
           project_id: ${{ env.GCP_PROJECT_ID }}
 
       - name: Set quota project explicitly
-        run: gcloud auth application-default set-quota-project "${{ env.GCP_PROJECT_ID }}"
+        run: gcloud config set billing/quota_project "${{ env.GCP_PROJECT_ID }}"
 
       - name: Submit build to Cloud Build
         run: |
