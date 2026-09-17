@@ -26,6 +26,19 @@ def _unit(a, b):
     return (dx / length, dy / length) if length else (0, 0)
 
 
+def _edge_profile_callout(page, x: float, y: float, caption: str, black, gray, thickness_label: str = '2 CM = 3/4"') -> None:
+    """Small edge-profile diagram (thickness callout + eased-corner detail +
+    caption) that real fab drawings always print top-left/top-right — e.g.
+    "2 CM = 3/4"" over a chamfered corner sketch, captioned "X = Edge & Sink
+    Detail (Eased)" or "X = Splash Detail (Eased)"."""
+    page.draw_line((x, y + 18), (x + 36, y + 18), color=black, width=1)
+    page.draw_line((x + 36, y + 18), (x + 36, y + 4), color=black, width=1)
+    page.draw_line((x + 36, y + 4), (x + 48, y - 6), color=black, width=1)
+    page.insert_text((x, y - 12), thickness_label, fontsize=7, color=gray)
+    page.insert_text((x + 50, y - 2), '1/8" Radius', fontsize=6.5, color=gray)
+    page.insert_text((x, y + 30), caption, fontsize=6.5, color=gray)
+
+
 def _is_vertical_accessory(role: str) -> bool:
     # Side splashes stand upright against the cabinet side — real fab
     # drawings draw them as a tall narrow strip (long dimension vertical),
@@ -163,11 +176,34 @@ def _title_block(page, meta: Dict[str, Any]) -> None:
     x0, y0, x1 = 612, 20, 776
     page.draw_rect(fitz.Rect(x0, y0, x1, 592), color=gray, width=0.75)
 
+    box_w = x1 - x0 - 12
+
+    def _wrap(text, size, max_w, max_lines=2):
+        chars_per_line = max(6, int(max_w / (size * 0.52)))
+        words = str(text).split()
+        lines, line = [], ""
+        for w in words:
+            candidate = f"{line} {w}".strip()
+            if len(candidate) > chars_per_line and line:
+                lines.append(line)
+                line = w
+            else:
+                line = candidate
+        if line:
+            lines.append(line)
+        if len(lines) > max_lines:
+            lines = lines[:max_lines]
+            lines[-1] = lines[-1][: chars_per_line - 1] + "…"
+        return lines or [""]
+
     def row(y, label, value, value_size=11, gap=14):
         page.insert_text((x0 + 6, y), label, fontsize=7, color=gray)
-        page.insert_text((x0 + 6, y + gap), str(value or NA), fontsize=value_size, color=black)
-        page.draw_line((x0, y + gap + 6), (x1, y + gap + 6), color=gray, width=0.4)
-        return y + gap + 16
+        lines = _wrap(value or NA, value_size, box_w, max_lines=2 if value_size <= 9 else 1)
+        for i, line in enumerate(lines):
+            page.insert_text((x0 + 6, y + gap + i * (value_size + 2)), line, fontsize=value_size, color=black)
+        block_h = gap + len(lines) * (value_size + 2) + 4
+        page.draw_line((x0, y + block_h), (x1, y + block_h), color=gray, width=0.4)
+        return y + block_h + 10
 
     y = y0 + 14
     page.insert_text((x0 + 6, y), "EDGE TYPE & FINISH KEY", fontsize=7, color=gray)
@@ -257,15 +293,52 @@ def render_pdf_bytes(geometry: Dict[str, Any], meta: Optional[Dict[str, Any]] = 
 
     _title_block(page, meta)
 
-    page.insert_text((36, 36), meta.get("part") or meta.get("template_name", "Countertop Drawing"), fontsize=16, color=black)
+    # Top corners: the edge-profile + eased-corner callouts every real fab
+    # drawing carries (thickness, radius, "Edge & Sink Detail" / "Splash
+    # Detail" captions) — see reference drawings. The piece name itself only
+    # appears in the title block's TITLE field, not as a heading here.
+    quarter_label = '1 1/4"' if (meta.get("thickness") or "").upper() == "3CM" else '3/4"'
+    thickness_label = f'{meta.get("thickness") or "2CM"} = {quarter_label}'
+    _edge_profile_callout(page, 40, 45, "X = Edge & Sink Detail (Eased)", black, gray, thickness_label)
+    _edge_profile_callout(page, 460, 45, "X = Splash Detail (Eased)", black, gray, thickness_label)
     subtitle = " - ".join(str(v) for v in [meta.get("building"), meta.get("floor"), meta.get("flat")] if v)
     if subtitle:
-        page.insert_text((36, 54), subtitle, fontsize=10, color=gray)
-    page.draw_line((36, 62), (600, 62), color=gray, width=0.5)
+        page.insert_text((36, 92), subtitle, fontsize=8, color=gray)
+
+    accessories = geometry.get("accessories") or []
+    backsplashes = [a for a in accessories if a.get("role", "").startswith("backsplash")]
+    side_splashes = [a for a in accessories if _is_vertical_accessory(a.get("role", ""))]
+    # Two side splashes of the same job are cut identically — show one
+    # representative strip (labeled x2) rather than two duplicates, matching
+    # how the real drawings only draw distinct pieces once.
+    unique_side_splashes = []
+    seen_sizes = set()
+    for acc in side_splashes:
+        key = (round(acc["w"], 2), round(acc["h"], 2))
+        if key in seen_sizes:
+            for u in unique_side_splashes:
+                if (round(u["w"], 2), round(u["h"], 2)) == key:
+                    u["count"] = u.get("count", 1) + 1
+            continue
+        seen_sizes.add(key)
+        unique_side_splashes.append({**acc, "count": 1})
+
+    # Backsplash strip(s), drawn flat above the main plan.
+    bx, by = 60, 110
+    px_per_in = 1.7
+    for acc in backsplashes:
+        bw, bh = min(acc["w"] * px_per_in, 220), min(acc["h"] * px_per_in, 16)
+        page.draw_rect(fitz.Rect(bx, by, bx + bw, by + bh), color=gray, width=0.8)
+        for fx in (bx + 6, bx + bw / 2, bx + bw - 6):
+            page.insert_text((fx - 3, by + bh / 2 + 3), "X", fontsize=7, color=gray, fontname="hebo")
+        page.draw_line((bx, by - 8), (bx + bw, by - 8), color=gray, width=0.5)
+        page.insert_text((bx + bw / 2 - 12, by - 11), f'{acc["w"]:g}"', fontsize=7, color=gray)
+        page.insert_text((bx, by + bh + 12), acc.get("label", ""), fontsize=7, color=gray)
+        bx += bw + 30
 
     w_in = geometry.get("width_in", 96) or 96
     h_in = geometry.get("height_in", 42) or 42
-    draw_x0, draw_y0, draw_x1, draw_y1 = 60, 90, 596, 380
+    draw_x0, draw_y0, draw_x1, draw_y1 = 60, 165, 470, 400
     avail_w, avail_h = draw_x1 - draw_x0, draw_y1 - draw_y0
     scale = min(avail_w / w_in, avail_h / h_in) if w_in and h_in else 1
     rw, rh = w_in * scale, h_in * scale
@@ -319,29 +392,34 @@ def render_pdf_bytes(geometry: Dict[str, Any], meta: Optional[Dict[str, Any]] = 
         mx, my = (f[0] + t[0]) / 2, (f[1] + t[1]) / 2
         page.insert_text((mx - len(label) * 2.5, my - 4), label, fontsize=8, color=gray)
 
-    accessories = geometry.get("accessories") or []
-    if accessories:
-        ax, ay = 60, 420
-        page.insert_text((ax, ay - 22), "Bundled accessories (included with this top):", fontsize=8, color=gray)
-        px_per_in = 2.0
-        for acc in accessories:
-            vertical = _is_vertical_accessory(acc.get("role", ""))
-            long_dim, short_dim = min(acc["w"] * px_per_in, 85), min(acc["h"] * px_per_in, 18)
-            aw, ah = (short_dim, long_dim) if vertical else (long_dim, short_dim)
-            label_w = len(acc.get("label", "")) * 3.6
-            page.draw_rect(fitz.Rect(ax, ay, ax + aw, ay + ah), color=gray, width=0.8)
-            if vertical:
-                for fy in (ay + 8, ay + ah / 2, ay + ah - 8):
-                    page.insert_text((ax + aw / 2 - 3, fy + 3), "X", fontsize=7, color=gray, fontname="hebo")
-                page.draw_line((ax - 10, ay), (ax - 10, ay + ah), color=gray, width=0.5)
-                page.insert_text((ax - 24, ay + ah / 2), f'{acc["h"]:g}"', fontsize=7, color=gray)
-            else:
-                for fx in (ax + 8, ax + aw / 2, ax + aw - 8):
-                    page.insert_text((fx - 3, ay + ah / 2 + 3), "X", fontsize=7, color=gray, fontname="hebo")
-                page.draw_line((ax, ay - 8), (ax + aw, ay - 8), color=gray, width=0.5)
-                page.insert_text((ax + aw / 2 - 10, ay - 11), f'{acc["w"]:g}"', fontsize=7, color=gray)
-            page.insert_text((ax, ay + max(ah, 14) + 12), acc.get("label", ""), fontsize=7, color=gray)
-            ax += max(aw, label_w) + 30
+    # Side splash strip(s), drawn upright to the right of the main plan —
+    # matching how the real drawings place them beside the sink view rather
+    # than in a separate caption row.
+    sx = draw_x1 + 12
+    sy = draw_y0
+    sidebar_x0 = 605  # never draw past here — the title block sidebar starts at 612
+    for acc in unique_side_splashes:
+        is_square = abs(acc["w"] - acc["h"]) < 0.1
+        if is_square:
+            # Kitchen side splashes are square (cut to the depth of the run),
+            # not a narrow strip — draw them at their real aspect ratio.
+            sw = sh = min(acc["w"] * 0.5, 36)
+        else:
+            sw, sh = min(acc["h"] * px_per_in, 16), min(acc["w"] * px_per_in, 130)
+        if sx + sw > sidebar_x0:
+            break
+        page.draw_rect(fitz.Rect(sx, sy, sx + sw, sy + sh), color=gray, width=0.8)
+        for fy in (sy + 8, sy + sh / 2, sy + sh - 8):
+            page.insert_text((sx + sw / 2 - 3, fy + 3), "X", fontsize=7, color=gray, fontname="hebo")
+        page.draw_line((sx - 8, sy), (sx - 8, sy + sh), color=gray, width=0.5)
+        page.insert_text((sx - 22, sy + sh / 2), f'{acc["h"]:g}"', fontsize=7, color=gray)
+        base_label = f'Side Splash {acc["w"]:g}" sq' if is_square else acc.get("label", "")
+        label = base_label + (f' (x{acc["count"]})' if acc.get("count", 1) > 1 else "")
+        label_max_chars = max(4, int((sidebar_x0 - (sx - 6)) / 3.3))
+        if len(label) > label_max_chars:
+            label = label[: label_max_chars - 1] + "…"
+        page.insert_text((sx - 6, sy + sh + 14), label, fontsize=6.5, color=gray)
+        sx += max(sw + 20, len(label) * 3.3) + 6
 
     for note_i, note in enumerate(geometry.get("notes", [])):
         page.insert_text((36, 470 + note_i * 14), note, fontsize=9, color=gray)
