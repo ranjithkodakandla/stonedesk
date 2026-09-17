@@ -13,11 +13,22 @@ const DrawingPreview = ({ geometry, title }) => {
   const wIn = geometry.width_in || 96;
   const hIn = geometry.height_in || 42;
   const accessories = geometry.accessories || [];
-  const accessoryRowH = accessories.length ? 90 : 0;
+  // Side splashes stand upright against the cabinet side — drawn as a tall
+  // narrow strip (long dimension vertical). Backsplash runs flat along the
+  // wall (long dimension horizontal). Rendering both the same way (as the
+  // old code did) made side splashes look like short, wide backsplashes.
+  const isVertical = (role) => (role || '').startsWith('side_splash');
+  const accessoryDims = (acc) => {
+    const long = Math.min(acc.w, 36) * 2.4;
+    const short = Math.min(acc.h, 8) * 2.4;
+    return isVertical(acc.role) ? { w: short, h: long } : { w: long, h: short };
+  };
+  const accessoryMaxH = accessories.reduce((m, acc) => Math.max(m, accessoryDims(acc).h), 0);
+  const accessoryRowH = accessories.length ? accessoryMaxH + 90 : 0;
   const vbW = Math.max(wIn * SCALE + PAD * 2, 320);
   const vbH = hIn * SCALE + PAD * 2 + accessoryRowH;
   let accessoryX = PAD;
-  const accessoryY = hIn * SCALE + PAD + 50;
+  const accessoryY = hIn * SCALE + PAD + 55;
 
   const dimOffset = (side, [fx, fy], [tx, ty]) => {
     const offset = 16;
@@ -123,17 +134,31 @@ const DrawingPreview = ({ geometry, title }) => {
           <line x1={0} y1={hIn * SCALE + PAD + 20} x2={vbW} y2={hIn * SCALE + PAD + 20} stroke="#e2e8f0" strokeWidth="1" />
           <text x={PAD} y={hIn * SCALE + PAD + 38} fontSize="9" fill="#94a3b8">Bundled with this top:</text>
           {accessories.map((acc, i) => {
-            const w = Math.min(acc.w, 60) * 0.9;
-            const h = Math.min(acc.h, 40) * 1.6;
+            const { w, h } = accessoryDims(acc);
+            const vertical = isVertical(acc.role);
             const x = accessoryX;
-            accessoryX += w + 28;
+            accessoryX += Math.max(w, (acc.label || '').length * 4.8) + 26;
             return (
               <g key={i}>
                 <rect x={x} y={accessoryY} width={w} height={h} fill="#f8fafc" stroke="#64748b" strokeWidth="1" />
-                <text x={x + 4} y={accessoryY + h / 2 + 3} fontSize="7" fontWeight="700" fill="#64748b">X</text>
-                <text x={x + w - 8} y={accessoryY + h / 2 + 3} fontSize="7" fontWeight="700" fill="#64748b">X</text>
-                <text x={x + w / 2 - 3} y={accessoryY + 10} fontSize="7" fontWeight="700" fill="#64748b">X</text>
-                <text x={x} y={accessoryY - 6} fontSize="8" fill="#64748b">{acc.label}</text>
+                {vertical ? (
+                  <>
+                    <text x={x + w / 2} y={accessoryY + 10} fontSize="7" fontWeight="700" fill="#64748b" textAnchor="middle">X</text>
+                    <text x={x + w / 2} y={accessoryY + h / 2 + 3} fontSize="7" fontWeight="700" fill="#64748b" textAnchor="middle">X</text>
+                    <text x={x + w / 2} y={accessoryY + h - 6} fontSize="7" fontWeight="700" fill="#64748b" textAnchor="middle">X</text>
+                    <line x1={x - 10} y1={accessoryY} x2={x - 10} y2={accessoryY + h} stroke="#94a3b8" strokeWidth="0.6" />
+                    <text x={x - 14} y={accessoryY + h / 2} fontSize="7" fill="#94a3b8" textAnchor="end">{acc.h}"</text>
+                  </>
+                ) : (
+                  <>
+                    <text x={x + 6} y={accessoryY + h / 2 + 3} fontSize="7" fontWeight="700" fill="#64748b" textAnchor="middle">X</text>
+                    <text x={x + w / 2} y={accessoryY + h / 2 + 3} fontSize="7" fontWeight="700" fill="#64748b" textAnchor="middle">X</text>
+                    <text x={x + w - 6} y={accessoryY + h / 2 + 3} fontSize="7" fontWeight="700" fill="#64748b" textAnchor="middle">X</text>
+                    <line x1={x} y1={accessoryY - 10} x2={x + w} y2={accessoryY - 10} stroke="#94a3b8" strokeWidth="0.6" />
+                    <text x={x + w / 2} y={accessoryY - 13} fontSize="7" fill="#94a3b8" textAnchor="middle">{acc.w}"</text>
+                  </>
+                )}
+                <text x={x} y={accessoryY + Math.max(h, 14) + 14} fontSize="8" fill="#64748b">{acc.label}</text>
               </g>
             );
           })}

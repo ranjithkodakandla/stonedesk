@@ -26,13 +26,34 @@ def _unit(a, b):
     return (dx / length, dy / length) if length else (0, 0)
 
 
+def _is_vertical_accessory(role: str) -> bool:
+    # Side splashes stand upright against the cabinet side — real fab
+    # drawings draw them as a tall narrow strip (long dimension vertical),
+    # while backsplash runs flat along the wall (long dimension horizontal).
+    return role.startswith("side_splash")
+
+
 def _accessory_svg(parts: List[str], accessories: List[Dict[str, Any]], start_x: int, start_y: int, scale: float) -> None:
     x = start_x
+    px_per_in = 2.4  # accessory strips draw at their own smaller scale to fit the row
     for acc in accessories:
-        w, h = acc["w"] * scale * 0.5, acc["h"] * scale * 0.5
+        vertical = _is_vertical_accessory(acc.get("role", ""))
+        long_dim, short_dim = min(acc["w"] * px_per_in, 130), min(acc["h"] * px_per_in, 20)
+        w, h = (short_dim, long_dim) if vertical else (long_dim, short_dim)
         parts.append(f'<rect x="{x:.1f}" y="{start_y:.1f}" width="{w:.1f}" height="{h:.1f}" fill="#f8fafc" stroke="#64748b" stroke-width="1"/>')
-        parts.append(f'<text x="{x:.1f}" y="{start_y - 6:.1f}" font-size="8" fill="#64748b">{acc.get("label", "")}</text>')
-        x += w + 24
+        if vertical:
+            for fy in (start_y + 6, start_y + h / 2, start_y + h - 6):
+                parts.append(f'<text x="{x + w / 2:.1f}" y="{fy:.1f}" font-size="7" font-weight="700" fill="#64748b" text-anchor="middle">X</text>')
+            parts.append(f'<line x1="{x - 10:.1f}" y1="{start_y:.1f}" x2="{x - 10:.1f}" y2="{start_y + h:.1f}" stroke="#94a3b8" stroke-width="0.6"/>')
+            parts.append(f'<text x="{x - 14:.1f}" y="{start_y + h / 2:.1f}" font-size="7" fill="#94a3b8" text-anchor="end">{acc["h"]:g}"</text>')
+        else:
+            for fx in (x + 6, x + w / 2, x + w - 6):
+                parts.append(f'<text x="{fx:.1f}" y="{start_y + h / 2 + 3:.1f}" font-size="7" font-weight="700" fill="#64748b" text-anchor="middle">X</text>')
+            parts.append(f'<line x1="{x:.1f}" y1="{start_y - 10:.1f}" x2="{x + w:.1f}" y2="{start_y - 10:.1f}" stroke="#94a3b8" stroke-width="0.6"/>')
+            parts.append(f'<text x="{x + w / 2:.1f}" y="{start_y - 13:.1f}" font-size="7" fill="#94a3b8" text-anchor="middle">{acc["w"]:g}"</text>')
+        label = acc.get("label", "")
+        parts.append(f'<text x="{x:.1f}" y="{start_y + max(h, 14) + 14:.1f}" font-size="8" fill="#64748b">{label}</text>')
+        x += max(w, len(label) * 4.6) + 26
 
 
 def render_svg(geometry: Dict[str, Any], meta: Optional[Dict[str, Any]] = None) -> str:
@@ -42,7 +63,8 @@ def render_svg(geometry: Dict[str, Any], meta: Optional[Dict[str, Any]] = None) 
     h_in = geometry.get("height_in", 42) or 42
     scale = 6  # px per inch
     accessories = geometry.get("accessories") or []
-    accessory_row_h = 90 if accessories else 0
+    accessory_max_h = max((min(a["w"] * 2.4, 130) if _is_vertical_accessory(a.get("role", "")) else min(a["h"] * 2.4, 20) for a in accessories), default=0)
+    accessory_row_h = (accessory_max_h + 90) if accessories else 0
     vb_w = max(w_in * scale + pad * 2, 300)
     vb_h = h_in * scale + pad * 2 + accessory_row_h
 
@@ -299,15 +321,27 @@ def render_pdf_bytes(geometry: Dict[str, Any], meta: Optional[Dict[str, Any]] = 
 
     accessories = geometry.get("accessories") or []
     if accessories:
-        ax, ay = 60, 410
-        page.insert_text((ax, ay - 8), "Bundled accessories (included with this top):", fontsize=8, color=gray)
+        ax, ay = 60, 420
+        page.insert_text((ax, ay - 22), "Bundled accessories (included with this top):", fontsize=8, color=gray)
+        px_per_in = 2.0
         for acc in accessories:
-            aw, ah = min(acc["w"] * 2, 160), min(acc["h"] * 2, 40)
+            vertical = _is_vertical_accessory(acc.get("role", ""))
+            long_dim, short_dim = min(acc["w"] * px_per_in, 85), min(acc["h"] * px_per_in, 18)
+            aw, ah = (short_dim, long_dim) if vertical else (long_dim, short_dim)
+            label_w = len(acc.get("label", "")) * 3.6
             page.draw_rect(fitz.Rect(ax, ay, ax + aw, ay + ah), color=gray, width=0.8)
-            for side, pos in (("left", (ax + 4, ay + ah / 2)), ("right", (ax + aw - 4, ay + ah / 2)), ("top", (ax + aw / 2, ay + 4))):
-                page.insert_text((pos[0] - 3, pos[1] + 3), "X", fontsize=7, color=gray, fontname="hebo")
-            page.insert_text((ax, ay + ah + 10), acc.get("label", ""), fontsize=7, color=gray)
-            ax += aw + 24
+            if vertical:
+                for fy in (ay + 8, ay + ah / 2, ay + ah - 8):
+                    page.insert_text((ax + aw / 2 - 3, fy + 3), "X", fontsize=7, color=gray, fontname="hebo")
+                page.draw_line((ax - 10, ay), (ax - 10, ay + ah), color=gray, width=0.5)
+                page.insert_text((ax - 24, ay + ah / 2), f'{acc["h"]:g}"', fontsize=7, color=gray)
+            else:
+                for fx in (ax + 8, ax + aw / 2, ax + aw - 8):
+                    page.insert_text((fx - 3, ay + ah / 2 + 3), "X", fontsize=7, color=gray, fontname="hebo")
+                page.draw_line((ax, ay - 8), (ax + aw, ay - 8), color=gray, width=0.5)
+                page.insert_text((ax + aw / 2 - 10, ay - 11), f'{acc["w"]:g}"', fontsize=7, color=gray)
+            page.insert_text((ax, ay + max(ah, 14) + 12), acc.get("label", ""), fontsize=7, color=gray)
+            ax += max(aw, label_w) + 30
 
     for note_i, note in enumerate(geometry.get("notes", [])):
         page.insert_text((36, 470 + note_i * 14), note, fontsize=9, color=gray)
