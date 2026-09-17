@@ -104,6 +104,10 @@ const DrawingPreview = ({ geometry, title }) => {
               <ellipse cx={px0 + wPx / 2} cy={py0 + hPx / 2} rx={wPx / 2} ry={hPx / 2} fill="white" stroke="#334155" strokeWidth="1.2" />
             ) : shape === 'rounded_rect' ? (
               <rect x={px0} y={py0} width={wPx} height={hPx} rx={Math.min(wPx, hPx) * 0.18} fill="white" stroke="#334155" strokeWidth="1.2" />
+            ) : cutout.type === 'cooktop' ? (
+              // Solid line, sharp corners — a real cut, not "cut by
+              // template" like a sink's dashed convention.
+              <rect x={px0} y={py0} width={wPx} height={hPx} fill="white" stroke="#0f172a" strokeWidth="1.2" />
             ) : (
               <rect x={px0} y={py0} width={wPx} height={hPx} fill="white" stroke="#334155" strokeWidth="1.2" strokeDasharray="4,2" />
             )}

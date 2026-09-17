@@ -41,19 +41,40 @@ const sinkCutout = (shape, x, y, w, h) => {
   return { type: 'sink', shape: shape === 'oval' ? 'oval' : 'rounded_rect', rect: [x, y, w, h], label: 'Polish' };
 };
 
+// A cooktop cutout is a separate, real capability from a sink — sharp
+// corners, solid line (not the dashed "cut by template" sink convention).
+// Mirrors drawing_templates.py::_cooktop_cutout.
+const cooktopCutout = (x, y, w, d) => ({ type: 'cooktop', shape: 'rect', rect: [x, y, w, d], label: 'Cooktop' });
+
 const islandStandardGeometry = (params) => {
   const length = num(params, 'length', 96);
   const width = num(params, 'width', 42);
   const overhang = num(params, 'overhang', 12);
+  const includeCooktop = bool(params, 'include_cooktop', false);
+  const dimensions = [
+    { from: [0, 0], to: [length, 0], label: `${length}"`, side: 'top' },
+    { from: [0, 0], to: [0, width], label: `${width}"`, side: 'left' },
+  ];
+  const cutouts = [];
+  if (includeCooktop) {
+    const cooktopW = num(params, 'cooktop_width', 30);
+    const cooktopD = num(params, 'cooktop_depth', 21);
+    const cooktopOffsetLeft = params.cooktop_offset_left !== '' && params.cooktop_offset_left != null
+      ? num(params, 'cooktop_offset_left', (length - cooktopW) / 2)
+      : (length - cooktopW) / 2;
+    const cooktopY = (width - cooktopD) / 2;
+    cutouts.push(cooktopCutout(cooktopOffsetLeft, cooktopY, cooktopW, cooktopD));
+    dimensions.push(
+      { from: [0, cooktopY + cooktopD], to: [cooktopOffsetLeft, cooktopY + cooktopD], label: `${cooktopOffsetLeft}"`, side: 'bottom' },
+      { from: [cooktopOffsetLeft, cooktopY + cooktopD], to: [cooktopOffsetLeft + cooktopW, cooktopY + cooktopD], label: `${cooktopW}"`, side: 'bottom' },
+    );
+  }
   return {
     width_in: length,
     height_in: width,
     outline: [[0, 0], [length, 0], [length, width], [0, width]],
-    cutouts: [],
-    dimensions: [
-      { from: [0, 0], to: [length, 0], label: `${length}"`, side: 'top' },
-      { from: [0, 0], to: [0, width], label: `${width}"`, side: 'left' },
-    ],
+    cutouts,
+    dimensions,
     notes: overhang ? [`Overhang: ${overhang}" (relative to cabinet base, not part of cut size)`] : [],
     accessories: [],
     edgeMarks: ['top', 'left', 'right', 'bottom'],
@@ -63,9 +84,26 @@ const islandStandardGeometry = (params) => {
 
 const islandStandardConstraints = (params) => {
   const errors = [];
-  checkRange(errors, 'Length', num(params, 'length', 96), 24, 180);
-  checkRange(errors, 'Width', num(params, 'width', 42), 18, 60);
+  const length = num(params, 'length', 96);
+  const width = num(params, 'width', 42);
+  checkRange(errors, 'Length', length, 24, 180);
+  checkRange(errors, 'Width', width, 18, 60);
   checkRange(errors, 'Overhang', num(params, 'overhang', 12), 0, 18);
+  if (bool(params, 'include_cooktop', false)) {
+    const cooktopW = num(params, 'cooktop_width', 30);
+    const cooktopD = num(params, 'cooktop_depth', 21);
+    const cooktopOffsetLeft = params.cooktop_offset_left !== '' && params.cooktop_offset_left != null
+      ? num(params, 'cooktop_offset_left', (length - cooktopW) / 2)
+      : (length - cooktopW) / 2;
+    const minClear = 3;
+    if (cooktopW <= 0 || cooktopD <= 0) {
+      errors.push('Cooktop dimensions must be greater than zero.');
+    } else if (cooktopOffsetLeft < minClear || cooktopOffsetLeft + cooktopW > length - minClear) {
+      errors.push(`Cooktop is too close to an edge. Leave at least ${minClear}" on each side.`);
+    } else if (cooktopD > width - 2 * minClear) {
+      errors.push(`Cooktop is too deep for this countertop. Leave at least ${minClear}" front and back.`);
+    }
+  }
   return errors;
 };
 
@@ -255,6 +293,10 @@ export const DRAWING_TEMPLATES = [
       { id: 'length', label: 'Length', unit: 'in', default: 96, min: 24, max: 180 },
       { id: 'width', label: 'Width', unit: 'in', default: 42, min: 18, max: 60 },
       { id: 'overhang', label: 'Overhang', unit: 'in', default: 12, min: 0, max: 18 },
+      { id: 'include_cooktop', label: 'Include Cooktop Cutout', type: 'boolean', default: false },
+      { id: 'cooktop_width', label: 'Cooktop Width', unit: 'in', default: 30, min: 15, max: 48 },
+      { id: 'cooktop_depth', label: 'Cooktop Depth', unit: 'in', default: 21, min: 15, max: 30 },
+      { id: 'cooktop_offset_left', label: 'Cooktop Offset (from left edge)', unit: 'in', default: '', min: 0, max: 180, optional: true },
     ],
     geometry: islandStandardGeometry,
     constraints: islandStandardConstraints,
