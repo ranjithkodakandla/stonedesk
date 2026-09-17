@@ -1327,6 +1327,9 @@ class DrawingPdfRequest(DrawingGenerateRequest):
     stone_color: str = ""
     thickness: str = "2CM"
     qty: int = 1
+    building: str = ""
+    floor: str = ""
+    flat: str = ""
     sink_info: str = ""
     project: str = ""
     date: str = ""
@@ -1350,6 +1353,7 @@ def export_drawing_pdf(req: DrawingPdfRequest):
         "part": req.part, "template_name": template["name"],
         "material": req.material, "stone_color": req.stone_color, "thickness": req.thickness,
         "qty": req.qty or (len(req.destinations) or 1), "sink_info": req.sink_info, "project": req.project,
+        "building": req.building, "floor": req.floor, "flat": req.flat,
         "date": req.date, "drawn_by": req.drawn_by, "scale": req.scale, "work_ticket": req.work_ticket,
         "destinations": req.destinations,
     })

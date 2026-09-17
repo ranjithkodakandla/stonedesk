@@ -53,6 +53,7 @@ const DrawingEditor = ({ mode, projectId, initial, onDone, onCancel }) => {
   const pdfPayload = () => ({
     template_id: templateId, params, part,
     material, stone_color: stoneColor, thickness, qty,
+    building, floor, flat,
     sink_info: sinkInfo, project: projectName, work_ticket: workTicket,
     drawn_by: drawnBy, scale, date: new Date().toISOString().slice(0, 10),
   });

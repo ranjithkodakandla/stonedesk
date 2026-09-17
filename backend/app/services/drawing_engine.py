@@ -237,9 +237,13 @@ def _title_block(page, meta: Dict[str, Any]) -> None:
     page.draw_line((x0, y + 4), (x1, y + 4), color=gray, width=0.4)
     y += 16
 
+    destination = " / ".join(f"{label} {v}" for label, v in
+                              (("Bldg", meta.get("building")), ("Fl", meta.get("floor")), ("Flat", meta.get("flat"))) if v)
+
     y = row(y, "MATERIAL THICKNESS", meta.get("thickness") or "2CM")
     y = row(y, "MATERIAL COLOR", meta.get("stone_color"))
     y = row(y, "QUANTITY", meta.get("qty", 1))
+    y = row(y, "DESTINATION", destination, value_size=9)
     y = row(y, "SINK INFO", meta.get("sink_info"), value_size=9)
     y = row(y, "PROJECT", meta.get("project"), value_size=9)
     y = row(y, "TITLE", meta.get("part") or meta.get("template_name"), value_size=9)
@@ -327,9 +331,9 @@ def render_pdf_page(doc, geometry: Dict[str, Any], meta: Optional[Dict[str, Any]
     thickness_label = f'{meta.get("thickness") or "2CM"} = {quarter_label}'
     _edge_profile_callout(page, 40, 45, "X = Edge & Sink Detail (Eased)", black, gray, thickness_label)
     _edge_profile_callout(page, 460, 45, "X = Splash Detail (Eased)", black, gray, thickness_label)
-    subtitle = " - ".join(str(v) for v in [meta.get("building"), meta.get("floor"), meta.get("flat")] if v)
-    if subtitle:
-        page.insert_text((36, 92), subtitle, fontsize=8, color=gray)
+    # Building/floor/flat is the sidebar's DESTINATION row (see
+    # _title_block) — kept in one place, in one format, rather than
+    # duplicated here with different formatting.
 
     accessories = geometry.get("accessories") or []
     backsplashes = [a for a in accessories if a.get("role", "").startswith("backsplash")]
