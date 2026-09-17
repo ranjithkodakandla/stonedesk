@@ -1,0 +1,42 @@
+name: Deploy to Cloud Run
+
+# Fires only on the actual push to master that happens the moment a PR merges.
+# Deliberately NOT triggered on pull_request — PRs should just run checks, not deploy.
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  id-token: write   # required for Workload Identity Federation
+  contents: read
+
+env:
+  GCP_PROJECT_ID: stonedesk-app
+  WORKLOAD_IDENTITY_PROVIDER: projects/149130710868/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider
+  DEPLOY_SERVICE_ACCOUNT: github-actions-deployer@stonedesk-app.iam.gserviceaccount.com
+
+jobs:
+  deploy:
+    name: Build and deploy (Cloud Build)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (Workload Identity Federation)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Submit build to Cloud Build
+        run: |
+          gcloud builds submit \
+            --project="${{ env.GCP_PROJECT_ID }}" \
+            --config=cloudbuild.yaml \
+            --substitutions=SHORT_SHA=$(git rev-parse --short HEAD) \
+            .
