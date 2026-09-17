@@ -86,7 +86,7 @@ def _island_standard_geometry(params: Dict[str, Any]) -> Dict[str, Any]:
     notes = []
     if overhang:
         notes.append(f'Overhang: {overhang:g}" (relative to cabinet base, not part of cut size)')
-    return {"width_in": length, "height_in": width, "outline": outline, "cutouts": [], "dimensions": dimensions, "notes": notes, "accessories": []}
+    return {"width_in": length, "height_in": width, "outline": outline, "cutouts": [], "dimensions": dimensions, "notes": notes, "accessories": [], "edge_marks": ["top", "left", "right", "bottom"], "corner_radius": 0.5}
 
 
 def _island_standard_constraints(params: Dict[str, Any]) -> List[str]:
@@ -120,9 +120,9 @@ def _island_sink_geometry(params: Dict[str, Any]) -> Dict[str, Any]:
     sink_x = sink_offset_left
     sink_y = (width - sink_width) / 2
     cutouts = [{
-        "type": "sink",
+        "type": "sink", "shape": "oval",
         "rect": [sink_x, sink_y, sink_length, sink_width],
-        "label": "Sink",
+        "label": "Polish",
     }]
     dimensions = [
         {"from": [0, 0], "to": [length, 0], "label": f'{length:g}"', "side": "top"},
@@ -130,7 +130,8 @@ def _island_sink_geometry(params: Dict[str, Any]) -> Dict[str, Any]:
         {"from": [0, width], "to": [sink_x, width], "label": f'{sink_offset_left:g}"', "side": "bottom"},
         {"from": [sink_x, width], "to": [sink_x + sink_length, width], "label": f'{sink_length:g}"', "side": "bottom"},
     ]
-    return {"width_in": length, "height_in": width, "outline": outline, "cutouts": cutouts, "dimensions": dimensions, "notes": [], "accessories": []}
+    edge_marks = ["top", "left", "right", "bottom"]
+    return {"width_in": length, "height_in": width, "outline": outline, "cutouts": cutouts, "dimensions": dimensions, "notes": [], "accessories": [], "edge_marks": edge_marks, "corner_radius": 0.5}
 
 
 def _island_sink_constraints(params: Dict[str, Any]) -> List[str]:
@@ -185,7 +186,7 @@ def _vanity_top_geometry(params: Dict[str, Any]) -> Dict[str, Any]:
     outline = [[0, 0], [length, 0], [length, depth], [0, depth]]
     sink_x = sink_offset_left
     sink_y = (depth - sink_width) / 2
-    cutouts = [{"type": "sink", "rect": [sink_x, sink_y, sink_length, sink_width], "label": "Sink"}]
+    cutouts = [{"type": "sink", "shape": "oval", "rect": [sink_x, sink_y, sink_length, sink_width], "label": "Polish"}]
     dimensions = [
         {"from": [0, 0], "to": [length, 0], "label": f'{length:g}"', "side": "top"},
         {"from": [0, 0], "to": [0, depth], "label": f'{depth:g}"', "side": "left"},
@@ -196,7 +197,7 @@ def _vanity_top_geometry(params: Dict[str, Any]) -> Dict[str, Any]:
     if include_side_splash:
         accessories.append({"role": "side_splash_left", "label": f'Side Splash {depth:g}" x {splash_height:g}"', "w": depth, "h": splash_height})
         accessories.append({"role": "side_splash_right", "label": f'Side Splash {depth:g}" x {splash_height:g}"', "w": depth, "h": splash_height})
-    return {"width_in": length, "height_in": depth, "outline": outline, "cutouts": cutouts, "dimensions": dimensions, "notes": [], "accessories": accessories}
+    return {"width_in": length, "height_in": depth, "outline": outline, "cutouts": cutouts, "dimensions": dimensions, "notes": [], "accessories": accessories, "edge_marks": ["top", "left", "right", "bottom"], "corner_radius": 0.5}
 
 
 def _vanity_top_constraints(params: Dict[str, Any]) -> List[str]:
@@ -270,7 +271,7 @@ def _kitchen_l_top_geometry(params: Dict[str, Any]) -> Dict[str, Any]:
     ]
     sink_x = sink_offset_left
     sink_y = (depth - sink_width) / 2
-    cutouts = [{"type": "sink", "rect": [sink_x, sink_y, sink_length, sink_width], "label": "Sink"}]
+    cutouts = [{"type": "sink", "shape": "rounded_rect", "rect": [sink_x, sink_y, sink_length, sink_width], "label": "Polish"}]
     dimensions = [
         {"from": [0, 0], "to": [total_length, 0], "label": f'{total_length:g}"', "side": "top"},
         {"from": [0, 0], "to": [0, depth], "label": f'{depth:g}"', "side": "left"},
@@ -282,7 +283,7 @@ def _kitchen_l_top_geometry(params: Dict[str, Any]) -> Dict[str, Any]:
     if include_side_splash:
         accessories.append({"role": "side_splash_left", "label": f'Side Splash {depth:g}" x {depth:g}"', "w": depth, "h": depth})
         accessories.append({"role": "side_splash_right", "label": f'Side Splash {notch_depth:g}" x {notch_depth:g}"', "w": notch_depth, "h": notch_depth})
-    return {"width_in": total_length, "height_in": depth, "outline": outline, "cutouts": cutouts, "dimensions": dimensions, "notes": [], "accessories": accessories}
+    return {"width_in": total_length, "height_in": depth, "outline": outline, "cutouts": cutouts, "dimensions": dimensions, "notes": [], "accessories": accessories, "edge_marks": ["top", "left", "right", "bottom"], "corner_radius": 0.5}
 
 
 def _kitchen_l_top_constraints(params: Dict[str, Any]) -> List[str]:

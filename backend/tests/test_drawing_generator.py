@@ -61,7 +61,7 @@ def test_render_svg_contains_dimensions_and_cutout():
     geo = dt.build_geometry("island_with_sink", {"length": 96, "width": 42, "sink_length": 30, "sink_width": 18, "sink_offset_left": 20})
     svg = render_svg(geo, {"part": "Island A"})
     assert svg.startswith("<svg")
-    assert "Sink" in svg
+    assert "Polish" in svg
     assert "Island A" in svg
 
 

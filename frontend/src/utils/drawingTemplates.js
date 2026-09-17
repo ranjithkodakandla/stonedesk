@@ -41,6 +41,8 @@ const islandStandardGeometry = (params) => {
     ],
     notes: overhang ? [`Overhang: ${overhang}" (relative to cabinet base, not part of cut size)`] : [],
     accessories: [],
+    edgeMarks: ['top', 'left', 'right', 'bottom'],
+    cornerRadius: 0.5,
   };
 };
 
@@ -66,7 +68,7 @@ const islandSinkGeometry = (params) => {
     width_in: length,
     height_in: width,
     outline: [[0, 0], [length, 0], [length, width], [0, width]],
-    cutouts: [{ type: 'sink', rect: [sinkX, sinkY, sinkLength, sinkWidth], label: 'Sink' }],
+    cutouts: [{ type: 'sink', shape: 'oval', rect: [sinkX, sinkY, sinkLength, sinkWidth], label: 'Polish' }],
     dimensions: [
       { from: [0, 0], to: [length, 0], label: `${length}"`, side: 'top' },
       { from: [0, 0], to: [0, width], label: `${width}"`, side: 'left' },
@@ -75,6 +77,8 @@ const islandSinkGeometry = (params) => {
     ],
     notes: [],
     accessories: [],
+    edgeMarks: ['top', 'left', 'right', 'bottom'],
+    cornerRadius: 0.5,
   };
 };
 
@@ -121,13 +125,15 @@ const vanityTopGeometry = (params) => {
     width_in: length,
     height_in: depth,
     outline: [[0, 0], [length, 0], [length, depth], [0, depth]],
-    cutouts: [{ type: 'sink', rect: [sinkX, sinkY, sinkLength, sinkWidth], label: 'Sink' }],
+    cutouts: [{ type: 'sink', shape: 'oval', rect: [sinkX, sinkY, sinkLength, sinkWidth], label: 'Polish' }],
     dimensions: [
       { from: [0, 0], to: [length, 0], label: `${length}"`, side: 'top' },
       { from: [0, 0], to: [0, depth], label: `${depth}"`, side: 'left' },
     ],
     notes: [],
     accessories,
+    edgeMarks: ['top', 'left', 'right', 'bottom'],
+    cornerRadius: 0.5,
   };
 };
 
@@ -183,13 +189,15 @@ const kitchenLTopGeometry = (params) => {
       [0, 0], [totalLength, 0], [totalLength, notchDepth],
       [leftRun, notchDepth], [leftRun, depth], [0, depth],
     ],
-    cutouts: [{ type: 'sink', rect: [sinkX, sinkY, sinkLength, sinkWidth], label: 'Sink' }],
+    cutouts: [{ type: 'sink', shape: 'rounded_rect', rect: [sinkX, sinkY, sinkLength, sinkWidth], label: 'Polish' }],
     dimensions: [
       { from: [0, 0], to: [totalLength, 0], label: `${totalLength}"`, side: 'top' },
       { from: [0, 0], to: [0, depth], label: `${depth}"`, side: 'left' },
     ],
     notes: [],
     accessories,
+    edgeMarks: ['top', 'left', 'right', 'bottom'],
+    cornerRadius: 0.5,
   };
 };
 

@@ -1,19 +1,29 @@
 """
 Renders template geometry (see drawing_templates.py) to SVG and PDF.
 
-Geometry is plain data — an outline polygon, rectangular cutouts, dimension-
-line hints, and bundled accessory pieces (backsplash/side splash), all in
-inches — so the same geometry produced for a live browser preview can also
-be turned into a downloadable SVG or a fabrication-style PDF without
-recomputation.
+Geometry is plain data — an outline polygon, rectangular/oval cutouts,
+dimension-line hints, edge finish marks, and bundled accessory pieces
+(backsplash/side splash), all in inches — so the same geometry produced for
+a live browser preview can also be turned into a downloadable SVG or a
+fabrication-style PDF without recomputation.
 
 The PDF title block (Edge Type Key Code, Material, Sink Info, Project,
-Title, Date/Drawn By/Scale/Work Ticket #, destination matrix) mirrors the
-layout of real StoneDesk fab drawings so a generated drawing looks like the
-documents fabricators already work from, not a bare dimensioned rectangle.
+Title, Date/Drawn By/Scale/Work Ticket #, destination matrix) and drawing
+conventions (oval "Polish" sink cutout, eased-edge X marks, rounded front
+corner, arrow-style dimension lines) mirror real StoneDesk fab drawings so
+a generated drawing looks like the documents fabricators already work
+from, not a bare dimensioned rectangle.
 """
 
 from typing import Any, Dict, List, Optional
+
+NA = "N/A"  # avoids the em-dash glyph, which base14 PDF fonts render as a stray bullet
+
+
+def _unit(a, b):
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    length = (dx ** 2 + dy ** 2) ** 0.5
+    return (dx / length, dy / length) if length else (0, 0)
 
 
 def _accessory_svg(parts: List[str], accessories: List[Dict[str, Any]], start_x: int, start_y: int, scale: float) -> None:
@@ -47,16 +57,32 @@ def render_svg(geometry: Dict[str, Any], meta: Optional[Dict[str, Any]] = None) 
         pts = " ".join(f"{x:.1f},{y:.1f}" for x, y in (px(p) for p in outline))
         parts.append(f'<polygon points="{pts}" fill="#f8fafc" stroke="#0f172a" stroke-width="1.5"/>')
 
+    for mark in geometry.get("edge_marks") or []:
+        parts.append(_edge_mark_svg_label(outline, mark, px))
+
     for cutout in geometry.get("cutouts", []):
         x, y, cw, ch = cutout["rect"]
         (px0, py0) = px((x, y))
-        parts.append(
-            f'<rect x="{px0:.1f}" y="{py0:.1f}" width="{cw * scale:.1f}" height="{ch * scale:.1f}" '
-            f'fill="white" stroke="#334155" stroke-width="1.2" stroke-dasharray="4,2"/>'
-        )
+        w_px, h_px = cw * scale, ch * scale
+        shape = cutout.get("shape", "rect")
+        if shape == "oval":
+            parts.append(
+                f'<ellipse cx="{px0 + w_px / 2:.1f}" cy="{py0 + h_px / 2:.1f}" rx="{w_px / 2:.1f}" ry="{h_px / 2:.1f}" '
+                f'fill="white" stroke="#334155" stroke-width="1.2"/>'
+            )
+        elif shape == "rounded_rect":
+            parts.append(
+                f'<rect x="{px0:.1f}" y="{py0:.1f}" width="{w_px:.1f}" height="{h_px:.1f}" rx="{min(w_px, h_px) * 0.18:.1f}" '
+                f'fill="white" stroke="#334155" stroke-width="1.2"/>'
+            )
+        else:
+            parts.append(
+                f'<rect x="{px0:.1f}" y="{py0:.1f}" width="{w_px:.1f}" height="{h_px:.1f}" '
+                f'fill="white" stroke="#334155" stroke-width="1.2" stroke-dasharray="4,2"/>'
+            )
         label = cutout.get("label")
         if label:
-            parts.append(f'<text x="{px0 + cw * scale / 2:.1f}" y="{py0 + ch * scale / 2:.1f}" '
+            parts.append(f'<text x="{px0 + w_px / 2:.1f}" y="{py0 + h_px / 2:.1f}" '
                           f'font-size="10" fill="#334155" text-anchor="middle" dominant-baseline="middle">{label}</text>')
 
     for dim in geometry.get("dimensions", []):
@@ -71,6 +97,8 @@ def render_svg(geometry: Dict[str, Any], meta: Optional[Dict[str, Any]] = None) 
         elif side == "bottom":
             fy += offset; ty += offset
         parts.append(f'<line x1="{fx:.1f}" y1="{fy:.1f}" x2="{tx:.1f}" y2="{ty:.1f}" stroke="#64748b" stroke-width="0.75"/>')
+        for ex, ey in ((fx, fy), (tx, ty)):
+            parts.append(f'<line x1="{ex - 3:.1f}" y1="{ey - 3:.1f}" x2="{ex + 3:.1f}" y2="{ey + 3:.1f}" stroke="#64748b" stroke-width="0.75"/>')
         mx, my = (fx + tx) / 2, (fy + ty) / 2
         parts.append(f'<text x="{mx:.1f}" y="{my - 4:.1f}" font-size="9" fill="#64748b" text-anchor="middle">{dim.get("label", "")}</text>')
 
@@ -86,6 +114,22 @@ def render_svg(geometry: Dict[str, Any], meta: Optional[Dict[str, Any]] = None) 
     return "".join(parts)
 
 
+def _edge_mark_svg_label(outline, side, px):
+    if not outline:
+        return ""
+    xs = [p[0] for p in outline]
+    ys = [p[1] for p in outline]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    pos = {
+        "top": ((x0 + x1) / 2, y0), "bottom": ((x0 + x1) / 2, y1),
+        "left": (x0, (y0 + y1) / 2), "right": (x1, (y0 + y1) / 2),
+    }.get(side)
+    if not pos:
+        return ""
+    px0, py0 = px(pos)
+    return f'<text x="{px0:.1f}" y="{py0:.1f}" font-size="11" font-weight="700" fill="#0f172a" text-anchor="middle" dominant-baseline="middle">X</text>'
+
+
 def _title_block(page, meta: Dict[str, Any]) -> None:
     """Right-hand sidebar matching real StoneDesk fab drawing title blocks:
     Edge Type Key Code, Material Thickness/Color, Quantity, Sink Info,
@@ -99,7 +143,7 @@ def _title_block(page, meta: Dict[str, Any]) -> None:
 
     def row(y, label, value, value_size=11, gap=14):
         page.insert_text((x0 + 6, y), label, fontsize=7, color=gray)
-        page.insert_text((x0 + 6, y + gap), str(value or "—"), fontsize=value_size, color=black)
+        page.insert_text((x0 + 6, y + gap), str(value or NA), fontsize=value_size, color=black)
         page.draw_line((x0, y + gap + 6), (x1, y + gap + 6), color=gray, width=0.4)
         return y + gap + 16
 
@@ -112,16 +156,16 @@ def _title_block(page, meta: Dict[str, Any]) -> None:
     page.draw_line((x0, y + 4), (x1, y + 4), color=gray, width=0.4)
     y += 16
 
-    y = row(y, "MATERIAL THICKNESS", meta.get("thickness", "2CM"))
-    y = row(y, "MATERIAL COLOR", meta.get("stone_color", "—"))
+    y = row(y, "MATERIAL THICKNESS", meta.get("thickness") or "2CM")
+    y = row(y, "MATERIAL COLOR", meta.get("stone_color"))
     y = row(y, "QUANTITY", meta.get("qty", 1))
-    y = row(y, "SINK INFO", meta.get("sink_info", "—"), value_size=9)
-    y = row(y, "PROJECT", meta.get("project", "—"), value_size=9)
-    y = row(y, "TITLE", meta.get("part") or meta.get("template_name", "—"), value_size=9)
-    y = row(y, "DATE", meta.get("date", "—"))
-    y = row(y, "DRAWN BY", meta.get("drawn_by", "—"))
-    y = row(y, "SCALE", meta.get("scale", "NTS"))
-    row(y, "WORK TICKET NUMBER", meta.get("work_ticket", "—"), value_size=13)
+    y = row(y, "SINK INFO", meta.get("sink_info"), value_size=9)
+    y = row(y, "PROJECT", meta.get("project"), value_size=9)
+    y = row(y, "TITLE", meta.get("part") or meta.get("template_name"), value_size=9)
+    y = row(y, "DATE", meta.get("date"))
+    y = row(y, "DRAWN BY", meta.get("drawn_by"))
+    y = row(y, "SCALE", meta.get("scale") or "NTS")
+    row(y, "WORK TICKET NUMBER", meta.get("work_ticket"), value_size=13)
 
 
 def _destination_matrix(page, destinations: List[Dict[str, Any]]) -> None:
@@ -136,7 +180,7 @@ def _destination_matrix(page, destinations: List[Dict[str, Any]]) -> None:
     black = (0.06, 0.09, 0.14)
     x0, y0 = 36, 500
     col_w, row_h = 44, 14
-    page.insert_text((x0, y0 - 14), f"Bldg #'s / Floor  ·  {len(destinations)} total", fontsize=8, color=gray)
+    page.insert_text((x0, y0 - 14), f"Bldg #'s / Floor  -  {len(destinations)} total", fontsize=8, color=gray)
     page.insert_text((x0, y0), "Floor", fontsize=7, color=gray)
     for ci, b in enumerate(buildings):
         page.insert_text((x0 + col_w * (ci + 1), y0), str(b), fontsize=7, color=black)
@@ -147,6 +191,36 @@ def _destination_matrix(page, destinations: List[Dict[str, Any]]) -> None:
             count = sum(1 for d in destinations if d.get("building") == b and d.get("floor") == f)
             if count:
                 page.insert_text((x0 + col_w * (ci + 1), yy), str(count), fontsize=7, color=black)
+
+
+def _draw_dimension(page, f, t, offset, side, color, gray):
+    if side == "top":
+        f = (f[0], f[1] - offset); t = (t[0], t[1] - offset)
+    elif side == "left":
+        f = (f[0] - offset, f[1]); t = (t[0] - offset, t[1])
+    elif side == "bottom":
+        f = (f[0], f[1] + offset); t = (t[0], t[1] + offset)
+    page.draw_line(f, t, color=gray, width=0.5)
+    # Small perpendicular tick marks at each end, like a real dimension line.
+    for (ex, ey) in (f, t):
+        page.draw_line((ex - 3, ey - 3), (ex + 3, ey + 3), color=gray, width=0.5)
+    return f, t
+
+
+def _edge_mark_pdf(page, outline, side, to_page, color):
+    if not outline:
+        return
+    xs = [p[0] for p in outline]
+    ys = [p[1] for p in outline]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    pos = {
+        "top": ((x0 + x1) / 2, y0), "bottom": ((x0 + x1) / 2, y1),
+        "left": (x0, (y0 + y1) / 2), "right": (x1, (y0 + y1) / 2),
+    }.get(side)
+    if not pos:
+        return
+    px, py = to_page(pos)
+    page.insert_text((px - 3, py + 3), "X", fontsize=9, color=color, fontname="hebo")
 
 
 def render_pdf_bytes(geometry: Dict[str, Any], meta: Optional[Dict[str, Any]] = None) -> bytes:
@@ -162,7 +236,7 @@ def render_pdf_bytes(geometry: Dict[str, Any], meta: Optional[Dict[str, Any]] = 
     _title_block(page, meta)
 
     page.insert_text((36, 36), meta.get("part") or meta.get("template_name", "Countertop Drawing"), fontsize=16, color=black)
-    subtitle = " · ".join(str(v) for v in [meta.get("building"), meta.get("floor"), meta.get("flat")] if v)
+    subtitle = " - ".join(str(v) for v in [meta.get("building"), meta.get("floor"), meta.get("flat")] if v)
     if subtitle:
         page.insert_text((36, 54), subtitle, fontsize=10, color=gray)
     page.draw_line((36, 62), (600, 62), color=gray, width=0.5)
@@ -180,32 +254,45 @@ def render_pdf_bytes(geometry: Dict[str, Any], meta: Optional[Dict[str, Any]] = 
         return rx0 + pt[0] * scale, ry0 + pt[1] * scale
 
     outline = geometry.get("outline") or []
+    corner_radius = (geometry.get("corner_radius") or 0) * scale
     if outline:
         pts = [to_page(p) for p in outline]
-        for i in range(len(pts)):
-            page.draw_line(pts[i], pts[(i + 1) % len(pts)], color=black, width=1.4)
+        n = len(pts)
+        r = min(corner_radius, 14)
+        # Build the vertex sequence to actually draw between, chamfering the
+        # front-left corner (vertex 0) to indicate the R.5" corner radius
+        # called out on real fab drawings — a short diagonal reads clearly
+        # at drawing scale without the risk of a mismatched true arc.
+        if r > 1 and n >= 3:
+            corner = pts[0]
+            trim_in = (corner[0] + _unit(corner, pts[-1])[0] * r, corner[1] + _unit(corner, pts[-1])[1] * r)
+            trim_out = (corner[0] + _unit(corner, pts[1])[0] * r, corner[1] + _unit(corner, pts[1])[1] * r)
+            draw_pts = [trim_out] + pts[1:] + [trim_in, trim_out]
+        else:
+            draw_pts = pts + [pts[0]]
+        for i in range(len(draw_pts) - 1):
+            page.draw_line(draw_pts[i], draw_pts[i + 1], color=black, width=1.4)
+
+    for mark in geometry.get("edge_marks") or []:
+        _edge_mark_pdf(page, outline, mark, to_page, black)
 
     for cutout in geometry.get("cutouts", []):
         x, y, cw, ch = cutout["rect"]
         p0 = to_page((x, y))
         p1 = to_page((x + cw, y + ch))
-        page.draw_rect(fitz.Rect(*p0, *p1), color=gray, width=1.0, dashes="[2 2] 0")
+        shape = cutout.get("shape", "rect")
+        if shape == "oval":
+            page.draw_oval(fitz.Rect(*p0, *p1), color=gray, width=1.0)
+        elif shape == "rounded_rect":
+            page.draw_rect(fitz.Rect(*p0, *p1), color=gray, width=1.0, radius=0.15)
+        else:
+            page.draw_rect(fitz.Rect(*p0, *p1), color=gray, width=1.0, dashes="[2 2] 0")
         label = cutout.get("label")
         if label:
             page.insert_text(((p0[0] + p1[0]) / 2 - len(label) * 3, (p0[1] + p1[1]) / 2), label, fontsize=9, color=gray)
 
     for dim in geometry.get("dimensions", []):
-        f = to_page(dim["from"])
-        t = to_page(dim["to"])
-        offset = 16
-        side = dim.get("side", "top")
-        if side == "top":
-            f = (f[0], f[1] - offset); t = (t[0], t[1] - offset)
-        elif side == "left":
-            f = (f[0] - offset, f[1]); t = (t[0] - offset, t[1])
-        elif side == "bottom":
-            f = (f[0], f[1] + offset); t = (t[0], t[1] + offset)
-        page.draw_line(f, t, color=gray, width=0.5)
+        f, t = _draw_dimension(page, to_page(dim["from"]), to_page(dim["to"]), 16, dim.get("side", "top"), black, gray)
         label = dim.get("label", "")
         mx, my = (f[0] + t[0]) / 2, (f[1] + t[1]) / 2
         page.insert_text((mx - len(label) * 2.5, my - 4), label, fontsize=8, color=gray)
@@ -217,6 +304,8 @@ def render_pdf_bytes(geometry: Dict[str, Any], meta: Optional[Dict[str, Any]] = 
         for acc in accessories:
             aw, ah = min(acc["w"] * 2, 160), min(acc["h"] * 2, 40)
             page.draw_rect(fitz.Rect(ax, ay, ax + aw, ay + ah), color=gray, width=0.8)
+            for side, pos in (("left", (ax + 4, ay + ah / 2)), ("right", (ax + aw - 4, ay + ah / 2)), ("top", (ax + aw / 2, ay + 4))):
+                page.insert_text((pos[0] - 3, pos[1] + 3), "X", fontsize=7, color=gray, fontname="hebo")
             page.insert_text((ax, ay + ah + 10), acc.get("label", ""), fontsize=7, color=gray)
             ax += aw + 24
 
