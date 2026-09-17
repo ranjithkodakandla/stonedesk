@@ -29,9 +29,16 @@ jobs:
         with:
           workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          create_credentials_file: true
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Set quota project explicitly
+        run: gcloud auth application-default set-quota-project "${{ env.GCP_PROJECT_ID }}"
 
       - name: Submit build to Cloud Build
         run: |
