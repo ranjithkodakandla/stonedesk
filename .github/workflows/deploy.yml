@@ -13,12 +13,24 @@ permissions:
 
 env:
   GCP_PROJECT_ID: stonedesk-app
+  REGION: asia-south1
+  AR_HOST: us-central1-docker.pkg.dev
+  BACKEND_URL: https://stonedesk-backend-149130710868.asia-south1.run.app
   WORKLOAD_IDENTITY_PROVIDER: projects/149130710868/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider
   DEPLOY_SERVICE_ACCOUNT: github-actions-deployer@stonedesk-app.iam.gserviceaccount.com
 
+# Builds and deploys directly from the Actions runner instead of going through
+# `gcloud builds submit` — that command uploads source to a Cloud Build GCS
+# staging bucket first, and that upload path kept getting a generic "forbidden
+# / serviceusage.services.use" denial for the WIF-federated service account no
+# matter how the bucket ACLs or quota project were configured (a known rough
+# edge with external_account credentials and that specific API path). Building
+# with `docker build` + `docker push` to Artifact Registry and deploying with
+# `gcloud run deploy` mirrors the exact same steps cloudbuild.yaml runs, just
+# without that GCS upload step in the way.
 jobs:
   deploy:
-    name: Build and deploy (Cloud Build)
+    name: Build and deploy
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -30,21 +42,53 @@ jobs:
           workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
           project_id: ${{ env.GCP_PROJECT_ID }}
-          create_credentials_file: true
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ env.GCP_PROJECT_ID }}
 
-      - name: Set quota project explicitly
-        run: gcloud config set billing/quota_project "${{ env.GCP_PROJECT_ID }}"
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${{ env.AR_HOST }}" --quiet
 
-      - name: Submit build to Cloud Build
+      - name: Compute short SHA
+        id: sha
+        run: echo "short_sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Build backend image
         run: |
-          gcloud builds submit \
-            --project="${{ env.GCP_PROJECT_ID }}" \
-            --config=cloudbuild.yaml \
-            --gcs-source-staging-dir=gs://stonedesk-app-ci-staging/source \
-            --substitutions=SHORT_SHA=$(git rev-parse --short HEAD) \
-            .
+          docker build -t "${{ env.AR_HOST }}/${{ env.GCP_PROJECT_ID }}/virginsurfaces/backend:${{ steps.sha.outputs.short_sha }}" ./backend
+
+      - name: Push backend image
+        run: docker push "${{ env.AR_HOST }}/${{ env.GCP_PROJECT_ID }}/virginsurfaces/backend:${{ steps.sha.outputs.short_sha }}"
+
+      - name: Deploy backend to Cloud Run
+        run: |
+          gcloud run deploy stonedesk-backend \
+            --image="${{ env.AR_HOST }}/${{ env.GCP_PROJECT_ID }}/virginsurfaces/backend:${{ steps.sha.outputs.short_sha }}" \
+            --region="${{ env.REGION }}" \
+            --platform=managed \
+            --allow-unauthenticated \
+            --min-instances=1 \
+            --max-instances=10 \
+            --update-env-vars=MONGODB_DB=virgin
+
+      - name: Build frontend image
+        run: |
+          docker build \
+            -t "${{ env.AR_HOST }}/${{ env.GCP_PROJECT_ID }}/virginsurfaces/frontend:${{ steps.sha.outputs.short_sha }}" \
+            --build-arg VITE_API_URL="${{ env.BACKEND_URL }}/api" \
+            ./frontend
+
+      - name: Push frontend image
+        run: docker push "${{ env.AR_HOST }}/${{ env.GCP_PROJECT_ID }}/virginsurfaces/frontend:${{ steps.sha.outputs.short_sha }}"
+
+      - name: Deploy frontend to Cloud Run
+        run: |
+          gcloud run deploy stonedesk-frontend \
+            --image="${{ env.AR_HOST }}/${{ env.GCP_PROJECT_ID }}/virginsurfaces/frontend:${{ steps.sha.outputs.short_sha }}" \
+            --region="${{ env.REGION }}" \
+            --platform=managed \
+            --allow-unauthenticated \
+            --min-instances=1 \
+            --max-instances=10
