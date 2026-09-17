@@ -405,6 +405,7 @@ def piece_response(doc: Dict[str, Any]) -> Dict[str, Any]:
         "input_source": doc.get("input_source", "manual_entry"),
         "drawing_template_id": doc.get("drawing_template_id"),
         "drawing_template_params": doc.get("drawing_template_params"),
+        "assembly_role": doc.get("assembly_role"),
         "created_at": as_iso(doc.get("created_at")),
     }
 
@@ -1404,9 +1405,13 @@ def _assembly_role_docs(project_id: int, req: "DrawingToPieceRequest", assembly:
     docs = []
     for item in assembly:
         role, fields = item["role"], item["fields"]
-        part_suffix = {"top": "", "backsplash": " - Backsplash", "backsplash_right": " - Backsplash",
-                       "side_splash_left": " - Side Splash L", "side_splash_right": " - Side Splash R"}.get(role, "")
-        piece = PieceCreate(**{**fields, **common, "part": f"{req.part}{part_suffix}"})
+        # `part` must hold the standardized type (matches Source Data's Part
+        # Type vocabulary, e.g. "Vanity - Top" vs "Vanity - Back Splash", and
+        # what _part_bucket_for_unit reads) rather than the user's job label
+        # — that stays in `drawing`, uniform across the assembly's roles, so
+        # both entry paths use category/part/drawing the same way and
+        # siblings still group by drawing label.
+        piece = PieceCreate(**{**fields, **common, "part": fields.get("category", req.part)})
         existing_id = (req.piece_ids or {}).get(role)
         if existing_id and pieces_col.find_one({"id": existing_id, "project_id": project_id}):
             doc = _build_piece_doc(project_id, piece, existing_id, extra={
@@ -1423,6 +1428,83 @@ def _assembly_role_docs(project_id: int, req: "DrawingToPieceRequest", assembly:
             pieces_col.insert_one(doc)
         docs.append(doc)
     return docs
+
+
+# `part` values that identify a "top" piece drawable by a template — kept in
+# lock-step with pieceCategory in frontend/src/utils/drawingTemplates.js.
+_TOP_TEMPLATE_FOR_PART = {
+    "Kitchen - Island Tops": ("island_standard", "island_with_sink"),
+    "Vanity - Top": ("vanity_top", "vanity_top"),
+    "Kitchen - Perimeter Tops": ("kitchen_l_top", "kitchen_l_top"),
+}
+
+
+def _template_id_for_piece(piece: Dict[str, Any]) -> Optional[str]:
+    """Mirrors frontend templateForPiece's matching rules."""
+    no_sink, with_sink = _TOP_TEMPLATE_FOR_PART.get(piece.get("part"), (None, None))
+    if not no_sink:
+        return None
+    has_sink = bool(piece.get("sink_type")) and piece.get("sink_type") != "No Sink"
+    return with_sink if has_sink else no_sink
+
+
+def _params_from_piece(template_id: str, piece: Dict[str, Any]) -> Dict[str, Any]:
+    """Mirrors each template's paramsFromPiece in drawingTemplates.js — the
+    lossy dimension-based reverse mapping used for pieces the generator
+    didn't itself create (e.g. entered manually in Source Data)."""
+    length, width = piece.get("length"), piece.get("width")
+    common_sink = {
+        "sink_length": piece.get("sink_length"), "sink_width": piece.get("sink_width"),
+        "sink_offset_left": piece.get("sink_offset_left"),
+    }
+    if template_id == "island_standard":
+        return {"length": length, "width": width}
+    if template_id == "island_with_sink":
+        return {"length": length, "width": width, **common_sink}
+    if template_id == "vanity_top":
+        return {"length": length, "depth": width, **common_sink}
+    if template_id == "kitchen_l_top":
+        return {
+            "left_run": length * 0.56 if length else None, "right_run": length * 0.44 if length else None,
+            "depth": width, **common_sink,
+        }
+    return {}
+
+
+def _splash_params_for_piece(piece: Dict[str, Any], project_pieces: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """A manually-entered top has no include_backsplash/include_side_splash
+    flag of its own — infer them from whether the user also entered a
+    matching backsplash/side-splash piece under the same drawing label, so
+    the combined PDF only draws what was actually entered."""
+    drawing_key = piece.get("drawing") or piece.get("part")
+    siblings = [
+        p for p in project_pieces
+        if p.get("id") != piece.get("id") and (p.get("drawing") or p.get("part")) == drawing_key
+    ]
+    backsplash = next((p for p in siblings if "back splash" in str(p.get("part", "")).lower()), None)
+    side_splash = next((p for p in siblings if "side splash" in str(p.get("part", "")).lower()), None)
+    params: Dict[str, Any] = {"include_backsplash": bool(backsplash), "include_side_splash": bool(side_splash)}
+    height = (backsplash or side_splash or {}).get("width")
+    if height:
+        params["splash_height"] = height
+    return params
+
+
+def _reverse_map_piece(piece: Dict[str, Any], project_pieces: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Fills in drawing_template_id/drawing_template_params for a piece that
+    was entered manually (never saved through the Drawing Generator), so it
+    can still be drawn on its own combined-PDF page. Generator-created
+    pieces already carry both fields and pass through unchanged."""
+    if piece.get("drawing_template_id"):
+        return piece
+    template_id = _template_id_for_piece(piece)
+    if not template_id:
+        return None
+    template = drawing_templates.get_template(template_id)
+    defaults = {p["id"]: p["default"] for p in template["parameters"]}
+    params = {**defaults, **_params_from_piece(template_id, piece), **_splash_params_for_piece(piece, project_pieces)}
+    params = {k: v for k, v in params.items() if v is not None}
+    return {**piece, "drawing_template_id": template_id, "drawing_template_params": params}
 
 
 @app.post("/api/projects/{project_id}/pieces/from-drawing")
@@ -1473,12 +1555,15 @@ def export_project_drawings_pdf(project_id: int):
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    project_pieces = list(pieces_col.find({"project_id": project_id}, {"_id": 0}))
     tops = [
-        p for p in pieces_col.find({"project_id": project_id, "assembly_role": "top"}, {"_id": 0})
-        if p.get("drawing_template_id")
+        mapped for p in project_pieces
+        if p.get("part") in _TOP_TEMPLATE_FOR_PART
+        for mapped in [_reverse_map_piece(p, project_pieces)]
+        if mapped
     ]
     if not tops:
-        raise HTTPException(status_code=400, detail="No generated drawings in this project yet.")
+        raise HTTPException(status_code=400, detail="No island, vanity, or kitchen-top parts in this project yet.")
 
     # Group pieces that are literally the same drawing (same template + same
     # parameters + same part name) repeated across destinations — matching

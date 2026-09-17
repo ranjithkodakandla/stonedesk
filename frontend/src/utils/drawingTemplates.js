@@ -300,7 +300,7 @@ export const DRAWING_TEMPLATES = [
     ],
     geometry: islandStandardGeometry,
     constraints: islandStandardConstraints,
-    matchesPiece: (p) => p.category === 'Kitchen - Island Tops' && (!p.sink_type || p.sink_type === 'No Sink'),
+    matchesPiece: (p) => p.part === 'Kitchen - Island Tops' && (!p.sink_type || p.sink_type === 'No Sink'),
     paramsFromPiece: (p) => ({ length: p.length, width: p.width }),
   },
   {
@@ -319,7 +319,7 @@ export const DRAWING_TEMPLATES = [
     ],
     geometry: islandSinkGeometry,
     constraints: islandSinkConstraints,
-    matchesPiece: (p) => p.category === 'Kitchen - Island Tops' && p.sink_type && p.sink_type !== 'No Sink',
+    matchesPiece: (p) => p.part === 'Kitchen - Island Tops' && p.sink_type && p.sink_type !== 'No Sink',
     paramsFromPiece: (p) => ({
       length: p.length, width: p.width, sink_length: p.sink_length, sink_width: p.sink_width,
       sink_offset_left: p.sink_offset_left,
@@ -395,7 +395,7 @@ export const computePreview = (templateId, params) => {
 // forcing re-entry of the same numbers.
 export const templateForPiece = (piece) => {
   if (!piece) return null;
-  const byCategory = DRAWING_TEMPLATES.filter((t) => t.pieceCategory === piece.category);
+  const byCategory = DRAWING_TEMPLATES.filter((t) => t.pieceCategory === piece.part);
   if (!byCategory.length) return null;
   const specific = byCategory.find((t) => t.matchesPiece && t.matchesPiece(piece));
   return specific || byCategory[0];

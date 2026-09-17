@@ -70,8 +70,27 @@ const DrawingGenerator = ({ mode = 'standalone', projectId = null, project = nul
     const drawingKey = piece.drawing || piece.part;
     const siblings = (pieces || []).filter((p) => (p.drawing || p.part) === drawingKey && p.drawing_template_id === piece.drawing_template_id);
     const pieceIds = {};
-    siblings.forEach((p) => { if (p.assembly_role) pieceIds[p.assembly_role] = p.id; });
+    const unroled = [];
+    siblings.forEach((p) => {
+      if (p.assembly_role) pieceIds[p.assembly_role] = p.id;
+      else if (p.id !== piece.id) unroled.push(p);
+    });
     if (!pieceIds.top) pieceIds.top = piece.id;
+    // Adopt backsplash/side-splash pieces entered as their own separate rows
+    // in Source Data (same drawing label, but no assembly_role yet) into the
+    // matching role slot, so saving the bundled top updates them in place
+    // instead of creating duplicate backsplash/side-splash pieces alongside
+    // the ones already on file.
+    const backsplashRoleOrder = ['backsplash', 'backsplash_right'];
+    const sideSplashRoleOrder = ['side_splash_left', 'side_splash_right'];
+    unroled.forEach((p) => {
+      const partStr = String(p.part || '');
+      const roleOrder = /side\s*splash/i.test(partStr) ? sideSplashRoleOrder
+        : /back\s*splash/i.test(partStr) ? backsplashRoleOrder
+        : null;
+      const openRole = roleOrder && roleOrder.find((role) => !pieceIds[role]);
+      if (openRole) pieceIds[openRole] = p.id;
+    });
     return {
       templateId: matched.id,
       // A piece the generator itself created carries its exact generation
