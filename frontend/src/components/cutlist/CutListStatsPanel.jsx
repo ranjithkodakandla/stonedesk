@@ -14,7 +14,7 @@ const StatRow = ({ label, value }) => (
 const CutListStatsPanel = ({ summary, patterns, selectedIndex, onSelect }) => {
   const pattern = patterns[selectedIndex];
   const sheet = pattern?.sheet;
-  const usedStockSheets = patterns.length;
+  const usedStockSheets = summary.total_sheets;
 
   return (
     <div className="w-80 shrink-0 space-y-4">

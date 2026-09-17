@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { API_BASE } from '../../utils/plannerUtils';
 import CutListGrid, { newGridRow } from './CutListGrid';
@@ -97,7 +97,7 @@ const CutListScreen = ({ projectId, cutlistId, mode = 'project' }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [panels, stockSheets, options, loaded, draftKey]);
 
-  const handleGenerate = async () => {
+  const handleGenerate = useCallback(async () => {
     setError('');
     const stockRows = toApiRows(stockSheets);
     if (!stockRows.length) {
@@ -132,7 +132,22 @@ const CutListScreen = ({ projectId, cutlistId, mode = 'project' }) => {
     } finally {
       setGenerating(false);
     }
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panels, stockSheets, options, mode, projectId, cutlistId]);
+
+  // Once the shop has generated a cut list at least once, treat it as a live
+  // view of the current panels/stock/options — any further edit (including a
+  // CSV import) re-runs the nest after a short debounce, so the displayed
+  // slab count/diagrams never silently go stale relative to what's typed in
+  // the grids above. Before the first click, do nothing (nobody's asked for
+  // a result yet, so there's nothing to keep in sync).
+  const hasResult = !!result;
+  useEffect(() => {
+    if (!loaded || !hasResult) return;
+    const t = setTimeout(() => { handleGenerate(); }, 800);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panels, stockSheets, options, loaded, hasResult]);
 
   const handleDownloadPdf = () => {
     if (!runId) return;
