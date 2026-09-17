@@ -491,7 +491,13 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
                 hint: 'Generate a countertop drawing',
                 content: () => (
                   <div className="px-6 py-6">
-                    <DrawingGenerator mode="lifecycle" projectId={projectId} pieces={pieces} onAdded={refreshWorkspace} />
+                    <DrawingGenerator
+                      mode="lifecycle"
+                      projectId={projectId}
+                      pieces={pieces}
+                      onAdded={refreshWorkspace}
+                      onContinue={() => setMainTab('planning')}
+                    />
                   </div>
                 ),
               },
