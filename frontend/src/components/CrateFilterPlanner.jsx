@@ -20,8 +20,7 @@ const FILTER_DIMS = [
   { key: 'categories', field: 'category', label: 'Category' },
   { key: 'partTypes', field: 'part', label: 'Part Type' },
   { key: 'drawings', field: 'drawing', label: 'Drawing' },
-  { key: 'unitNames', field: 'unit_name', label: 'Unit Name' },
-  { key: 'unitNumbers', field: 'unit_number', label: 'Unit Number' },
+  { key: 'units', field: 'unit', label: 'Unit' },
 ];
 
 const EMPTY_FILTERS = FILTER_DIMS.reduce((acc, d) => ({ ...acc, [d.key]: [] }), {});
@@ -1043,7 +1042,7 @@ const CrateFilterPlanner = ({ projectId }) => {
                         <td className="px-2 py-1 text-[#0f172a]">{p.part_no}</td>
                         <td className="px-2 py-1 text-[#334155]">{p.part}</td>
                         <td className="px-2 py-1 text-[#334155]">{p.drawing}</td>
-                        <td className="px-2 py-1 text-[#334155]">{p.unit_name}{p.unit_number ? ` ${p.unit_number}` : ''}</td>
+                        <td className="px-2 py-1 text-[#334155]">{p.unit}</td>
                         <td className="px-2 py-1 text-[#334155]">{p.category}</td>
                         <td className="px-2 py-1 text-right text-[#0f172a]">{fmt(p.weight_kg)}</td>
                       </tr>

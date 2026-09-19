@@ -2219,23 +2219,6 @@ def get_project_totals(project_id: int):
     }
 
 
-_UNIT_NUMBER_RE = re.compile(r"^(.*?)[\s\-#]*([0-9]+[A-Za-z]?)\s*$")
-
-
-def split_unit_label(unit_raw: str) -> tuple[str, str]:
-    """Best-effort split of a free-text unit label (e.g. 'Unit 12A', 'Suite 4-B')
-    into (unit_name, unit_number). No reliable structured source exists yet,
-    so this is a heuristic read-time split, not authoritative data."""
-    unit_raw = (unit_raw or "").strip()
-    if not unit_raw:
-        return "", ""
-    m = _UNIT_NUMBER_RE.match(unit_raw)
-    if not m:
-        return unit_raw, ""
-    name, number = m.group(1).strip(" -#"), m.group(2).strip()
-    return (name or unit_raw), number
-
-
 @app.get("/api/projects/{project_id}/dispatch-parts")
 def get_dispatch_parts(project_id: int):
     """
@@ -2258,17 +2241,13 @@ def get_dispatch_parts(project_id: int):
 
     out = []
     for p in pieces:
-        unit_raw = str(p.get("unit", "") or "")
-        unit_name, unit_number = split_unit_label(unit_raw)
         out.append({
             "id": p.get("id"),
             "part_no": str(p.get("part_no", "") or ""),
             "part": str(p.get("part", "") or ""),
             "category": str(p.get("category", "") or ""),
             "drawing": str(p.get("drawing", "") or ""),
-            "unit": unit_raw,
-            "unit_name": unit_name,
-            "unit_number": unit_number,
+            "unit": str(p.get("unit", "") or ""),
             "building": str(p.get("building", "") or ""),
             "floor": str(p.get("floor", "") or ""),
             "flat": str(p.get("flat", "") or ""),
