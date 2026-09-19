@@ -24,6 +24,25 @@ const FILTER_DIMS = [
 ];
 
 const EMPTY_FILTERS = FILTER_DIMS.reduce((acc, d) => ({ ...acc, [d.key]: [] }), {});
+const FILTER_DIMS_BY_KEY = Object.fromEntries(FILTER_DIMS.map((d) => [d.key, d]));
+
+// Pool table columns, left to right — Excel-style: filterable columns carry a
+// small ▾ arrow right in the header, exactly where a spreadsheet AutoFilter puts it.
+const POOL_COLUMNS = [
+  { field: 'drawing', label: 'Drawing', filterKey: 'drawings' },
+  { field: 'unit', label: 'Unit', filterKey: 'units' },
+  { field: 'part', label: 'Part Type', filterKey: 'partTypes' },
+  { field: 'category', label: 'Category', filterKey: 'categories' },
+  { field: 'part_no', label: 'Part #' },
+  { field: 'building', label: 'Building', filterKey: 'buildings' },
+  { field: 'floor', label: 'Floor', filterKey: 'floors' },
+  { field: 'length', label: 'Length (in)', filterKey: 'lengths', numeric: true },
+  { field: 'width', label: 'Width (in)', filterKey: 'widths', numeric: true },
+  { field: 'qty', label: 'Qty', filterKey: 'qtys', numeric: true },
+  { field: 'thickness', label: 'Thickness', filterKey: 'thicknesses' },
+  { field: 'sqft', label: 'Sq Ft', numeric: true },
+  { field: 'weight_kg', label: 'Weight (kg)', numeric: true },
+];
 
 function partMatchesFilters(part, filters, exceptKey) {
   return FILTER_DIMS.every((d) => {
@@ -34,17 +53,23 @@ function partMatchesFilters(part, filters, exceptKey) {
   });
 }
 
-// Cascading facet options: for a given dimension, compute distinct values from
-// parts that match every OTHER active filter (classic Excel AutoFilter behavior).
+// Cascading facet options: for a given dimension, compute distinct values (with
+// how many parts each matches) from parts that match every OTHER active filter
+// (classic Excel AutoFilter behavior) — the counts make the narrowing visible as
+// other filters are applied, instead of just shrinking the list silently.
 function facetOptions(parts, filters, dim) {
-  const values = new Set();
+  const counts = new Map();
   for (const p of parts) {
-    if (partMatchesFilters(p, filters, dim.key)) values.add(String(p[dim.field]));
+    if (!partMatchesFilters(p, filters, dim.key)) continue;
+    const v = String(p[dim.field]);
+    counts.set(v, (counts.get(v) || 0) + 1);
   }
-  return [...values].sort((a, b) => {
-    const na = parseFloat(a), nb = parseFloat(b);
-    return !isNaN(na) && !isNaN(nb) ? na - nb : a.localeCompare(b);
-  });
+  return [...counts.keys()]
+    .sort((a, b) => {
+      const na = parseFloat(a), nb = parseFloat(b);
+      return !isNaN(na) && !isNaN(nb) ? na - nb : a.localeCompare(b);
+    })
+    .map((value) => ({ value, count: counts.get(value) }));
 }
 
 // ─── Category bucket ordering ─────────────────────────────────────────────────
@@ -487,9 +512,9 @@ const CrateFilterPlanner = ({ projectId }) => {
   const [targetWeightKg, setTargetWeightKg] = useState(1900);
   const [dimConfig, setDimConfig] = useState(DEFAULT_DIM_CONFIG);
   const [selectCount, setSelectCount] = useState(''); // "# pieces to select" cap on the filtered pool
-  const [manualMode, setManualMode] = useState(false);
   const [selectedPartIds, setSelectedPartIds] = useState(() => new Set());
   const [suggestions, setSuggestions] = useState(null);
+  const [manualCrateNo, setManualCrateNo] = useState(''); // user-editable crate # for the next manually-built crate
 
   // crates: array of { crate_no, parts: [...] } — local editable state.
   const [crates, setCrates] = useState([]);
@@ -629,17 +654,36 @@ const CrateFilterPlanner = ({ projectId }) => {
     });
   }, []);
 
+  const suggestedNextCrateNo = useMemo(
+    () => (crates.length ? Math.max(...crates.map((c) => c.crate_no)) + 1 : 1),
+    [crates],
+  );
+
+  // Pre-fill the crate # field with the next free number whenever it's empty
+  // (fresh into manual mode, or right after a crate was just created) — the
+  // factory floor can still type over it to match their own physical labels.
+  useEffect(() => {
+    if (manualCrateNo === '') setManualCrateNo(String(suggestedNextCrateNo));
+  }, [suggestedNextCrateNo, manualCrateNo]);
+
+  const manualCrateNoTaken = useMemo(() => {
+    const n = Number(manualCrateNo);
+    return manualCrateNo !== '' && crates.some((c) => c.crate_no === n);
+  }, [manualCrateNo, crates]);
+
   const handleCreateManualCrate = useCallback(() => {
     const chosen = filteredParts.filter((p) => selectedPartIds.has(p.id));
     if (!chosen.length) return;
+    const crateNo = Number(manualCrateNo);
+    if (!crateNo || crateNo <= 0 || crates.some((c) => c.crate_no === crateNo)) return;
     setCrates((prev) => {
-      const nextNo = prev.length ? Math.max(...prev.map((c) => c.crate_no)) + 1 : 1;
-      const crate = crateFromParts(nextNo, chosen, dimConfig);
+      const crate = crateFromParts(crateNo, chosen, dimConfig);
       logCrateAction(crate, filters);
-      return [...prev, crate];
+      return [...prev, crate].sort((a, b) => a.crate_no - b.crate_no);
     });
     setSelectedPartIds(new Set());
-  }, [filteredParts, selectedPartIds, dimConfig, filters, logCrateAction]);
+    setManualCrateNo('');
+  }, [filteredParts, selectedPartIds, manualCrateNo, crates, dimConfig, filters, logCrateAction]);
 
   const handleAutoBucket = useCallback(() => {
     if (!filteredParts.length) return;
@@ -873,18 +917,6 @@ const CrateFilterPlanner = ({ projectId }) => {
 
       {!loading && allParts.length > 0 && (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-            {FILTER_DIMS.map((d) => (
-              <MultiSelectDropdown
-                key={d.key}
-                label={d.label}
-                options={facetOptions(availableParts, filters, d)}
-                selected={filters[d.key]}
-                onChange={(vals) => setFilter(d.key, vals)}
-              />
-            ))}
-          </div>
-
           <div className="flex flex-wrap gap-2 items-center rounded-[20px] border border-[#dbe4f0] bg-[#f8fafc] px-5 py-3">
             <span className="text-xs font-semibold uppercase tracking-wide text-[#94a3b8] mr-1 self-center">In scope (unallocated)</span>
             {[
@@ -922,135 +954,135 @@ const CrateFilterPlanner = ({ projectId }) => {
             </div>
           )}
 
-          <div className="flex items-center gap-2 rounded-[16px] border border-[#dbe4f0] bg-[#f8fafc] px-4 py-3">
-            <span className="text-xs font-semibold uppercase tracking-wide text-[#94a3b8]">Mode</span>
-            <button
-              type="button"
-              onClick={() => setManualMode(false)}
-              className={`rounded-full px-4 py-1.5 text-xs font-semibold transition-colors ${!manualMode ? 'bg-[#1d4ed8] text-white' : 'border border-[#dbe4f0] bg-white text-[#64748b] hover:bg-[#f1f5f9]'}`}
-            >
-              Auto-bucket
-            </button>
-            <button
-              type="button"
-              onClick={() => setManualMode(true)}
-              className={`rounded-full px-4 py-1.5 text-xs font-semibold transition-colors ${manualMode ? 'bg-[#1d4ed8] text-white' : 'border border-[#dbe4f0] bg-white text-[#64748b] hover:bg-[#f1f5f9]'}`}
-            >
-              Manual selection
-            </button>
-            <span className="text-[11px] text-[#94a3b8]">Manual crates are logged so the system can learn your team's typical groupings and suggest them back.</span>
-          </div>
-
-          <div className="rounded-[16px] border border-[#dbe4f0] bg-[#f8fafc] px-4 py-3 space-y-4">
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-[#94a3b8]">
-              Crate dimension configuration — changes apply immediately to every crate below, and to new auto-bucket rounds
-            </div>
-            {DIM_CLASS_SECTIONS.map((section) => (
-              <div key={section.key} className="space-y-2">
-                <div className="text-[11px] font-semibold text-[#334155]">{section.label}</div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                  {DIM_CLASS_FIELDS.map((f) => (
-                    <label key={f.key} className="flex flex-col text-[10px] text-[#64748b]">
-                      <span className="flex min-h-[28px] items-end">{f.label}</span>
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={dimConfig[section.key][f.key]}
-                        onChange={(e) =>
-                          setDimConfig((c) => ({
-                            ...c,
-                            [section.key]: { ...c[section.key], [f.key]: Number(e.target.value) },
-                          }))
-                        }
-                        className="mt-1 w-full rounded-lg border border-[#e2e8f0] bg-white px-2 py-1 text-[12px] text-[#0f172a] focus:border-[#0f172a] focus:outline-none"
-                      />
-                    </label>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {!manualMode && (
-            <div className="flex flex-wrap items-center gap-3 rounded-[16px] border border-[#dbe4f0] bg-[#f8fafc] px-4 py-3">
-              <TargetWeightControl value={targetWeightKg} onChange={setTargetWeightKg} />
-              <button
-                type="button"
-                onClick={handleAutoBucket}
-                disabled={!filteredParts.length}
-                className="ml-auto rounded-full bg-[#1d4ed8] px-5 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-[#1e40af] disabled:opacity-50"
-              >
-                Auto-bucket into crates
-              </button>
-            </div>
-          )}
-
-          {manualMode && (
-            <div className="rounded-[16px] border border-[#dbe4f0] bg-white px-4 py-3 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase tracking-wide text-[#94a3b8]">
-                  {selectedPartIds.size} of {filteredParts.length} selected
-                </span>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedPartIds(new Set(filteredParts.map((p) => p.id)))}
-                    className="rounded-full border border-[#dbe4f0] bg-white px-3 py-1 text-[11px] font-medium text-[#64748b] hover:bg-[#f1f5f9]"
-                  >
-                    Select all
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedPartIds(new Set())}
-                    className="rounded-full border border-[#dbe4f0] bg-white px-3 py-1 text-[11px] font-medium text-[#64748b] hover:bg-[#f1f5f9]"
-                  >
-                    Clear
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleCreateManualCrate}
-                    disabled={!selectedPartIds.size}
-                    className="rounded-full bg-[#1d4ed8] px-5 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:bg-[#1e40af] disabled:opacity-50"
-                  >
-                    Create crate from selection
-                  </button>
-                </div>
-              </div>
-              <div className="max-h-80 overflow-y-auto rounded-lg border border-[#e8edf3]">
-                <table className="w-full text-left text-[11px]">
-                  <thead className="sticky top-0 bg-[#f8fafc] text-[#94a3b8] uppercase tracking-wide">
-                    <tr>
-                      <th className="px-2 py-1.5 w-8"></th>
-                      <th className="px-2 py-1.5">Part #</th>
-                      <th className="px-2 py-1.5">Part Type</th>
-                      <th className="px-2 py-1.5">Drawing</th>
-                      <th className="px-2 py-1.5">Unit</th>
-                      <th className="px-2 py-1.5">Category</th>
-                      <th className="px-2 py-1.5 text-right">Weight (kg)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredParts.map((p) => (
-                      <tr
-                        key={p.id}
-                        onClick={() => togglePartSelected(p.id)}
-                        className={`cursor-pointer border-t border-[#f1f5f9] ${selectedPartIds.has(p.id) ? 'bg-blue-50' : 'hover:bg-[#f8fafc]'}`}
-                      >
-                        <td className="px-2 py-1">
-                          <input type="checkbox" checked={selectedPartIds.has(p.id)} onChange={() => togglePartSelected(p.id)} onClick={(e) => e.stopPropagation()} />
-                        </td>
-                        <td className="px-2 py-1 text-[#0f172a]">{p.part_no}</td>
-                        <td className="px-2 py-1 text-[#334155]">{p.part}</td>
-                        <td className="px-2 py-1 text-[#334155]">{p.drawing}</td>
-                        <td className="px-2 py-1 text-[#334155]">{p.unit}</td>
-                        <td className="px-2 py-1 text-[#334155]">{p.category}</td>
-                        <td className="px-2 py-1 text-right text-[#0f172a]">{fmt(p.weight_kg)}</td>
-                      </tr>
+          <details className="rounded-[16px] border border-[#dbe4f0] bg-[#f8fafc] px-4 py-3">
+            <summary className="cursor-pointer text-[11px] font-semibold uppercase tracking-wide text-[#94a3b8]">
+              Crate size settings (advanced) — only touch if crates are coming out the wrong physical size
+            </summary>
+            <div className="space-y-4 mt-3">
+              {DIM_CLASS_SECTIONS.map((section) => (
+                <div key={section.key} className="space-y-2">
+                  <div className="text-[11px] font-semibold text-[#334155]">{section.label}</div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                    {DIM_CLASS_FIELDS.map((f) => (
+                      <label key={f.key} className="flex flex-col text-[10px] text-[#64748b]">
+                        <span className="flex min-h-[28px] items-end">{f.label}</span>
+                        <input
+                          type="number"
+                          step="0.1"
+                          value={dimConfig[section.key][f.key]}
+                          onChange={(e) =>
+                            setDimConfig((c) => ({
+                              ...c,
+                              [section.key]: { ...c[section.key], [f.key]: Number(e.target.value) },
+                            }))
+                          }
+                          className="mt-1 w-full rounded-lg border border-[#e2e8f0] bg-white px-2 py-1 text-[12px] text-[#0f172a] focus:border-[#0f172a] focus:outline-none"
+                        />
+                      </label>
                     ))}
-                  </tbody>
-                </table>
-              </div>
+                  </div>
+                </div>
+              ))}
             </div>
+          </details>
+
+          {/* Excel-style parts table: click a column's ▾ to filter it, right where the
+              data lives (not a separate control panel) — tick rows on the left and build
+              a crate from just those, or hit Auto-bucket to batch everything shown below. */}
+          <div className="rounded-[16px] border border-[#dbe4f0] bg-white overflow-hidden">
+            <div className="max-h-[480px] overflow-auto">
+              <table className="w-full text-left text-[12px] border-collapse">
+                <thead className="sticky top-0 z-10 bg-[#f8fafc] text-[#475569]">
+                  <tr>
+                    <th className="px-2 py-2 w-9 border-b border-[#e2e8f0]">
+                      <input
+                        type="checkbox"
+                        checked={filteredParts.length > 0 && selectedPartIds.size === filteredParts.length}
+                        onChange={(e) => setSelectedPartIds(e.target.checked ? new Set(filteredParts.map((p) => p.id)) : new Set())}
+                      />
+                    </th>
+                    {POOL_COLUMNS.map((col) => (
+                      <th key={col.field} className={`px-2 py-2 border-b border-[#e2e8f0] font-semibold whitespace-nowrap ${col.numeric ? 'text-right' : ''}`}>
+                        <span className="inline-flex items-center gap-1">
+                          {col.label}
+                          {col.filterKey && (
+                            <MultiSelectDropdown
+                              compact
+                              label={col.label}
+                              options={facetOptions(availableParts, filters, FILTER_DIMS_BY_KEY[col.filterKey])}
+                              selected={filters[col.filterKey]}
+                              onChange={(vals) => setFilter(col.filterKey, vals)}
+                            />
+                          )}
+                        </span>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredParts.map((p) => (
+                    <tr
+                      key={p.id}
+                      onClick={() => togglePartSelected(p.id)}
+                      className={`cursor-pointer border-b border-[#f1f5f9] ${selectedPartIds.has(p.id) ? 'bg-blue-50' : 'hover:bg-[#f8fafc]'}`}
+                    >
+                      <td className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
+                        <input type="checkbox" checked={selectedPartIds.has(p.id)} onChange={() => togglePartSelected(p.id)} />
+                      </td>
+                      {POOL_COLUMNS.map((col) => (
+                        <td key={col.field} className={`px-2 py-1.5 whitespace-nowrap ${col.numeric ? 'text-right text-[#0f172a]' : 'text-[#334155]'}`}>
+                          {col.field === 'weight_kg' || col.field === 'sqft' ? fmt(p[col.field]) : p[col.field]}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                  {filteredParts.length === 0 && (
+                    <tr>
+                      <td colSpan={POOL_COLUMNS.length + 1} className="px-4 py-8 text-center text-[#94a3b8]">
+                        No parts match the current filters.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 rounded-[16px] border border-[#dbe4f0] bg-[#f8fafc] px-4 py-3">
+            <TargetWeightControl value={targetWeightKg} onChange={setTargetWeightKg} />
+            <button
+              type="button"
+              onClick={handleAutoBucket}
+              disabled={!filteredParts.length}
+              className="rounded-full bg-[#1d4ed8] px-5 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-[#1e40af] disabled:opacity-50"
+            >
+              Auto-bucket all {filteredParts.length} shown into crates
+            </button>
+            <span className="text-[#cbd5e1]">|</span>
+            <span className="text-xs font-semibold text-[#64748b]">{selectedPartIds.size} row{selectedPartIds.size !== 1 ? 's' : ''} checked</span>
+            <label className="flex items-center gap-1.5 text-[11px] text-[#64748b]">
+              Crate #
+              <input
+                type="number"
+                min="1"
+                value={manualCrateNo}
+                onChange={(e) => setManualCrateNo(e.target.value)}
+                className={`w-20 rounded-lg border px-2 py-1 text-[12px] focus:outline-none ${
+                  manualCrateNoTaken ? 'border-red-300 bg-red-50 text-red-700' : 'border-[#e2e8f0] bg-white text-[#0f172a] focus:border-[#0f172a]'
+                }`}
+              />
+            </label>
+            <button
+              type="button"
+              onClick={handleCreateManualCrate}
+              disabled={!selectedPartIds.size || !manualCrateNo || manualCrateNoTaken}
+              className="ml-auto rounded-full border border-[#1d4ed8] bg-white px-5 py-2 text-sm font-semibold text-[#1d4ed8] shadow-sm transition-all hover:bg-blue-50 disabled:opacity-50"
+            >
+              Build crate from checked rows
+            </button>
+          </div>
+          {manualCrateNoTaken && (
+            <div className="text-[11px] text-red-600 text-right">Crate #{manualCrateNo} already exists — pick a different number.</div>
           )}
 
           {crates.length > 0 && (
