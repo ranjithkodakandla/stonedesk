@@ -496,6 +496,7 @@ const CrateFilterPlanner = ({ projectId }) => {
   const [manualMode, setManualMode] = useState(false);
   const [selectedPartIds, setSelectedPartIds] = useState(() => new Set());
   const [suggestions, setSuggestions] = useState(null);
+  const [manualCrateNo, setManualCrateNo] = useState(''); // user-editable crate # for the next manually-built crate
 
   // crates: array of { crate_no, parts: [...] } — local editable state.
   const [crates, setCrates] = useState([]);
@@ -635,17 +636,36 @@ const CrateFilterPlanner = ({ projectId }) => {
     });
   }, []);
 
+  const suggestedNextCrateNo = useMemo(
+    () => (crates.length ? Math.max(...crates.map((c) => c.crate_no)) + 1 : 1),
+    [crates],
+  );
+
+  // Pre-fill the crate # field with the next free number whenever it's empty
+  // (fresh into manual mode, or right after a crate was just created) — the
+  // factory floor can still type over it to match their own physical labels.
+  useEffect(() => {
+    if (manualMode && manualCrateNo === '') setManualCrateNo(String(suggestedNextCrateNo));
+  }, [manualMode, suggestedNextCrateNo, manualCrateNo]);
+
+  const manualCrateNoTaken = useMemo(() => {
+    const n = Number(manualCrateNo);
+    return manualCrateNo !== '' && crates.some((c) => c.crate_no === n);
+  }, [manualCrateNo, crates]);
+
   const handleCreateManualCrate = useCallback(() => {
     const chosen = filteredParts.filter((p) => selectedPartIds.has(p.id));
     if (!chosen.length) return;
+    const crateNo = Number(manualCrateNo);
+    if (!crateNo || crateNo <= 0 || crates.some((c) => c.crate_no === crateNo)) return;
     setCrates((prev) => {
-      const nextNo = prev.length ? Math.max(...prev.map((c) => c.crate_no)) + 1 : 1;
-      const crate = crateFromParts(nextNo, chosen, dimConfig);
+      const crate = crateFromParts(crateNo, chosen, dimConfig);
       logCrateAction(crate, filters);
-      return [...prev, crate];
+      return [...prev, crate].sort((a, b) => a.crate_no - b.crate_no);
     });
     setSelectedPartIds(new Set());
-  }, [filteredParts, selectedPartIds, dimConfig, filters, logCrateAction]);
+    setManualCrateNo('');
+  }, [filteredParts, selectedPartIds, manualCrateNo, crates, dimConfig, filters, logCrateAction]);
 
   const handleAutoBucket = useCallback(() => {
     if (!filteredParts.length) return;
@@ -997,7 +1017,7 @@ const CrateFilterPlanner = ({ projectId }) => {
                 <span className="text-xs font-semibold uppercase tracking-wide text-[#94a3b8]">
                   {selectedPartIds.size} of {filteredParts.length} selected
                 </span>
-                <div className="flex gap-2">
+                <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={() => setSelectedPartIds(new Set(filteredParts.map((p) => p.id)))}
@@ -1012,16 +1032,31 @@ const CrateFilterPlanner = ({ projectId }) => {
                   >
                     Clear
                   </button>
+                  <label className="flex items-center gap-1.5 text-[11px] text-[#64748b]">
+                    Crate #
+                    <input
+                      type="number"
+                      min="1"
+                      value={manualCrateNo}
+                      onChange={(e) => setManualCrateNo(e.target.value)}
+                      className={`w-20 rounded-lg border px-2 py-1 text-[12px] focus:outline-none ${
+                        manualCrateNoTaken ? 'border-red-300 bg-red-50 text-red-700' : 'border-[#e2e8f0] bg-white text-[#0f172a] focus:border-[#0f172a]'
+                      }`}
+                    />
+                  </label>
                   <button
                     type="button"
                     onClick={handleCreateManualCrate}
-                    disabled={!selectedPartIds.size}
+                    disabled={!selectedPartIds.size || !manualCrateNo || manualCrateNoTaken}
                     className="rounded-full bg-[#1d4ed8] px-5 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:bg-[#1e40af] disabled:opacity-50"
                   >
                     Create crate from selection
                   </button>
                 </div>
               </div>
+              {manualCrateNoTaken && (
+                <div className="text-[11px] text-red-600">Crate #{manualCrateNo} already exists — pick a different number.</div>
+              )}
               <div className="max-h-80 overflow-y-auto rounded-lg border border-[#e8edf3]">
                 <table className="w-full text-left text-[11px]">
                   <thead className="sticky top-0 bg-[#f8fafc] text-[#94a3b8] uppercase tracking-wide">
