@@ -162,6 +162,7 @@ def build_store():
             "cutlist_runs": mongo_db["cutlist_runs"],
             "cutlist_drafts": mongo_db["cutlist_drafts"],
             "cutlist_projects": mongo_db["cutlist_projects"],
+            "crate_action_log": mongo_db["crate_action_log"],
         }
         return store, "mongo"
     except Exception as e:
@@ -180,6 +181,7 @@ def build_store():
             "cutlist_runs": InMemoryCollection(),
             "cutlist_drafts": InMemoryCollection(),
             "cutlist_projects": InMemoryCollection(),
+            "crate_action_log": InMemoryCollection(),
         }, "memory"
 
 
@@ -195,6 +197,7 @@ crate_wood_types_col = store["crate_wood_types"]
 cutlist_runs_col = store["cutlist_runs"]
 cutlist_drafts_col = store["cutlist_drafts"]
 cutlist_projects_col = store["cutlist_projects"]
+crate_action_log_col = store["crate_action_log"]
 
 
 def ensure_indexes() -> None:
@@ -2263,6 +2266,61 @@ def get_dispatch_parts(project_id: int):
             ),
         })
     return _json_safe_floats(out)
+
+
+# ── Manual crate-building action log + learned suggestions ──────────────────
+# Every manually-built crate (filters used, parts grouped, resulting
+# weight/dimensions) is logged here. `get_crate_suggestions` aggregates that
+# history into simple, explainable pattern rules per category/part-type
+# (typical target weight, typical part count) that the UI can offer as
+# defaults before a user runs auto-bucket or builds manually. This is
+# intentionally a plain stats rollup, not a trained model, so the rules stay
+# inspectable and improve automatically as more manual crates are logged.
+
+class CrateActionLogIn(BaseModel):
+    filters: Dict[str, Any] = {}
+    part_ids: List[Any] = []
+    category: Optional[str] = None
+    part_type: Optional[str] = None
+    total_weight_kg: Optional[float] = None
+    total_sqft: Optional[float] = None
+    part_count: Optional[int] = None
+    created_by: Optional[str] = None
+
+
+@app.post("/api/projects/{project_id}/crate-actions")
+def log_crate_action(project_id: int, body: CrateActionLogIn):
+    """Records a manually-built crate for later pattern learning."""
+    doc = body.dict()
+    doc["project_id"] = project_id
+    doc["created_at"] = datetime.utcnow().isoformat()
+    crate_action_log_col.insert_one(doc)
+    return {"status": "logged"}
+
+
+@app.get("/api/projects/{project_id}/crate-suggestions")
+def get_crate_suggestions(project_id: int):
+    """Derives simple suggested target-weight/part-count rules per
+    category/part-type from this project's manually-built crate history."""
+    logs = list(crate_action_log_col.find({"project_id": project_id}, {"_id": 0}))
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    for log in logs:
+        key = str(log.get("part_type") or log.get("category") or "unspecified")
+        groups.setdefault(key, []).append(log)
+
+    suggestions = []
+    for key, entries in groups.items():
+        weights = [e["total_weight_kg"] for e in entries if e.get("total_weight_kg")]
+        counts = [e["part_count"] for e in entries if e.get("part_count")]
+        if not weights and not counts:
+            continue
+        suggestions.append({
+            "group": key,
+            "sample_size": len(entries),
+            "avg_target_weight_kg": round(sum(weights) / len(weights), 1) if weights else None,
+            "avg_part_count": round(sum(counts) / len(counts), 1) if counts else None,
+        })
+    return {"sample_size": len(logs), "suggestions": suggestions}
 
 
 # ── Operational bucket model (4 groups) ──────────────────────────────────────
