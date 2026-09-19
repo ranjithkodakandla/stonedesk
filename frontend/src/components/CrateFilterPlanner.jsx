@@ -19,6 +19,9 @@ const FILTER_DIMS = [
   { key: 'thicknesses', field: 'thickness', label: 'Thickness' },
   { key: 'categories', field: 'category', label: 'Category' },
   { key: 'partTypes', field: 'part', label: 'Part Type' },
+  { key: 'drawings', field: 'drawing', label: 'Drawing' },
+  { key: 'unitNames', field: 'unit_name', label: 'Unit Name' },
+  { key: 'unitNumbers', field: 'unit_number', label: 'Unit Number' },
 ];
 
 const EMPTY_FILTERS = FILTER_DIMS.reduce((acc, d) => ({ ...acc, [d.key]: [] }), {});
@@ -484,6 +487,10 @@ const CrateFilterPlanner = ({ projectId }) => {
   const [filters, setFilters] = useState(EMPTY_FILTERS);
   const [targetWeightKg, setTargetWeightKg] = useState(1900);
   const [dimConfig, setDimConfig] = useState(DEFAULT_DIM_CONFIG);
+  const [selectCount, setSelectCount] = useState(''); // "# pieces to select" cap on the filtered pool
+  const [manualMode, setManualMode] = useState(false);
+  const [selectedPartIds, setSelectedPartIds] = useState(() => new Set());
+  const [suggestions, setSuggestions] = useState(null);
 
   // crates: array of { crate_no, parts: [...] } — local editable state.
   const [crates, setCrates] = useState([]);
@@ -569,12 +576,71 @@ const CrateFilterPlanner = ({ projectId }) => {
     [allParts, allocatedIds],
   );
 
-  const filteredParts = useMemo(
+  const filteredPartsAll = useMemo(
     () => availableParts.filter((p) => partMatchesFilters(p, filters, null)),
     [availableParts, filters],
   );
 
+  // "# pieces to select" caps how many of the matched parts are pulled in —
+  // e.g. take the first 40 of 1740 matches instead of the whole pool.
+  const filteredParts = useMemo(() => {
+    const n = parseInt(selectCount, 10);
+    if (!n || n <= 0 || n >= filteredPartsAll.length) return filteredPartsAll;
+    return filteredPartsAll.slice(0, n);
+  }, [filteredPartsAll, selectCount]);
+
   const setFilter = (key, values) => setFilters((f) => ({ ...f, [key]: values }));
+
+  useEffect(() => {
+    // Reset selection whenever the pool changes so stale checkbox state
+    // never survives a filter change into a manual crate.
+    setSelectedPartIds(new Set());
+  }, [filteredParts]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    axios
+      .get(`${API_BASE}/projects/${projectId}/crate-suggestions`)
+      .then((res) => setSuggestions(res.data))
+      .catch(() => setSuggestions(null));
+  }, [projectId]);
+
+  const logCrateAction = useCallback((crate, filtersUsed) => {
+    if (!projectId) return;
+    const category = crate.parts[0]?.category || null;
+    const partType = crate.parts[0]?.part || null;
+    axios
+      .post(`${API_BASE}/projects/${projectId}/crate-actions`, {
+        filters: filtersUsed,
+        part_ids: crate.parts.map((p) => p.id),
+        category,
+        part_type: partType,
+        total_weight_kg: crate.total_weight_kg,
+        total_sqft: crate.total_sqft,
+        part_count: crate.parts.length,
+      })
+      .catch(() => {}); // logging is best-effort, never blocks crate building
+  }, [projectId]);
+
+  const togglePartSelected = useCallback((partId) => {
+    setSelectedPartIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(partId)) next.delete(partId); else next.add(partId);
+      return next;
+    });
+  }, []);
+
+  const handleCreateManualCrate = useCallback(() => {
+    const chosen = filteredParts.filter((p) => selectedPartIds.has(p.id));
+    if (!chosen.length) return;
+    setCrates((prev) => {
+      const nextNo = prev.length ? Math.max(...prev.map((c) => c.crate_no)) + 1 : 1;
+      const crate = crateFromParts(nextNo, chosen, dimConfig);
+      logCrateAction(crate, filters);
+      return [...prev, crate];
+    });
+    setSelectedPartIds(new Set());
+  }, [filteredParts, selectedPartIds, dimConfig, filters, logCrateAction]);
 
   const handleAutoBucket = useCallback(() => {
     if (!filteredParts.length) return;
@@ -833,6 +899,47 @@ const CrateFilterPlanner = ({ projectId }) => {
               </span>
             ))}
             <span className="ml-2 text-xs text-[#94a3b8]">{allocatedIds.size} parts already allocated</span>
+            <label className="ml-auto flex items-center gap-2 text-xs text-[#64748b]">
+              # pieces to select
+              <input
+                type="number"
+                min="1"
+                placeholder={`All (${filteredPartsAll.length})`}
+                value={selectCount}
+                onChange={(e) => setSelectCount(e.target.value)}
+                className="w-24 rounded-lg border border-[#e2e8f0] bg-white px-2 py-1 text-[12px] text-[#0f172a] focus:border-[#0f172a] focus:outline-none"
+              />
+            </label>
+          </div>
+
+          {suggestions?.sample_size > 0 && (
+            <div className="rounded-[16px] border border-[#dbe4f0] bg-amber-50 px-4 py-3 text-xs text-[#78350f]">
+              <span className="font-semibold">Learned from {suggestions.sample_size} manually-built crate{suggestions.sample_size !== 1 ? 's' : ''}:</span>{' '}
+              {suggestions.suggestions.map((s) => (
+                <span key={s.group} className="mr-3 inline-block">
+                  {s.group}: ~{s.avg_target_weight_kg ?? '—'} kg, ~{s.avg_part_count ?? '—'} parts (n={s.sample_size})
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div className="flex items-center gap-2 rounded-[16px] border border-[#dbe4f0] bg-[#f8fafc] px-4 py-3">
+            <span className="text-xs font-semibold uppercase tracking-wide text-[#94a3b8]">Mode</span>
+            <button
+              type="button"
+              onClick={() => setManualMode(false)}
+              className={`rounded-full px-4 py-1.5 text-xs font-semibold transition-colors ${!manualMode ? 'bg-[#1d4ed8] text-white' : 'border border-[#dbe4f0] bg-white text-[#64748b] hover:bg-[#f1f5f9]'}`}
+            >
+              Auto-bucket
+            </button>
+            <button
+              type="button"
+              onClick={() => setManualMode(true)}
+              className={`rounded-full px-4 py-1.5 text-xs font-semibold transition-colors ${manualMode ? 'bg-[#1d4ed8] text-white' : 'border border-[#dbe4f0] bg-white text-[#64748b] hover:bg-[#f1f5f9]'}`}
+            >
+              Manual selection
+            </button>
+            <span className="text-[11px] text-[#94a3b8]">Manual crates are logged so the system can learn your team's typical groupings and suggest them back.</span>
           </div>
 
           <div className="rounded-[16px] border border-[#dbe4f0] bg-[#f8fafc] px-4 py-3 space-y-4">
@@ -865,17 +972,87 @@ const CrateFilterPlanner = ({ projectId }) => {
             ))}
           </div>
 
-          <div className="flex flex-wrap items-center gap-3 rounded-[16px] border border-[#dbe4f0] bg-[#f8fafc] px-4 py-3">
-            <TargetWeightControl value={targetWeightKg} onChange={setTargetWeightKg} />
-            <button
-              type="button"
-              onClick={handleAutoBucket}
-              disabled={!filteredParts.length}
-              className="ml-auto rounded-full bg-[#1d4ed8] px-5 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-[#1e40af] disabled:opacity-50"
-            >
-              Auto-bucket into crates
-            </button>
-          </div>
+          {!manualMode && (
+            <div className="flex flex-wrap items-center gap-3 rounded-[16px] border border-[#dbe4f0] bg-[#f8fafc] px-4 py-3">
+              <TargetWeightControl value={targetWeightKg} onChange={setTargetWeightKg} />
+              <button
+                type="button"
+                onClick={handleAutoBucket}
+                disabled={!filteredParts.length}
+                className="ml-auto rounded-full bg-[#1d4ed8] px-5 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-[#1e40af] disabled:opacity-50"
+              >
+                Auto-bucket into crates
+              </button>
+            </div>
+          )}
+
+          {manualMode && (
+            <div className="rounded-[16px] border border-[#dbe4f0] bg-white px-4 py-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold uppercase tracking-wide text-[#94a3b8]">
+                  {selectedPartIds.size} of {filteredParts.length} selected
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPartIds(new Set(filteredParts.map((p) => p.id)))}
+                    className="rounded-full border border-[#dbe4f0] bg-white px-3 py-1 text-[11px] font-medium text-[#64748b] hover:bg-[#f1f5f9]"
+                  >
+                    Select all
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPartIds(new Set())}
+                    className="rounded-full border border-[#dbe4f0] bg-white px-3 py-1 text-[11px] font-medium text-[#64748b] hover:bg-[#f1f5f9]"
+                  >
+                    Clear
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCreateManualCrate}
+                    disabled={!selectedPartIds.size}
+                    className="rounded-full bg-[#1d4ed8] px-5 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:bg-[#1e40af] disabled:opacity-50"
+                  >
+                    Create crate from selection
+                  </button>
+                </div>
+              </div>
+              <div className="max-h-80 overflow-y-auto rounded-lg border border-[#e8edf3]">
+                <table className="w-full text-left text-[11px]">
+                  <thead className="sticky top-0 bg-[#f8fafc] text-[#94a3b8] uppercase tracking-wide">
+                    <tr>
+                      <th className="px-2 py-1.5 w-8"></th>
+                      <th className="px-2 py-1.5">Part #</th>
+                      <th className="px-2 py-1.5">Part Type</th>
+                      <th className="px-2 py-1.5">Drawing</th>
+                      <th className="px-2 py-1.5">Unit</th>
+                      <th className="px-2 py-1.5">Category</th>
+                      <th className="px-2 py-1.5 text-right">Weight (kg)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredParts.map((p) => (
+                      <tr
+                        key={p.id}
+                        onClick={() => togglePartSelected(p.id)}
+                        className={`cursor-pointer border-t border-[#f1f5f9] ${selectedPartIds.has(p.id) ? 'bg-blue-50' : 'hover:bg-[#f8fafc]'}`}
+                      >
+                        <td className="px-2 py-1">
+                          <input type="checkbox" checked={selectedPartIds.has(p.id)} onChange={() => togglePartSelected(p.id)} onClick={(e) => e.stopPropagation()} />
+                        </td>
+                        <td className="px-2 py-1 text-[#0f172a]">{p.part_no}</td>
+                        <td className="px-2 py-1 text-[#334155]">{p.part}</td>
+                        <td className="px-2 py-1 text-[#334155]">{p.drawing}</td>
+                        <td className="px-2 py-1 text-[#334155]">{p.unit_name}{p.unit_number ? ` ${p.unit_number}` : ''}</td>
+                        <td className="px-2 py-1 text-[#334155]">{p.category}</td>
+                        <td className="px-2 py-1 text-right text-[#0f172a]">{fmt(p.weight_kg)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           {crates.length > 0 && (
             <>
