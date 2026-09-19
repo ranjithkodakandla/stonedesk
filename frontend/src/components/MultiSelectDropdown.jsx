@@ -3,7 +3,11 @@ import React, { useEffect, useRef, useState } from 'react';
 // Excel-style AutoFilter dropdown: search box + checkbox list + select all/clear.
 // `selected` = [] means "all" (nothing excluded). `options` is the full available
 // list for this dimension given the *other* active filters (cascading is computed
-// by the caller).
+// by the caller) — pass either plain values or {value, count} pairs to show how
+// many parts each option matches given the other active filters.
+const NONE_SENTINEL_PREFIX = '__nomatch__';
+const isSentinel = (v) => typeof v === 'string' && v.startsWith(NONE_SENTINEL_PREFIX);
+
 export default function MultiSelectDropdown({ label, options, selected, onChange }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -17,24 +21,30 @@ export default function MultiSelectDropdown({ label, options, selected, onChange
     return () => document.removeEventListener('mousedown', onDocClick);
   }, []);
 
+  // Normalize options to {value, count}; count is null when the caller didn't supply it.
+  const normOptions = options.map((o) => (o && typeof o === 'object' ? o : { value: o, count: null }));
+
+  // The sentinel from "Clear" marks "nothing checked" without colliding with the
+  // [] = "all" convention — strip it out of anything shown or compared to real values.
+  const realSelected = selected.filter((v) => !isSentinel(v));
   const isAll = selected.length === 0;
   const filteredOptions = search
-    ? options.filter((o) => String(o).toLowerCase().includes(search.toLowerCase()))
-    : options;
+    ? normOptions.filter((o) => String(o.value).toLowerCase().includes(search.toLowerCase()))
+    : normOptions;
 
   const toggle = (value) => {
-    if (selected.includes(value)) {
-      onChange(selected.filter((v) => v !== value));
+    if (realSelected.includes(value)) {
+      onChange(realSelected.filter((v) => v !== value));
     } else {
-      onChange([...selected, value]);
+      onChange([...realSelected, value]);
     }
   };
 
   const summary = isAll
     ? 'All'
-    : selected.length === 1
-      ? selected[0]
-      : `${selected.length} selected`;
+    : realSelected.length === 1
+      ? realSelected[0]
+      : `${realSelected.length} selected`;
 
   return (
     <div className="relative" ref={rootRef}>
@@ -71,7 +81,7 @@ export default function MultiSelectDropdown({ label, options, selected, onChange
             <button
               type="button"
               className="text-[#94a3b8] font-semibold"
-              onClick={() => onChange(options.length ? [`__nomatch__${Math.random()}`] : [])}
+              onClick={() => onChange(normOptions.length ? [`${NONE_SENTINEL_PREFIX}${Math.random()}`] : [])}
             >
               Clear
             </button>
@@ -80,8 +90,8 @@ export default function MultiSelectDropdown({ label, options, selected, onChange
             {filteredOptions.length === 0 && (
               <div className="px-2 py-2 text-[11px] text-[#94a3b8]">No matches</div>
             )}
-            {filteredOptions.map((opt) => {
-              const checked = isAll || selected.includes(opt);
+            {filteredOptions.map(({ value: opt, count }) => {
+              const checked = isAll || realSelected.includes(opt);
               return (
                 <label
                   key={opt}
@@ -90,10 +100,11 @@ export default function MultiSelectDropdown({ label, options, selected, onChange
                   <input
                     type="checkbox"
                     checked={checked}
-                    onChange={() => (isAll ? onChange(options.filter((o) => o !== opt)) : toggle(opt))}
+                    onChange={() => (isAll ? onChange(normOptions.map((o) => o.value).filter((v) => v !== opt)) : toggle(opt))}
                     className="rounded border-[#cbd5e1]"
                   />
-                  <span className="truncate">{opt}</span>
+                  <span className="truncate flex-1">{opt}</span>
+                  {count != null && <span className="text-[#94a3b8] text-[10px] tabular-nums">{count}</span>}
                 </label>
               );
             })}

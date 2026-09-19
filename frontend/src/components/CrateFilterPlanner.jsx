@@ -34,17 +34,23 @@ function partMatchesFilters(part, filters, exceptKey) {
   });
 }
 
-// Cascading facet options: for a given dimension, compute distinct values from
-// parts that match every OTHER active filter (classic Excel AutoFilter behavior).
+// Cascading facet options: for a given dimension, compute distinct values (with
+// how many parts each matches) from parts that match every OTHER active filter
+// (classic Excel AutoFilter behavior) — the counts make the narrowing visible as
+// other filters are applied, instead of just shrinking the list silently.
 function facetOptions(parts, filters, dim) {
-  const values = new Set();
+  const counts = new Map();
   for (const p of parts) {
-    if (partMatchesFilters(p, filters, dim.key)) values.add(String(p[dim.field]));
+    if (!partMatchesFilters(p, filters, dim.key)) continue;
+    const v = String(p[dim.field]);
+    counts.set(v, (counts.get(v) || 0) + 1);
   }
-  return [...values].sort((a, b) => {
-    const na = parseFloat(a), nb = parseFloat(b);
-    return !isNaN(na) && !isNaN(nb) ? na - nb : a.localeCompare(b);
-  });
+  return [...counts.keys()]
+    .sort((a, b) => {
+      const na = parseFloat(a), nb = parseFloat(b);
+      return !isNaN(na) && !isNaN(nb) ? na - nb : a.localeCompare(b);
+    })
+    .map((value) => ({ value, count: counts.get(value) }));
 }
 
 // ─── Category bucket ordering ─────────────────────────────────────────────────
