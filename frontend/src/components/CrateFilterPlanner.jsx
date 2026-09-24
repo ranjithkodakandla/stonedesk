@@ -675,11 +675,17 @@ const CrateFilterPlanner = ({ projectId }) => {
     const chosen = filteredParts.filter((p) => selectedPartIds.has(p.id));
     if (!chosen.length) return;
     const crateNo = Number(manualCrateNo);
-    if (!crateNo || crateNo <= 0 || crates.some((c) => c.crate_no === crateNo)) return;
+    if (!crateNo || crateNo <= 0) return;
     setCrates((prev) => {
-      const crate = crateFromParts(crateNo, chosen, dimConfig);
+      const existing = prev.find((c) => c.crate_no === crateNo);
+      const crate = existing
+        ? crateFromParts(crateNo, [...existing.parts, ...chosen], dimConfig)
+        : crateFromParts(crateNo, chosen, dimConfig);
       logCrateAction(crate, filters);
-      return [...prev, crate].sort((a, b) => a.crate_no - b.crate_no);
+      return prev
+        .filter((c) => c.crate_no !== crateNo)
+        .concat(crate)
+        .sort((a, b) => a.crate_no - b.crate_no);
     });
     setSelectedPartIds(new Set());
     setManualCrateNo('');
@@ -1075,14 +1081,14 @@ const CrateFilterPlanner = ({ projectId }) => {
             <button
               type="button"
               onClick={handleCreateManualCrate}
-              disabled={!selectedPartIds.size || !manualCrateNo || manualCrateNoTaken}
+              disabled={!selectedPartIds.size || !manualCrateNo}
               className="ml-auto rounded-full border border-[#1d4ed8] bg-white px-5 py-2 text-sm font-semibold text-[#1d4ed8] shadow-sm transition-all hover:bg-blue-50 disabled:opacity-50"
             >
-              Build crate from checked rows
+              {manualCrateNoTaken ? 'Add checked rows to crate' : 'Build crate from checked rows'}
             </button>
           </div>
           {manualCrateNoTaken && (
-            <div className="text-[11px] text-red-600 text-right">Crate #{manualCrateNo} already exists — pick a different number.</div>
+            <div className="text-[11px] text-[#64748b] text-right">Crate #{manualCrateNo} already exists — checked rows will be added to it.</div>
           )}
 
           {crates.length > 0 && (
