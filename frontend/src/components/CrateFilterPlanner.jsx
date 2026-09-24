@@ -1,7 +1,11 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { API_BASE } from '../utils/plannerUtils';
-import { weightBatchParts } from '../utils/crateEstimator';
+import {
+  weightBatchParts,
+  estimateLeanedCassetteDimensions,
+  estimateLeaningFamilyBundleDimensions,
+} from '../utils/crateEstimator';
 import MultiSelectDropdown from './MultiSelectDropdown';
 import TargetWeightControl from './TargetWeightControl';
 
@@ -102,43 +106,27 @@ function sortByBucketOrder(parts) {
 }
 
 // ─── Crate dimension configuration ────────────────────────────────────────────
-// Editable by the employee before auto-bucketing, fully independent per crate
-// class (Vanity/Kitchen vs Islands) — nothing is shared between the two.
-// internal = raw part extents + margin (length/width each side, height total);
-// external = internal + that class's own add-on for length/width, plus that
-// class's own fixed external height.
-const DEFAULT_CLASS_DIM_CONFIG = {
-  lengthMargin: 0.5,
-  widthMargin: 0.5,
-  heightMargin: 2,
-  extLengthAdd: 4,
-  extWidthAdd: 4,
-  extHeight: 7,
-};
-
+// Dimensions are computed by the SAME functions the crate-engineering screen
+// uses (estimateLeanedCassetteDimensions / estimateLeaningFamilyBundleDimensions
+// in crateEstimator.js — which mirror the physical-packaging model in the
+// backend), rather than a separately-maintained approximation. Those functions
+// account for real crate-building allowances (pallet base, headroom, wall
+// timber, forklift tine clearance, etc.) on top of the raw stone size; the
+// only knob left for the employee to tune is the foam gap between stacked
+// layers/rows, which does vary by job.
 const DEFAULT_DIM_CONFIG = {
-  kv: { ...DEFAULT_CLASS_DIM_CONFIG },
-  island: { ...DEFAULT_CLASS_DIM_CONFIG, extHeight: 9 },
+  layerGapIn: 1.0,
 };
 
-const THICKNESS_INCH = { '2CM': 0.79, '3CM': 1.18, '4CM': 1.57 };
-function thicknessInches(t) {
-  const key = String(t || '').trim().toUpperCase().replace(' ', '');
-  return THICKNESS_INCH[key] ?? 1.18;
-}
-
-// Mirrors estimateHorizontalLayeredDimensions() in crateEstimator.js — the
-// established packing model: bigger parts (tops) form one layer, back
-// splashes another, side splashes another, stacked with a separator between
-// each. A layer's height is its MAX piece thickness, not the sum of every
-// piece in it — same-role parts sit side by side in the layer, not stacked
-// on each other.
-const LAYER_SEPARATOR_IN = 1.0;
-function isBackSplashPart(p) {
-  return /back.?splash/i.test(p.part || '');
-}
-function isSideSplashPart(p) {
-  return /side.?splash/i.test(p.part || '');
+// crateEstimator.js works over one entry per PHYSICAL piece; a pool row can
+// represent qty > 1 identical pieces, so expand before handing rows off to it.
+function expandByQty(parts) {
+  const out = [];
+  for (const p of parts) {
+    const n = Math.max(1, Number(p.qty) || 1);
+    for (let i = 0; i < n; i++) out.push(p);
+  }
+  return out;
 }
 
 function computeCrateDimensions(parts, dimConfig) {
@@ -147,83 +135,20 @@ function computeCrateDimensions(parts, dimConfig) {
   }
 
   const isIsland = parts.some((p) => bucketOrderForPart(p) === 0);
-  const cfg = isIsland ? dimConfig.island : dimConfig.kv;
+  const pieces = expandByQty(parts);
 
-  if (isIsland) {
-    // Islands stand upright (cassette model) — a completely different axis
-    // assignment than flat-lay kitchen/vanity crates: the piece's SHORT edge
-    // becomes the crate's HEIGHT (it's standing on end), and thickness stacks
-    // on the WIDTH/DEPTH axis (pieces lean side by side like books on a
-    // shelf), not on height. Mirrors estimateLeanedCassetteDimensions() in
-    // crateEstimator.js.
-    let maxLongEdge = 0;
-    let maxShortEdge = 0;
-    for (const p of parts) {
-      const L = p.length || 0;
-      const W = p.width || 0;
-      maxLongEdge = Math.max(maxLongEdge, Math.max(L, W));
-      maxShortEdge = Math.max(maxShortEdge, L > 0 && W > 0 ? Math.min(L, W) : Math.max(L, W));
-    }
-    const stackDepth = parts.reduce((s, p) => s + thicknessInches(p.thickness) * (p.qty || 1), 0);
+  // Islands stand upright (cassette model): SHORT edge -> crate HEIGHT,
+  // thickness stacks on the WIDTH/DEPTH axis (pieces lean side by side like
+  // books on a shelf), not on height.
+  if (isIsland) return estimateLeanedCassetteDimensions(pieces);
 
-    const internal_length = maxLongEdge + cfg.lengthMargin * 2;
-    const internal_width = stackDepth + cfg.widthMargin * 2;
-    const internal_height = maxShortEdge + cfg.heightMargin;
-
-    return {
-      internal_length,
-      internal_width,
-      internal_height,
-      external_length: internal_length + cfg.extLengthAdd,
-      external_width: internal_width + cfg.extWidthAdd,
-      external_height: internal_height + cfg.extHeight,
-    };
-  }
-
-  // Kitchen/Vanity — flat-lay: length/width from footprint, height from
-  // layered same-role groups (mirrors estimateHorizontalLayeredDimensions()).
-  const rawLength = Math.max(...parts.map((p) => p.length || 0));
-  const rawWidth = Math.max(...parts.map((p) => p.width || 0));
-
-  const backSplash = parts.filter(isBackSplashPart);
-  const sideSplash = parts.filter(isSideSplashPart);
-  const mainTops = parts.filter((p) => !isBackSplashPart(p) && !isSideSplashPart(p));
-
-  const mainH = mainTops.length ? Math.max(...mainTops.map((p) => thicknessInches(p.thickness))) : 0;
-  const backH = backSplash.length ? Math.max(...backSplash.map((p) => thicknessInches(p.thickness))) : 0;
-  const sideH = sideSplash.length ? Math.max(...sideSplash.map((p) => thicknessInches(p.thickness))) : 0;
-
-  let stackedHeight = 0;
-  if (mainH > 0) stackedHeight += mainH;
-  if (backH > 0) stackedHeight += LAYER_SEPARATOR_IN + backH;
-  if (sideH > 0) stackedHeight += LAYER_SEPARATOR_IN + sideH;
-
-  const internal_length = rawLength + cfg.lengthMargin * 2;
-  const internal_width = rawWidth + cfg.widthMargin * 2;
-  const internal_height = stackedHeight + cfg.heightMargin;
-
-  return {
-    internal_length,
-    internal_width,
-    internal_height,
-    external_length: internal_length + cfg.extLengthAdd,
-    external_width: internal_width + cfg.extWidthAdd,
-    external_height: internal_height + cfg.extHeight,
-  };
+  // Kitchen/Vanity tops lean upright too (not flat-lay) — back/side splashes
+  // stack on top of the main tops height-wise; see estimateLeaningFamilyBundleDimensions.
+  return estimateLeaningFamilyBundleDimensions(pieces, dimConfig?.layerGapIn);
 }
 
-const DIM_CLASS_SECTIONS = [
-  { key: 'kv', label: 'Vanity / Kitchen' },
-  { key: 'island', label: 'Islands' },
-];
-
 const DIM_CLASS_FIELDS = [
-  { key: 'lengthMargin', label: 'Length — internal margin/side (in)' },
-  { key: 'extLengthAdd', label: 'Length — external add (in)' },
-  { key: 'widthMargin', label: 'Width — internal margin/side (in)' },
-  { key: 'extWidthAdd', label: 'Width — external add (in)' },
-  { key: 'heightMargin', label: 'Height — internal margin (in)' },
-  { key: 'extHeight', label: 'Height — external add (in)' },
+  { key: 'layerGapIn', label: 'Foam gap between stacked layers/rows (in)' },
 ];
 
 const TABLE_COLUMNS = [
@@ -964,31 +889,28 @@ const CrateFilterPlanner = ({ projectId }) => {
             <summary className="cursor-pointer text-[11px] font-semibold uppercase tracking-wide text-[#94a3b8]">
               Crate size settings (advanced) — only touch if crates are coming out the wrong physical size
             </summary>
-            <div className="space-y-4 mt-3">
-              {DIM_CLASS_SECTIONS.map((section) => (
-                <div key={section.key} className="space-y-2">
-                  <div className="text-[11px] font-semibold text-[#334155]">{section.label}</div>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                    {DIM_CLASS_FIELDS.map((f) => (
-                      <label key={f.key} className="flex flex-col text-[10px] text-[#64748b]">
-                        <span className="flex min-h-[28px] items-end">{f.label}</span>
-                        <input
-                          type="number"
-                          step="0.1"
-                          value={dimConfig[section.key][f.key]}
-                          onChange={(e) =>
-                            setDimConfig((c) => ({
-                              ...c,
-                              [section.key]: { ...c[section.key], [f.key]: Number(e.target.value) },
-                            }))
-                          }
-                          className="mt-1 w-full rounded-lg border border-[#e2e8f0] bg-white px-2 py-1 text-[12px] text-[#0f172a] focus:border-[#0f172a] focus:outline-none"
-                        />
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              ))}
+            <div className="space-y-2 mt-3">
+              <div className="text-[11px] text-[#64748b]">
+                Crate internal/external size (pallet base, headroom, wall timber, forklift clearance, etc.) now comes
+                from the same physical-packaging model used on the crate engineering screen, so it can't drift out of
+                sync here. The one thing that still varies by job is the foam gap between stacked layers/rows.
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                {DIM_CLASS_FIELDS.map((f) => (
+                  <label key={f.key} className="flex flex-col text-[10px] text-[#64748b]">
+                    <span className="flex min-h-[28px] items-end">{f.label}</span>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={dimConfig[f.key]}
+                      onChange={(e) =>
+                        setDimConfig((c) => ({ ...c, [f.key]: Number(e.target.value) }))
+                      }
+                      className="mt-1 w-full rounded-lg border border-[#e2e8f0] bg-white px-2 py-1 text-[12px] text-[#0f172a] focus:border-[#0f172a] focus:outline-none"
+                    />
+                  </label>
+                ))}
+              </div>
             </div>
           </details>
 
