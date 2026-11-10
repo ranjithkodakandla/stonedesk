@@ -163,6 +163,7 @@ def build_store():
             "cutlist_drafts": mongo_db["cutlist_drafts"],
             "cutlist_projects": mongo_db["cutlist_projects"],
             "crate_action_log": mongo_db["crate_action_log"],
+            "app_settings": mongo_db["app_settings"],
         }
         return store, "mongo"
     except Exception as e:
@@ -182,6 +183,7 @@ def build_store():
             "cutlist_drafts": InMemoryCollection(),
             "cutlist_projects": InMemoryCollection(),
             "crate_action_log": InMemoryCollection(),
+            "app_settings": InMemoryCollection(),
         }, "memory"
 
 
@@ -198,6 +200,7 @@ cutlist_runs_col = store["cutlist_runs"]
 cutlist_drafts_col = store["cutlist_drafts"]
 cutlist_projects_col = store["cutlist_projects"]
 crate_action_log_col = store["crate_action_log"]
+app_settings_col = store["app_settings"]
 
 
 def ensure_indexes() -> None:
@@ -383,6 +386,8 @@ def piece_response(doc: Dict[str, Any]) -> Dict[str, Any]:
         "radius": doc.get("radius", "-"),
         "radius_value": doc.get("radius_value", ""),
         "radius_corners": doc.get("radius_corners", {}),
+        "radius_corner_values": doc.get("radius_corner_values", {}),
+        "radius_corner_explicit": doc.get("radius_corner_explicit", {}),
         "shape_type": doc.get("shape_type", ""),
         "sink_type": doc.get("sink_type", "No Sink"),
         "sink_cut": doc.get("sink_cut", "-"),
@@ -783,6 +788,15 @@ class PieceCreate(BaseModel):
     radius: str = "-"
     radius_value: str = ""
     radius_corners: Dict[str, bool] = {}
+    # Independent per-corner radius override (inches), keyed by
+    # top_left/top_right/bottom_left/bottom_right. A corner selected in
+    # radius_corners but absent here uses the configured default
+    # (DEFAULT_CORNER_RADIUS_IN / /api/settings/fabrication-defaults).
+    radius_corner_values: Dict[str, float] = {}
+    # Marks a corner as explicitly set by the user (selection and/or radius
+    # value), so auto-selecting corners from an edge-polish choice never
+    # overwrites a corner the user already configured by hand.
+    radius_corner_explicit: Dict[str, bool] = {}
     shape_type: str = ""
     notes: str = ""
 
@@ -834,6 +848,8 @@ class PieceUpdate(BaseModel):
     radius: str = "-"
     radius_value: str = ""
     radius_corners: Dict[str, bool] = {}
+    radius_corner_values: Dict[str, float] = {}
+    radius_corner_explicit: Dict[str, bool] = {}
     shape_type: str = ""
     notes: str = ""
 
@@ -1229,6 +1245,36 @@ def delete_crate_wood_type(wood_type_id: int):
     crate_wood_types_col.delete_one({"id": wood_type_id})
     reload_wood_type_registry()
     return {"message": "ok"}
+
+
+DEFAULT_CORNER_RADIUS_IN = 0.125
+FABRICATION_DEFAULTS_SETTINGS_ID = "fabrication_defaults"
+
+
+class FabricationDefaultsUpdate(BaseModel):
+    default_corner_radius_in: float = DEFAULT_CORNER_RADIUS_IN
+
+
+def _default_corner_radius_in() -> float:
+    doc = app_settings_col.find_one({"id": FABRICATION_DEFAULTS_SETTINGS_ID})
+    value = (doc or {}).get("default_corner_radius_in")
+    return float(value) if value is not None and value > 0 else DEFAULT_CORNER_RADIUS_IN
+
+
+@app.get("/api/settings/fabrication-defaults")
+def get_fabrication_defaults():
+    return {"default_corner_radius_in": _default_corner_radius_in()}
+
+
+@app.put("/api/settings/fabrication-defaults")
+def update_fabrication_defaults(data: FabricationDefaultsUpdate):
+    value = max(0.0, float(data.default_corner_radius_in))
+    app_settings_col.update_one(
+        {"id": FABRICATION_DEFAULTS_SETTINGS_ID},
+        {"$set": {"id": FABRICATION_DEFAULTS_SETTINGS_ID, "default_corner_radius_in": value}},
+        upsert=True,
+    )
+    return {"default_corner_radius_in": value}
 
 
 @app.get("/api/projects/{project_id}/pieces/")
@@ -1701,6 +1747,8 @@ def create_pieces_batch(project_id: int, pieces_data: List[PieceCreate]):
                 "radius": piece.radius,
                 "radius_value": piece.radius_value,
                 "radius_corners": piece.radius_corners,
+                "radius_corner_values": piece.radius_corner_values,
+                "radius_corner_explicit": piece.radius_corner_explicit,
                 "shape_type": piece.shape_type,
                 "notes": piece.notes,
                 "created_at": utc_now(),
@@ -1879,6 +1927,8 @@ def update_piece(piece_id: int, piece: PieceUpdate):
         "radius": piece.radius,
         "radius_value": piece.radius_value,
         "radius_corners": piece.radius_corners,
+        "radius_corner_values": piece.radius_corner_values,
+        "radius_corner_explicit": piece.radius_corner_explicit,
         "shape_type": piece.shape_type,
         "notes": piece.notes,
     }
@@ -3074,7 +3124,13 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
         _draw_edge_mark(rx1 - 14, mid_y + 4, edge_map["right"])
 
     radius_corners = p.get("radius_corners") or {}
-    radius_value = parse_float(p.get("radius_value"))
+    radius_corner_values = p.get("radius_corner_values") or {}
+    # Legacy pieces only ever had one shared radius_value applied to every
+    # checked corner; a piece with per-corner overrides falls back to that
+    # shared value, then to the configured app default, for any corner that
+    # has no override of its own — never one global radius for all corners.
+    legacy_radius_value = parse_float(p.get("radius_value"))
+    default_radius = _default_corner_radius_in()
     active_corners = [c for c, v in radius_corners.items() if v]
     r_arc = 10
     corner_geometry = {
@@ -3089,7 +3145,8 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
             continue
         cx, cy, sx, sy = geo
         page.draw_curve((cx, cy + sy * r_arc), (cx, cy), (cx + sx * r_arc, cy), color=coral, width=1.2)
-        label = f'R{radius_value:.2f}"' if radius_value > 0 else "R"
+        corner_radius = parse_float(radius_corner_values.get(corner)) or legacy_radius_value or default_radius
+        label = f'R{corner_radius:.3f}"' if corner_radius > 0 else "R"
         label_x = cx + sx * (r_arc + 4) - (len(label) * 4 if sx < 0 else 0)
         label_y = cy + sy * (r_arc + 10) if sy < 0 else cy + sy * (r_arc + 4) + 10
         page.insert_text((label_x, label_y), label, fontsize=7, color=coral)

@@ -322,6 +322,8 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing })
           edge_polish_manual: piece.edge_polish_manual || '',
           radius_value: piece.radius_value || '',
           radius_corners: piece.radius_corners || {},
+          radius_corner_values: piece.radius_corner_values || {},
+          radius_corner_explicit: piece.radius_corner_explicit || {},
           shape_type: piece.shape_type || '',
           sink_numbers: piece.sink_numbers || [],
           sink_offset_left: piece.sink_offset_left,
@@ -476,6 +478,8 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing })
         radius: piece.radius || '-',
         radius_value: piece.radius_value || '',
         radius_corners: piece.radius_corners || {},
+        radius_corner_values: piece.radius_corner_values || {},
+        radius_corner_explicit: piece.radius_corner_explicit || {},
         shape_type: piece.shape_type || '',
         notes: piece.notes || '',
       });

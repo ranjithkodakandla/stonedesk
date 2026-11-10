@@ -909,6 +909,8 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
             radius: radiusValue,
             radius_value: row.radius_value || '',
             radius_corners: row.radius_corners || {},
+            radius_corner_values: row.radius_corner_values || {},
+            radius_corner_explicit: row.radius_corner_explicit || {},
             shape_type: row.shape_type || '',
             notes: row.notes || '',
             qty: 1,

@@ -17,6 +17,49 @@ const GROOVE_COUNT_OPTIONS = ['-', '0', '1', '2', '3', '4', '5', '6', '7', '8'];
 
 const DEFAULT_EDGE_MAP = { top: 'none', bottom: 'none', left: 'none', right: 'none' };
 const DEFAULT_RADIUS_CORNERS = { top_left: false, top_right: false, bottom_left: false, bottom_right: false };
+const DEFAULT_RADIUS_CORNER_VALUES = {};
+const DEFAULT_RADIUS_CORNER_EXPLICIT = { top_left: false, top_right: false, bottom_left: false, bottom_right: false };
+
+// Fallback used only if the fabrication-defaults setting hasn't loaded yet.
+// The authoritative value comes from GET /api/settings/fabrication-defaults.
+export const FALLBACK_DEFAULT_CORNER_RADIUS_IN = 0.125;
+
+// Each edge touches exactly two corners of a rectangular countertop.
+export const EDGE_TO_CORNERS = {
+  top: ['top_left', 'top_right'],
+  bottom: ['bottom_left', 'bottom_right'],
+  left: ['top_left', 'bottom_left'],
+  right: ['top_right', 'bottom_right'],
+};
+
+// Selecting an edge for polishing auto-selects its two corners for rounding
+// at the default radius — but only corners the user hasn't already
+// configured by hand (radiusCornerExplicit). Turning an edge back off never
+// touches corner selection: removing edge polish must not silently destroy
+// manually configured geometry on an unrelated corner.
+export const deriveCornersFromEdgeChange = (side, previousValue, nextValue, radiusCorners, radiusCornerExplicit) => {
+  const wasOff = !previousValue || previousValue === 'none';
+  const turningOn = wasOff && nextValue !== 'none';
+  if (!turningOn) return radiusCorners;
+  const corners = EDGE_TO_CORNERS[side] || [];
+  const next = { ...radiusCorners };
+  corners.forEach((corner) => {
+    if (!radiusCornerExplicit?.[corner]) next[corner] = true;
+  });
+  return next;
+};
+
+// Effective radius shown/used for a corner: an explicit per-corner override
+// wins; otherwise the piece's legacy shared radius_value (old data); otherwise
+// the configured app default. Never one global radius silently applied over
+// an explicit override.
+export const effectiveCornerRadius = (corner, radiusCornerValues, legacyRadiusValue, defaultRadiusIn) => {
+  const override = Number(radiusCornerValues?.[corner]);
+  if (Number.isFinite(override) && override > 0) return override;
+  const legacy = Number(legacyRadiusValue);
+  if (Number.isFinite(legacy) && legacy > 0) return legacy;
+  return defaultRadiusIn ?? FALLBACK_DEFAULT_CORNER_RADIUS_IN;
+};
 
 // Count implied by a "-"/"0"/"1".."8" select value — "-" and "0" both mean "no holes/grooves".
 const countFromOption = (v) => {
@@ -45,13 +88,16 @@ const Section = ({ id, title, children, defaultOpen = true }) => {
   );
 };
 
-const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo }) => {
+const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo, defaultCornerRadiusIn }) => {
   const bodyRef = useRef(null);
+  const defaultRadius = defaultCornerRadiusIn ?? FALLBACK_DEFAULT_CORNER_RADIUS_IN;
 
   const hydrate = (r) => ({
     ...r,
     edge_map: (r.edge_map && Object.keys(r.edge_map).length) ? r.edge_map : { ...DEFAULT_EDGE_MAP },
     radius_corners: (r.radius_corners && Object.keys(r.radius_corners).length) ? r.radius_corners : { ...DEFAULT_RADIUS_CORNERS },
+    radius_corner_values: (r.radius_corner_values && Object.keys(r.radius_corner_values).length) ? r.radius_corner_values : { ...DEFAULT_RADIUS_CORNER_VALUES },
+    radius_corner_explicit: (r.radius_corner_explicit && Object.keys(r.radius_corner_explicit).length) ? r.radius_corner_explicit : { ...DEFAULT_RADIUS_CORNER_EXPLICIT },
     radius_value: r.radius_value ?? '',
     shape_type: r.shape_type ?? '',
     edge_polish_manual: r.edge_polish_manual ?? '',
@@ -79,9 +125,25 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo }) => {
   const set = (k, v) => push({ ...local, [k]: v });
   const setEdge = (side, v) => {
     const newEdgeMap = { ...local.edge_map, [side]: v };
-    push({ ...local, edge_map: newEdgeMap, edge_area: edgeAreaFromMap(newEdgeMap) });
+    const newRadiusCorners = deriveCornersFromEdgeChange(
+      side, local.edge_map?.[side], v, local.radius_corners, local.radius_corner_explicit
+    );
+    push({ ...local, edge_map: newEdgeMap, edge_area: edgeAreaFromMap(newEdgeMap), radius_corners: newRadiusCorners });
   };
-  const setCorner = (c, v) => push({ ...local, radius_corners: { ...local.radius_corners, [c]: v } });
+  // User-driven corner selection always marks the corner explicit, so a
+  // later edge change never overrides what was deliberately chosen here —
+  // whether that's checking a corner the auto-logic left alone, or
+  // unchecking one the auto-logic had just set.
+  const setCorner = (c, v) => push({
+    ...local,
+    radius_corners: { ...local.radius_corners, [c]: v },
+    radius_corner_explicit: { ...local.radius_corner_explicit, [c]: true },
+  });
+  const setCornerRadius = (c, v) => push({
+    ...local,
+    radius_corner_values: { ...local.radius_corner_values, [c]: v === '' ? undefined : Number(v) },
+    radius_corner_explicit: { ...local.radius_corner_explicit, [c]: true },
+  });
   const setDestQty = (key, v) => {
     const overrides = { ...local.dest_qty_overrides };
     if (v === '' || v == null) delete overrides[key];
@@ -142,14 +204,29 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo }) => {
     );
   };
 
-  const CornerChk = ({ corner, label }) => (
-    <label className={`flex items-center gap-2 text-xs font-medium cursor-pointer px-3 py-2.5 rounded-lg border transition-all
-      ${rc[corner] ? 'bg-violet-50 border-violet-300 text-violet-700' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'}`}>
-      <input type="checkbox" checked={rc[corner] || false} onChange={e => setCorner(corner, e.target.checked)}
-        className="accent-violet-600 w-3.5 h-3.5" />
-      {label}
-    </label>
-  );
+  const CornerChk = ({ corner, label }) => {
+    const checked = rc[corner] || false;
+    const radius = effectiveCornerRadius(corner, local.radius_corner_values, local.radius_value, defaultRadius);
+    return (
+      <div className={`rounded-lg border transition-all px-3 py-2.5 ${checked ? 'bg-violet-50 border-violet-300' : 'bg-white border-slate-200'}`}>
+        <label className="flex items-center gap-2 text-xs font-medium cursor-pointer select-none">
+          <input type="checkbox" checked={checked} onChange={e => setCorner(corner, e.target.checked)}
+            className="accent-violet-600 w-3.5 h-3.5" />
+          <span className={checked ? 'text-violet-700' : 'text-slate-500'}>{label}</span>
+        </label>
+        {checked && (
+          <div className="flex items-center gap-1.5 mt-1.5 pl-5">
+            <input type="number" step="0.0625" min="0"
+              value={local.radius_corner_values?.[corner] ?? ''}
+              onChange={e => setCornerRadius(corner, e.target.value)}
+              placeholder={radius.toFixed(3)}
+              className="w-16 text-[11px] border border-slate-200 rounded px-1.5 py-1" />
+            <span className="text-[10px] text-slate-400">in{!local.radius_corner_values?.[corner] ? ' (default)' : ''}</span>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const validDests = (destinations || []).filter(d => d.building || d.floor || d.flat);
   const handleSave = () => {
@@ -323,10 +400,11 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo }) => {
             </div>
           </Section>
 
-          {/* Section 4 — Shape */}
-          <Section id="section-shape" title="Shape">
+          {/* Section 4 — Outline Shape (the piece's overall outline — separate
+              from Sink Type above, which only describes the sink/bowl) */}
+          <Section id="section-shape" title="Outline Shape">
             <div>
-              <label className="label-text">Shape Type</label>
+              <label className="label-text">Outline Shape</label>
               <select value={local.shape_type || ''} onChange={e => set('shape_type', e.target.value)} className="input-field">
                 <option value="">Rectangle (default)</option>
                 <option>L-Shape</option>
@@ -391,32 +469,20 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo }) => {
           {/* Section 7 — Radius / Corners */}
           <Section id="section-radius" title="Radius / Corners">
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="label-text">Radius (inches)</label>
-                  <input type="number" step="0.25" min="0" value={local.radius_value || ''}
-                    onChange={e => set('radius_value', e.target.value)} className="input-field" placeholder="e.g., 1.5" />
-                </div>
-                <div>
-                  <label className="label-text">Active Corners</label>
-                  <div className="input-field bg-slate-50 text-slate-600 text-center select-none">
-                    {activeCorners > 0 ? activeCorners : '—'}
-                  </div>
-                </div>
-              </div>
+              <p className="text-[11px] text-slate-500">
+                Selecting an edge for polishing auto-rounds its two corners at the default radius
+                (R{defaultRadius.toFixed(3)}"). Each corner below can be overridden independently —
+                changing one never affects the others, and unchecking an edge never removes a corner
+                you've configured by hand.
+              </p>
               <div>
-                <label className="label-text block mb-2">Corner Selection</label>
+                <label className="label-text block mb-2">Corners{activeCorners > 0 ? ` (${activeCorners} selected)` : ''}</label>
                 <div className="grid grid-cols-2 gap-2">
                   <CornerChk corner="top_left"     label="↖ Top Left" />
                   <CornerChk corner="top_right"    label="↗ Top Right" />
                   <CornerChk corner="bottom_left"  label="↙ Bottom Left" />
                   <CornerChk corner="bottom_right" label="↘ Bottom Right" />
                 </div>
-                {activeCorners > 0 && local.radius_value && (
-                  <p className="mt-2 text-xs text-violet-600 font-medium">
-                    R{local.radius_value}" applied to {activeCorners} corner{activeCorners !== 1 ? 's' : ''}
-                  </p>
-                )}
               </div>
             </div>
           </Section>

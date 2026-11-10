@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
+import { setCachedDefaultCornerRadiusIn } from '../utils/fabricationDefaults';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 const MATERIALS = ['Granite', 'Marble', 'Quartz'];
@@ -134,16 +135,40 @@ const ConfigurationScreen = () => {
   const [colorsByMaterial, setColorsByMaterial] = useState({});
   const [woodTypes, setWoodTypes] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [defaultCornerRadiusIn, setDefaultCornerRadiusIn] = useState('0.125');
+  const [cornerRadiusSaving, setCornerRadiusSaving] = useState(false);
+  const [cornerRadiusError, setCornerRadiusError] = useState('');
+
+  const saveDefaultCornerRadius = async () => {
+    const value = Number(defaultCornerRadiusIn);
+    if (!Number.isFinite(value) || value <= 0) {
+      setCornerRadiusError('Enter a radius greater than zero.');
+      return;
+    }
+    setCornerRadiusSaving(true);
+    setCornerRadiusError('');
+    try {
+      const res = await axios.put(`${API_BASE}/settings/fabrication-defaults`, { default_corner_radius_in: value });
+      setDefaultCornerRadiusIn(String(res.data.default_corner_radius_in));
+      setCachedDefaultCornerRadiusIn(res.data.default_corner_radius_in);
+    } catch (err) {
+      setCornerRadiusError(err?.response?.data?.detail || 'Could not save.');
+    } finally {
+      setCornerRadiusSaving(false);
+    }
+  };
 
   const loadAll = async () => {
     setLoading(true);
     try {
-      const [colorsRes, woodRes] = await Promise.all([
+      const [colorsRes, woodRes, fabRes] = await Promise.all([
         axios.get(`${API_BASE}/stone-colors`),
         axios.get(`${API_BASE}/crate-wood-types`),
+        axios.get(`${API_BASE}/settings/fabrication-defaults`),
       ]);
       setColorsByMaterial(colorsRes.data || {});
       setWoodTypes(woodRes.data || []);
+      setDefaultCornerRadiusIn(String(fabRes.data?.default_corner_radius_in ?? 0.125));
     } catch (err) {
       console.error('Failed to load configuration', err);
     } finally {
@@ -232,6 +257,28 @@ const ConfigurationScreen = () => {
                 await loadAll();
               }}
             />
+          </div>
+
+          <div>
+            <div className="mb-3">
+              <h2 className="text-lg font-bold text-[#1e293b]">Fabrication Defaults</h2>
+              <p className="text-xs text-[#64748b]">
+                Applied automatically when a corner is auto-selected for rounding from an edge-polish choice.
+                An operator can always override an individual corner's radius.
+              </p>
+            </div>
+            <div className="flex items-end gap-3 bg-white border border-[#e2e8f0] rounded-lg p-4 max-w-sm">
+              <div className="flex-1">
+                <label className="block text-xs font-semibold text-[#475569] mb-1">Default Corner Radius (inches)</label>
+                <input type="number" step="0.0625" min="0.0001" value={defaultCornerRadiusIn}
+                  onChange={(e) => setDefaultCornerRadiusIn(e.target.value)}
+                  className="input-field" />
+              </div>
+              <button onClick={saveDefaultCornerRadius} disabled={cornerRadiusSaving} className="btn-primary text-sm">
+                {cornerRadiusSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+            {cornerRadiusError && <p className="mt-2 text-xs text-red-600">{cornerRadiusError}</p>}
           </div>
         </div>
       )}
