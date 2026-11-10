@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import axios from 'axios';
 import { API_BASE } from '../utils/plannerUtils';
 import { weightBatchParts } from '../utils/crateEstimator';
+import { thicknessInchesFromLabel } from '../utils/thicknessConstants';
 import MultiSelectDropdown from './MultiSelectDropdown';
 import TargetWeightControl from './TargetWeightControl';
 
@@ -121,11 +122,7 @@ const DEFAULT_DIM_CONFIG = {
   island: { ...DEFAULT_CLASS_DIM_CONFIG, extHeight: 9 },
 };
 
-const THICKNESS_INCH = { '2CM': 0.79, '3CM': 1.18, '4CM': 1.57 };
-function thicknessInches(t) {
-  const key = String(t || '').trim().toUpperCase().replace(' ', '');
-  return THICKNESS_INCH[key] ?? 1.18;
-}
+const thicknessInches = thicknessInchesFromLabel;
 
 // Mirrors estimateHorizontalLayeredDimensions() in crateEstimator.js — the
 // established packing model: bigger parts (tops) form one layer, back

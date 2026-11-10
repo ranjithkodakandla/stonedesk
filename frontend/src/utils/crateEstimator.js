@@ -1,4 +1,5 @@
 import { round2 } from './plannerUtils';
+import { parseThicknessIn } from './thicknessConstants';
 
 /**
  * Frontend port of backend operational dimension helpers.
@@ -7,17 +8,6 @@ import { round2 } from './plannerUtils';
  *
  * All dimensions are in inches. All weights are in kg.
  */
-
-// ─── Thickness lookup ────────────────────────────────────────────────────────
-
-const THICKNESS_INCH = {
-  '2CM': 0.79,
-  '3CM': 1.18,
-  '4CM': 1.57,
-  '2.0CM': 0.79,
-  '3.0CM': 1.18,
-  'Mixed': 0.98,
-};
 
 // ─── Part Type → crate class ──────────────────────────────────────────────────
 // island_vertical: Kitchen - Island Tops ONLY — upright cassette geometry
@@ -306,15 +296,6 @@ export function batchBundlesIntoCrates(selectedBundles, targetWeightKg = 1900, o
     }
   }
   return groups;
-}
-
-function parseThicknessIn(t) {
-  if (!t) return 1.18; // default 3CM
-  const key = String(t).trim().toUpperCase().replace(' ', '');
-  if (THICKNESS_INCH[key] != null) return THICKNESS_INCH[key];
-  if (THICKNESS_INCH[String(t).trim()] != null) return THICKNESS_INCH[String(t).trim()];
-  const n = parseFloat(t);
-  return isNaN(n) ? 1.18 : n;
 }
 
 // ─── Rectangular upright cassette geometry ────────────────────────────────────

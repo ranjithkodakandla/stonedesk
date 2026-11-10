@@ -4,10 +4,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 WEIGHT_FACTORS = {
-    "Granite": {"2CM": 5.5, "3CM": 7.75, "Mixed": 6.5},
-    "Quartz": {"2CM": 4.75, "3CM": 6.75, "Mixed": 5.75},
-    "Marble": {"2CM": 6.0, "3CM": 8.0, "Mixed": 7.0},
-    "Other": {"2CM": 5.5, "3CM": 7.5, "Mixed": 6.5},
+    # "4CM" is 3CM scaled by 4/3 (weight per sqft scales linearly with
+    # thickness for a fixed material/area) — not an independently measured
+    # figure, since no 4CM fallback factor existed before. Used only when a
+    # material/color has no COLOR_DENSITIES entry (see weight_factor below).
+    "Granite": {"2CM": 5.5, "3CM": 7.75, "4CM": 7.75 * 4 / 3, "Mixed": 6.5},
+    "Quartz": {"2CM": 4.75, "3CM": 6.75, "4CM": 6.75 * 4 / 3, "Mixed": 5.75},
+    "Marble": {"2CM": 6.0, "3CM": 8.0, "4CM": 8.0 * 4 / 3, "Mixed": 7.0},
+    "Other": {"2CM": 5.5, "3CM": 7.5, "4CM": 7.5 * 4 / 3, "Mixed": 6.5},
 }
 
 # Density in kg/m³ per color. Factor = density × thickness_m × 0.0929 (sqft→sqm).
@@ -49,6 +53,7 @@ COLOR_DENSITIES: Dict[str, Dict[str, int]] = {
 THICKNESS_INCHES = {
     "2CM": 0.79,
     "3CM": 1.18,
+    "4CM": 1.57,
     "Mixed": 0.98,
 }
 
@@ -103,7 +108,7 @@ def thickness_inches(thickness: str) -> float:
     return THICKNESS_INCHES.get(thickness, THICKNESS_INCHES["Mixed"])
 
 
-_THICKNESS_M = {"2CM": 0.02, "3CM": 0.03, "Mixed": 0.025}
+_THICKNESS_M = {"2CM": 0.02, "3CM": 0.03, "4CM": 0.04, "Mixed": 0.025}
 _SQFT_TO_SQM = 0.0929
 
 # Config-screen-managed colors and crate wood types, backed by Mongo (main.py owns the store).
