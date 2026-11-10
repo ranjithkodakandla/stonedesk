@@ -951,6 +951,7 @@ def create_project():
     doc = {
         "id": project_id,
         "name": "",
+        "project_type": "apartment",
         "material": "Granite",
         "thickness": "3CM",
         "stone_color": "",
