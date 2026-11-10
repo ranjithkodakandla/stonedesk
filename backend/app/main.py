@@ -1894,6 +1894,13 @@ def _compute_unit_suffix(unit: str, part_no: str) -> str:
     return f"{unit}-{suffix}"
 
 
+def _xls_val(v):
+    """Return empty string for dash sentinel values stored in DB ('-', '—', None)."""
+    if v is None or v in ("-", "—"):
+        return ""
+    return v
+
+
 def _fmt_radius_corners(radius_corners) -> str:
     """Active corner abbreviations: 'TL, BR'"""
     if not radius_corners:
@@ -2856,7 +2863,7 @@ def export_manual_crate_plan_xlsx(project_id: int, body: Dict):
     ws2.append([
         "Crate #", "Part #", "Part Type", "Category", "Drawing", "Unit",
         "Building", "Floor", "Flat", "Length (in)", "Width (in)", "Thickness", "Qty",
-        "Sq Ft", "Weight (kg)",
+        "Sq Ft", "Weight (kg)", "Label",
     ])
     _bold_header(ws2, 1)
     for c in crates:
@@ -2867,18 +2874,37 @@ def export_manual_crate_plan_xlsx(project_id: int, body: Dict):
             part_no = str(p.get("part_no", "") or "")
             unit = _compute_unit_suffix(str(p.get("unit", "") or ""), part_no)
             piece_thick = str(p.get("thickness") or project_thickness)
+            floor_v = str(p.get("floor", "") or "")
+            flat_v = str(p.get("flat", "") or "")
+            length_v = parse_float(p.get("length"))
+            width_v = parse_float(p.get("width"))
+            crate_no = c.get("crate_no", "")
+            line1_parts = []
+            if unit:
+                line1_parts.append(f"Unit : {unit}")
+            if part_no:
+                line1_parts.append(f"DWG : # {part_no}")
+            if floor_v:
+                line1_parts.append(f"Floor # {floor_v}")
+            line2_parts = []
+            if flat_v:
+                line2_parts.append(f"Flat # {flat_v}")
+            if length_v and width_v:
+                line2_parts.append(f'{length_v}" X {width_v}"')
+            line2_parts.append(f"Crate # {crate_no}")
+            label_text = " | ".join(line1_parts) + "\n" + " | ".join(line2_parts)
             ws2.append([
-                c.get("crate_no"),
+                crate_no,
                 part_no,
                 str(p.get("part", "") or ""),
                 str(p.get("category", "") or ""),
                 str(p.get("drawing", "") or ""),
                 unit,
                 str(p.get("building", "") or ""),
-                str(p.get("floor", "") or ""),
-                str(p.get("flat", "") or ""),
-                parse_float(p.get("length")),
-                parse_float(p.get("width")),
+                floor_v,
+                flat_v,
+                length_v,
+                width_v,
                 piece_thick,
                 int(p.get("qty", 1) or 1),
                 round(piece_sqft(p), 2),
@@ -2891,44 +2917,9 @@ def export_manual_crate_plan_xlsx(project_id: int, body: Dict):
                     ),
                     2,
                 ),
+                label_text,
             ])
     _auto_width(ws2)
-
-    # ── Sheet 3: Labels ──────────────────────────────────────────────────────
-    ws_labels = wb.create_sheet("Labels")
-    ws_labels.append(["Line 1", "Line 2"])
-    _bold_header(ws_labels, 1)
-    for c in crates:
-        for pid in (c.get("part_ids") or []):
-            p = pieces_by_id.get(pid)
-            if not p:
-                continue
-            part_no = str(p.get("part_no", "") or "")
-            unit = _compute_unit_suffix(str(p.get("unit", "") or ""), part_no)
-            floor_v = str(p.get("floor", "") or "")
-            flat_v = str(p.get("flat", "") or "")
-            length_v = p.get("length", 0) or 0
-            width_v = p.get("width", 0) or 0
-            crate_no = c.get("crate_no", "")
-            line1_parts = []
-            if unit:
-                line1_parts.append(f"Unit : {unit}")
-            if part_no:
-                line1_parts.append(f"DWG : # {part_no}")
-            if floor_v:
-                line1_parts.append(f"Floor # {floor_v}")
-            line1 = "  |  ".join(line1_parts) if line1_parts else ""
-            line2_parts = []
-            if flat_v:
-                line2_parts.append(f"Flat # {flat_v}")
-            if length_v and width_v:
-                line2_parts.append(f'{length_v}" X {width_v}"')
-            elif length_v:
-                line2_parts.append(f'{length_v}"')
-            line2_parts.append(f"Crate # {crate_no}")
-            line2 = "  |  ".join(line2_parts)
-            ws_labels.append([line1, line2])
-    _auto_width(ws_labels)
 
     output = BytesIO()
     wb.save(output)
@@ -2950,31 +2941,24 @@ _CORNER_LABELS = {
 
 
 def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, project_thickness: str, stone_color: str) -> None:
-    """Draws one shipping/process label for a single piece onto a 6"x4" PDF page."""
+    """Draws one process label (fabrication reference) for a single piece onto a fresh PDF page."""
     import fitz
+    from .services.planning_engine import piece_weight as pw, parse_float
 
     W, H = 432, 288  # 6in x 4in @ 72dpi
-    black = (0, 0, 0)
+
+    black = (0.06, 0.09, 0.14)
     gray = (0.4, 0.45, 0.5)
+    coral = (0.85, 0.35, 0.19)
 
     unit = str(p.get("unit", "") or "")
     part_no = str(p.get("part_no", "") or "")
     computed_unit = _compute_unit_suffix(unit, part_no)
     floor_val = str(p.get("floor", "") or "")
     flat_val = str(p.get("flat", "") or "")
-    length = p.get("length", 0) or 0
-    width_val = p.get("width", 0) or 0
     thickness = str(p.get("thickness") or project_thickness)
 
-    # Outer border
-    margin = 18
-    page.draw_rect(fitz.Rect(margin, margin, W - margin, H - margin), color=black, width=2)
-
-    # Horizontal divider between the two label lines
-    mid_y = H / 2
-    page.draw_line((margin, mid_y), (W - margin, mid_y), color=black, width=1.5)
-
-    # Line 1: Unit | DWG | Floor
+    # ── Label header (new format: 2 lines above the drawing) ──────────────────
     line1_parts = []
     if computed_unit:
         line1_parts.append(f"Unit : {computed_unit}")
@@ -2984,33 +2968,229 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
         line1_parts.append(f"Floor # {floor_val}")
     line1 = "  |  ".join(line1_parts) if line1_parts else ""
 
-    # Line 2: Flat | Dimensions | Crate
+    length_raw = parse_float(p.get("length"))
+    width_raw = parse_float(p.get("width"))
     line2_parts = []
     if flat_val:
         line2_parts.append(f"Flat # {flat_val}")
-    if length and width_val:
-        line2_parts.append(f'{length}" X {width_val}"')
-    elif length:
-        line2_parts.append(f'{length}"')
+    if length_raw and width_raw:
+        line2_parts.append(f'{length_raw:.0f}" X {width_raw:.0f}"')
     line2_parts.append(f"Crate # {crate_no}")
     line2 = "  |  ".join(line2_parts)
 
-    # Render lines centred vertically in each half
-    top_text_y = margin + (mid_y - margin) / 2 + 7
-    bot_text_y = mid_y + (H - margin - mid_y) / 2 + 7
+    # Draw 2-line label box at top of page
+    box_top, box_bot = 4, 46
+    page.draw_rect(fitz.Rect(8, box_top, W - 8, box_bot), color=black, width=1.2)
+    page.draw_line((8, (box_top + box_bot) / 2), (W - 8, (box_top + box_bot) / 2), color=black, width=0.8)
+    page.insert_text((14, box_top + 14), line1, fontsize=10, color=black, fontname="helv")
+    page.insert_text((14, box_top + 36), line2, fontsize=10, color=black, fontname="helv")
 
-    pad = margin + 14
-    page.insert_text((pad, top_text_y), line1, fontsize=14, color=black, fontname="helv")
-    page.insert_text((pad, bot_text_y), line2, fontsize=14, color=black, fontname="helv")
+    # ── Original drawing (shifted down to sit below the label box) ────────────
+    # Header row: part_no, part type, crate #, thickness
+    header_y = 56
+    page.insert_text((18, header_y), str(p.get("part_no", "") or ""), fontsize=13, fontname="helv", color=black)
+    page.insert_text((18, header_y + 11), str(p.get("part", "") or ""), fontsize=9, color=gray)
+    page.insert_text((W - 90, header_y), f"Crate #{crate_no}", fontsize=10, color=black)
+    page.insert_text((W - 90, header_y + 11), thickness, fontsize=9, color=gray)
+    page.draw_line((18, header_y + 16), (W - 18, header_y + 16), color=gray, width=0.5)
 
-    # Small metadata footer inside bottom section
-    meta = []
-    if thickness:
-        meta.append(thickness)
-    if p.get("part"):
-        meta.append(str(p.get("part")))
-    if meta:
-        page.insert_text((pad, H - margin - 10), "  ·  ".join(meta), fontsize=7, color=gray)
+    length = parse_float(p.get("length"))
+    width = parse_float(p.get("width"))
+
+    # Drawing area shifted down from original to leave room for the label header
+    draw_x0, draw_y0, draw_x1, draw_y1 = 50, header_y + 22, W - 50, 210
+    avail_w, avail_h = draw_x1 - draw_x0, draw_y1 - draw_y0
+    if length > 0 and width > 0:
+        scale = min(avail_w / length, avail_h / width)
+    else:
+        scale = 1
+    rw, rh = length * scale, width * scale
+    rx0 = draw_x0 + (avail_w - rw) / 2
+    ry0 = draw_y0 + (avail_h - rh) / 2
+    rx1, ry1 = rx0 + rw, ry0 + rh
+
+    page.draw_rect(fitz.Rect(rx0, ry0, rx1, ry1), color=black, width=1.2)
+
+    placed_label_boxes = []
+
+    def _label_box(x, y, text, fontsize):
+        margin = 2
+        w = len(text) * fontsize * 0.5
+        h = fontsize * 1.15
+        return (x - margin, y - h - margin, x + w + margin, y + h * 0.25 + margin)
+
+    page.draw_line((rx0, ry0 - 10), (rx1, ry0 - 10), color=gray, width=0.5)
+    length_label_pos = ((rx0 + rx1) / 2 - 18, ry0 - 13)
+    page.insert_text(length_label_pos, f'{length:.2f}"', fontsize=8, color=gray)
+    placed_label_boxes.append(_label_box(*length_label_pos, f'{length:.2f}"', 8))
+    page.draw_line((rx0 - 14, ry0), (rx0 - 14, ry1), color=gray, width=0.5)
+    page.insert_text((rx0 - 34, (ry0 + ry1) / 2), f'{width:.2f}"', fontsize=8, color=gray, rotate=90)
+    placed_label_boxes.append((rx0 - 38, (ry0 + ry1) / 2 - 20, rx0 - 14, (ry0 + ry1) / 2 + 4))
+
+    def _draw_edge_mark(tx, ty, edge_type):
+        if edge_type == "polished":
+            page.draw_circle((tx + 4, ty - 4), 8, color=coral, width=1)
+        page.insert_text((tx, ty), "X", fontsize=13, color=coral, fontname="helv")
+
+    edge_map = p.get("edge_map") or {}
+    edge_sides = [side for side, v in edge_map.items() if v and v != "none"]
+    mid_x, mid_y = (rx0 + rx1) / 2, (ry0 + ry1) / 2
+    if edge_map.get("top") and edge_map["top"] != "none":
+        _draw_edge_mark(mid_x - 4, ry0 + 12, edge_map["top"])
+    if edge_map.get("bottom") and edge_map["bottom"] != "none":
+        _draw_edge_mark(mid_x - 4, ry1 - 4, edge_map["bottom"])
+    if edge_map.get("left") and edge_map["left"] != "none":
+        _draw_edge_mark(rx0 + 4, mid_y + 4, edge_map["left"])
+    if edge_map.get("right") and edge_map["right"] != "none":
+        _draw_edge_mark(rx1 - 14, mid_y + 4, edge_map["right"])
+
+    radius_corners = p.get("radius_corners") or {}
+    radius_value = parse_float(p.get("radius_value"))
+    active_corners = [c for c, v in radius_corners.items() if v]
+    r_arc = 10
+    corner_geometry = {
+        "top_left": (rx0, ry0, 1, 1),
+        "top_right": (rx1, ry0, -1, 1),
+        "bottom_left": (rx0, ry1, 1, -1),
+        "bottom_right": (rx1, ry1, -1, -1),
+    }
+    for corner in active_corners:
+        geo = corner_geometry.get(corner)
+        if not geo:
+            continue
+        cx, cy, sx, sy = geo
+        page.draw_curve((cx, cy + sy * r_arc), (cx, cy), (cx + sx * r_arc, cy), color=coral, width=1.2)
+        label = f'R{radius_value:.2f}"' if radius_value > 0 else "R"
+        label_x = cx + sx * (r_arc + 4) - (len(label) * 4 if sx < 0 else 0)
+        label_y = cy + sy * (r_arc + 10) if sy < 0 else cy + sy * (r_arc + 4) + 10
+        page.insert_text((label_x, label_y), label, fontsize=7, color=coral)
+
+    def _boxes_overlap(a, b):
+        return a[0] < b[2] and a[2] > b[0] and a[1] < b[3] and a[3] > b[1]
+
+    def _place_text(x, y, text, fontsize, color, candidates=None):
+        all_candidates = [(x, y)] + list(candidates or [])
+        chosen, box, best_overlaps = None, None, None
+        for cx, cy in all_candidates:
+            cbox = _label_box(cx, cy, text, fontsize)
+            overlaps = sum(1 for pb in placed_label_boxes if _boxes_overlap(cbox, pb))
+            if overlaps == 0:
+                chosen, box = (cx, cy), cbox
+                break
+            if best_overlaps is None or overlaps < best_overlaps:
+                chosen, box, best_overlaps = (cx, cy), cbox, overlaps
+        placed_label_boxes.append(box)
+        page.insert_text(chosen, text, fontsize=fontsize, color=color)
+
+    sink_type = str(p.get("sink_type") or "No Sink")
+    sink_numbers = [str(n) for n in (p.get("sink_numbers") or []) if n]
+    sink_label = f"{sink_type} ({', '.join(sink_numbers)})" if sink_numbers else sink_type
+    ref_cx, ref_cy = mid_x, mid_y
+    if sink_type and sink_type != "No Sink":
+        off_left = parse_float(p.get("sink_offset_left"))
+        off_right = parse_float(p.get("sink_offset_right"))
+        sink_len = parse_float(p.get("sink_length")) or max(length * 0.3, 1)
+        sink_wid = parse_float(p.get("sink_width")) or max(width * 0.5, 1)
+        if off_left > 0:
+            sx0 = rx0 + off_left * scale
+        elif off_right > 0 and length > 0:
+            sx0 = rx0 + (length - off_right - sink_len) * scale
+        else:
+            sx0 = mid_x - (sink_len * scale) / 2
+        sx1 = sx0 + sink_len * scale
+        sy0 = ry0 + (rh - sink_wid * scale) / 2
+        sy1 = sy0 + sink_wid * scale
+        ref_cx, ref_cy = (sx0 + sx1) / 2, (sy0 + sy1) / 2
+        n_bowls = max(1, len(sink_numbers)) if sink_numbers else 1
+        bowl_gap = min(6.0 * scale, (sx1 - sx0) * 0.06) if n_bowls > 1 else 0
+        bowl_w = ((sx1 - sx0) - bowl_gap * (n_bowls - 1)) / n_bowls
+        for i in range(n_bowls):
+            bx0 = sx0 + i * (bowl_w + bowl_gap)
+            bx1 = bx0 + bowl_w
+            bowl_label = sink_numbers[i] if i < len(sink_numbers) else sink_type
+            page.draw_rect(fitz.Rect(bx0, sy0, bx1, sy1), color=coral, width=1)
+            bowl_cx = bx0 + bowl_w / 2 - len(bowl_label) * 2.6
+            bowl_cy = (sy0 + sy1) / 2 + 3
+            _place_text(bowl_cx, bowl_cy, bowl_label, 7, gray, candidates=[
+                (bowl_cx, bowl_cy - 12), (bowl_cx, bowl_cy + 12), (bowl_cx, sy0 + 12),
+            ])
+        page.draw_line((sx0, sy0 - 8), (sx1, sy0 - 8), color=coral, width=0.5)
+        _place_text((sx0 + sx1) / 2 - 16, sy0 - 11, f'{sink_len:.2f}"', 7, coral)
+        page.draw_line((sx0 - 8, sy0), (sx0 - 8, sy1), color=coral, width=0.5)
+        page.insert_text((sx0 - 30, (sy0 + sy1) / 2), f'{sink_wid:.2f}"', fontsize=7, color=coral, rotate=90)
+        placed_label_boxes.append((sx0 - 34, sy0 - 4, sx0 - 8, sy1 + 4))
+        actual_left = (sx0 - rx0) / scale if scale else 0
+        actual_right = (rx1 - sx1) / scale if scale else 0
+        dim_y = ry1 + 22
+        page.draw_line((rx0, dim_y), (sx0, dim_y), color=gray, width=0.5)
+        _place_text((rx0 + sx0) / 2 - 24, dim_y + 11, f'{actual_left:.2f}" from left', 8, gray)
+        page.draw_line((sx1, dim_y), (rx1, dim_y), color=gray, width=0.5)
+        _place_text((sx1 + rx1) / 2 - 26, dim_y + 11, f'{actual_right:.2f}" from right', 8, gray)
+        groove_positions = p.get("groove_positions") or []
+        groove_dimension = parse_float(p.get("groove_dimension"))
+        if groove_positions:
+            standoff = max(4.0, (groove_dimension * scale)) if groove_dimension > 0 else 6.0
+            page.draw_rect(
+                fitz.Rect(sx0 - standoff, sy0 - standoff, sx1 + standoff, sy1 + standoff),
+                color=coral, width=0.8, dashes="[2 2] 0",
+            )
+
+    tap_hole_positions = p.get("tap_hole_positions") or []
+    tap_hole_diameter = parse_float(p.get("tap_hole_diameter"))
+    for i, pos in enumerate(tap_hole_positions):
+        ox = parse_float((pos or {}).get("x"))
+        oy = parse_float((pos or {}).get("y"))
+        hx, hy = ref_cx + ox * scale, ref_cy + oy * scale
+        r = max(2.5, (tap_hole_diameter * scale) / 2) if tap_hole_diameter > 0 else 3
+        page.draw_circle((hx, hy), r, color=coral, width=0.8)
+        label = f'X{ox:+.2f}", Y{oy:+.2f}"'
+        candidates = [
+            (hx - 16, hy - 2 - r), (hx - 16, hy + 10 + r),
+            (hx + r + 4, hy - 2), (hx - r - 4 - len(label) * 3, hy - 2),
+            (hx - 16, hy - 2 - r - 10), (hx - 16, hy + 10 + r + 10),
+        ]
+        cx0, cy0 = candidates[0]
+        _place_text(cx0, cy0, label, 5.5, gray, candidates=candidates[1:])
+
+    groove_positions = p.get("groove_positions") or []
+    groove_dimension = parse_float(p.get("groove_dimension"))
+    for pos in groove_positions:
+        ox = parse_float((pos or {}).get("x"))
+        oy = parse_float((pos or {}).get("y"))
+        gx, gy = ref_cx + ox * scale, ref_cy + oy * scale
+        half_len = max(4, (groove_dimension * scale) / 2) if groove_dimension > 0 else 5
+        page.draw_line((gx - half_len, gy), (gx + half_len, gy), color=coral, width=1.5)
+        label = f'X{ox:+.2f}", Y{oy:+.2f}"'
+        candidates = [
+            (gx + half_len + 2, gy - 2), (gx - half_len - 2 - len(label) * 3, gy - 2),
+            (gx + half_len + 2, gy + 9), (gx - half_len - 2 - len(label) * 3, gy + 9),
+        ]
+        cx0, cy0 = candidates[0]
+        _place_text(cx0, cy0, label, 5.5, gray, candidates=candidates[1:])
+
+    spec_y = 232
+    page.draw_line((18, spec_y - 8), (W - 18, spec_y - 8), color=gray, width=0.5)
+    tap_dia_note = f' @ {tap_hole_diameter:.3f}"' if tap_hole_diameter > 0 else ""
+    groove_dim_note = f' @ {groove_dimension:.3f}"' if groove_dimension > 0 else ""
+    sink_cut_v = _xls_val(p.get("sink_cut")) or "0"
+    tap_holes_v = _xls_val(p.get("tap_holes")) or "0"
+    grooves_v = _xls_val(p.get("grooves")) or "0"
+    sink_line = (
+        f"Sink: {sink_label} · {sink_cut_v} cutout(s) · "
+        f"{tap_holes_v} tap hole(s){tap_dia_note} · "
+        f"{grooves_v} groove(s){groove_dim_note}"
+    )
+    page.insert_text((18, spec_y + 8), sink_line, fontsize=8, color=black)
+    edge_line = "Edge polish: " + (", ".join(_EDGE_SIDE_LABELS.get(s, s) for s in edge_sides) if edge_sides else "None")
+    page.insert_text((18, spec_y + 19), edge_line, fontsize=8, color=black)
+    if active_corners:
+        radius_line = f'Radius: R{radius_value:.2f}" on ' + ", ".join(_CORNER_LABELS.get(c, c) for c in active_corners)
+    else:
+        radius_line = "Radius: None"
+    page.insert_text((18, spec_y + 30), radius_line, fontsize=8, color=black)
+    weight = pw(p, str(p.get("material") or material), thickness, str(p.get("stone_color") or stone_color))
+    page.insert_text((18, spec_y + 41), f"Weight: {weight:.2f} kg", fontsize=8, color=black)
+    page.insert_text((W - 100, spec_y + 41), f"{p.get('building', '')}/{p.get('floor', '')}/{p.get('flat', '')}", fontsize=8, color=gray)
 
 @app.post("/api/projects/{project_id}/process-labels/export")
 def export_process_labels_pdf(project_id: int, body: Dict):
@@ -3670,7 +3850,7 @@ def _build_draft_crate_plan_xlsx_response(project_name: str, draft_crates: List)
         "Crate ID", "Role",
         "Part Type", "Part #", "Drawing", "Unit",
         "Length (in)", "Width (in)", "Thickness (in)",
-        "Weight (kg)", "Sq Ft",
+        "Weight (kg)", "Sq Ft", "Label",
     ])
     _header_fill(ws3, 1)
 
@@ -3682,8 +3862,26 @@ def _build_draft_crate_plan_xlsx_response(project_name: str, draft_crates: List)
             thickness = piece.get("thickness")
             weight = piece.get("weight_kg")
             sqft = piece.get("sqft")
-            d_part_no = piece.get("part_no", "")
-            d_unit = _compute_unit_suffix(piece.get("unit", ""), d_part_no)
+            d_part_no = piece.get("part_no", "") or ""
+            d_unit = _compute_unit_suffix(piece.get("unit", "") or "", d_part_no)
+            floor_v = str(piece.get("floor", "") or "")
+            flat_v = str(piece.get("flat", "") or "")
+            length_v = _round2(length) if length not in (None, "") else 0
+            width_v = _round2(width) if width not in (None, "") else 0
+            line1_parts = []
+            if d_unit:
+                line1_parts.append(f"Unit : {d_unit}")
+            if d_part_no:
+                line1_parts.append(f"DWG : # {d_part_no}")
+            if floor_v:
+                line1_parts.append(f"Floor # {floor_v}")
+            line2_parts = []
+            if flat_v:
+                line2_parts.append(f"Flat # {flat_v}")
+            if length_v and width_v:
+                line2_parts.append(f'{length_v}" X {width_v}"')
+            line2_parts.append(f"Crate # {cid}")
+            label_text = " | ".join(line1_parts) + "\n" + " | ".join(line2_parts)
             ws3.append([
                 cid,
                 piece.get("role", "main"),
@@ -3696,6 +3894,7 @@ def _build_draft_crate_plan_xlsx_response(project_name: str, draft_crates: List)
                 thickness if thickness not in (None, "") else "",
                 _round2(weight) if weight not in (None, "") else "",
                 _round2(sqft) if sqft not in (None, "") else "",
+                label_text,
             ])
             _num_fmt_row(ws3, [7, 8, 10, 11])
 
@@ -3717,42 +3916,9 @@ def _build_draft_crate_plan_xlsx_response(project_name: str, draft_crates: List)
             any_warnings = True
 
     if not any_warnings:
-        ws4.append(["—", "—", "No warnings — plan is clean."])
+        ws4.append(["", "", "No warnings — plan is clean."])
 
     _auto_width(ws4)
-
-    # ── Sheet 5: Labels ────────────────────────────────────────────────────────
-    ws5 = wb.create_sheet("Labels")
-    ws5.append(["Line 1", "Line 2"])
-    _header_fill(ws5, 1)
-    for crate in draft_crates:
-        cid = crate.get("id", "")
-        for piece in _iter_crate_pieces(crate):
-            d_part_no = piece.get("part_no", "") or ""
-            d_unit = _compute_unit_suffix(piece.get("unit", "") or "", d_part_no)
-            floor_v = str(piece.get("floor", "") or "")
-            flat_v = str(piece.get("flat", "") or "")
-            length_v = piece.get("length", 0) or 0
-            width_v = piece.get("width", 0) or 0
-            line1_parts = []
-            if d_unit:
-                line1_parts.append(f"Unit : {d_unit}")
-            if d_part_no:
-                line1_parts.append(f"DWG : # {d_part_no}")
-            if floor_v:
-                line1_parts.append(f"Floor # {floor_v}")
-            line1 = "  |  ".join(line1_parts) if line1_parts else ""
-            line2_parts = []
-            if flat_v:
-                line2_parts.append(f"Flat # {flat_v}")
-            if length_v and width_v:
-                line2_parts.append(f'{length_v}" X {width_v}"')
-            elif length_v:
-                line2_parts.append(f'{length_v}"')
-            line2_parts.append(f"Crate # {cid}")
-            line2 = "  |  ".join(line2_parts)
-            ws5.append([line1, line2])
-    _auto_width(ws5)
 
     output = BytesIO()
     wb.save(output)
@@ -4635,12 +4801,12 @@ def export_source_data(project_id: int):
                 part_no, p.get("part", ""), p.get("category", ""), p.get("drawing", ""), unit,
                 p.get("building", ""), p.get("floor", ""), p.get("flat", ""),
                 p.get("length", 0), p.get("width", 0), piece_thick, qty, sqft, wt,
-                p.get("sink_type", "No Sink"), _fmt_sink_numbers(p.get("sink_numbers")), p.get("sink_cut") or "",
-                p.get("tap_holes") or "", p.get("tap_hole_diameter", "") or "", _fmt_positions(p.get("tap_hole_positions")),
-                p.get("grooves") or "", p.get("groove_dimension", "") or "", _fmt_positions(p.get("groove_positions")),
+                p.get("sink_type", "No Sink"), _fmt_sink_numbers(p.get("sink_numbers")), _xls_val(p.get("sink_cut")),
+                _xls_val(p.get("tap_holes")), p.get("tap_hole_diameter", "") or "", _fmt_positions(p.get("tap_hole_positions")),
+                _xls_val(p.get("grooves")), p.get("groove_dimension", "") or "", _fmt_positions(p.get("groove_positions")),
                 p.get("edge", "None"), p.get("edge_area", ""), round(float(p.get("edge_polish_machine", 0) or 0), 2),
                 _fmt_edge_map(p.get("edge_map")), p.get("edge_polish_manual", ""),
-                p.get("radius_value", ""), _fmt_radius_corners(rc), active_corners or "",
+                _xls_val(p.get("radius_value")), _fmt_radius_corners(rc), active_corners or "",
                 p.get("shape_type", ""),
                 p.get("fragility", "Standard"), p.get("orientation", "Auto"),
                 p.get("delivery_priority", "Standard"), p.get("stack_preference", "Auto"),
@@ -4843,9 +5009,9 @@ def export_excel(project_id: int):
                         ),
                         2,
                     ),
-                    piece.get("sink_type", "No Sink"), _fmt_sink_numbers(piece.get("sink_numbers")), piece.get("sink_cut") or "",
-                    piece.get("tap_holes") or "", piece.get("tap_hole_diameter", "") or "", _fmt_positions(piece.get("tap_hole_positions")),
-                    piece.get("grooves") or "", piece.get("groove_dimension", "") or "", _fmt_positions(piece.get("groove_positions")),
+                    piece.get("sink_type", "No Sink"), _fmt_sink_numbers(piece.get("sink_numbers")), _xls_val(piece.get("sink_cut")),
+                    _xls_val(piece.get("tap_holes")), piece.get("tap_hole_diameter", "") or "", _fmt_positions(piece.get("tap_hole_positions")),
+                    _xls_val(piece.get("grooves")), piece.get("groove_dimension", "") or "", _fmt_positions(piece.get("groove_positions")),
                     piece.get("edge", "None"), piece.get("edge_area", ""),
                     round(float(piece.get("edge_polish_machine", 0) or 0), 2),
                     _fmt_edge_map(piece.get("edge_map")), piece.get("edge_polish_manual", ""),
