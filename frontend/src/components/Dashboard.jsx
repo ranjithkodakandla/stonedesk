@@ -54,6 +54,33 @@ const ProjectsView = ({
     {showCreateForm && (
       <div className="bg-white border border-[#e2e8f0] rounded-xl shadow-sm p-5 mb-6">
         <div className="text-sm font-semibold text-[#1e293b] mb-4">New Project</div>
+
+        {/* Project type toggle */}
+        <div className="flex items-center gap-3 mb-4">
+          <span className="text-xs font-medium text-[#475569]">Project Type</span>
+          <div className="flex gap-1 p-0.5 bg-[#f1f5f9] rounded-lg border border-[#e2e8f0]">
+            {[['apartment', '🏢 Apartment'], ['house', '🏠 Individual Houses']].map(([val, label]) => (
+              <button
+                key={val}
+                type="button"
+                onClick={() => setNewProject((prev) => ({ ...prev, project_type: val }))}
+                className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                  (newProject.project_type || 'apartment') === val
+                    ? 'bg-white text-[#1e293b] shadow-sm border border-[#e2e8f0]'
+                    : 'text-[#64748b] hover:text-[#334155]'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <span className="text-[10px] text-[#94a3b8]">
+            {(newProject.project_type || 'apartment') === 'apartment'
+              ? 'Building → Floor → Flat structure'
+              : 'Building name & quantity only — no floors or flats'}
+          </span>
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div>
             <label className="label-text">Project Name</label>
@@ -193,6 +220,7 @@ const Dashboard = ({ onOpenProject }) => {
     customer: '',
     job_number: '',
     date: new Date().toISOString().slice(0, 10),
+    project_type: 'apartment',
   });
   const [isCreating, setIsCreating] = useState(false);
 
@@ -224,6 +252,7 @@ const Dashboard = ({ onOpenProject }) => {
         customer: newProject.customer.trim(),
         job_number: newProject.job_number.trim(),
         date: newProject.date || new Date().toISOString().slice(0, 10),
+        project_type: newProject.project_type || 'apartment',
       });
       fetchProjects();
       setShowCreateForm(false);
@@ -232,6 +261,7 @@ const Dashboard = ({ onOpenProject }) => {
         customer: '',
         job_number: '',
         date: new Date().toISOString().slice(0, 10),
+        project_type: 'apartment',
       });
       onOpenProject(res.data.id);
     } catch (e) { console.error(e); }
@@ -247,6 +277,7 @@ const Dashboard = ({ onOpenProject }) => {
       customer: '',
       job_number: '',
       date: new Date().toISOString().slice(0, 10),
+      project_type: 'apartment',
     });
   };
 

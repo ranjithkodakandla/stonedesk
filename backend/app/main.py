@@ -342,6 +342,7 @@ def project_response(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         "preferred_container_mode": doc.get("preferred_container_mode", "recommended"),
         "date": doc.get("date", date.today().isoformat()),
         "flat_format": doc.get("flat_format", "manual"),
+        "project_type": doc.get("project_type", "apartment"),
         "description_thickness_map": doc.get("description_thickness_map", {}),
         "status": doc.get("status", "draft"),
         "dispatch_selection": doc.get("dispatch_selection", {}),
@@ -856,6 +857,7 @@ class ProjectUpdate(BaseModel):
     date: str
     flat_format: str = "manual"
     description_thickness_map: Dict[str, str] = {}
+    project_type: str = "apartment"
 
 
 class PlannerPayloadUpdate(BaseModel):
@@ -1038,6 +1040,7 @@ def update_project(project_id: int, data: ProjectUpdate):
         "date": data.date,
         "flat_format": data.flat_format,
         "description_thickness_map": data.description_thickness_map,
+        "project_type": data.project_type,
         "updated_at": utc_now(),
     }
     projects_col.update_one({"id": project_id}, {"$set": update})
