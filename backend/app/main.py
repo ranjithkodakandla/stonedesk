@@ -2055,6 +2055,29 @@ def get_crates(project_id: int):
     return snapshot["crate_rows"]
 
 
+@app.get("/api/projects/{project_id}/crates/{crate_id}/packing-schedule")
+def get_crate_packing_schedule(project_id: int, crate_id: int):
+    """Row-by-row packing schedule for one crate — which pieces share a row,
+    in what order, matching a real factory packing drawing (see
+    planner_v3.packing_schedule). Always recomputed from the crate's
+    persisted piece assignment and dimensions, never a separately stored
+    (and therefore driftable) snapshot."""
+    from .services.planner_v3.packing_schedule import build_packing_schedule
+
+    crate = crates_col.find_one({"id": crate_id, "project_id": project_id}, {"_id": 0})
+    if not crate:
+        raise HTTPException(status_code=404, detail="Crate not found")
+
+    referenced_ids = set(crate.get("main_layer_piece_ids") or [])
+    for layer in (crate.get("planner_v3_splash_layers") or []):
+        referenced_ids.update(layer or [])
+    pieces = pieces_col.find({"project_id": project_id, "id": {"$in": list(referenced_ids)}}, {"_id": 0})
+    pieces_by_id = {p["id"]: p for p in pieces}
+
+    schedule = build_packing_schedule(crate, pieces_by_id)
+    return {"crate_id": crate.get("crate_id", ""), **schedule}
+
+
 @app.post("/api/projects/{project_id}/crates/")
 def create_crate(project_id: int, data: Dict[str, Any]):
     serial = crate_serial_for_project(project_id)
