@@ -3137,36 +3137,80 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
 
     tap_hole_positions = p.get("tap_hole_positions") or []
     tap_hole_diameter = parse_float(p.get("tap_hole_diameter"))
-    for i, pos in enumerate(tap_hole_positions):
+    # Group tap holes by rounded position so identical-position holes share ONE
+    # label (shown with a ×N count) instead of stacking N overlapping labels.
+    _tap_groups: dict = {}
+    for pos in tap_hole_positions:
         ox = parse_float((pos or {}).get("x"))
         oy = parse_float((pos or {}).get("y"))
+        key = (round(ox, 2), round(oy, 2))
+        if key not in _tap_groups:
+            _tap_groups[key] = {"ox": ox, "oy": oy, "count": 0}
+        _tap_groups[key]["count"] += 1
+    for grp in _tap_groups.values():
+        ox, oy = grp["ox"], grp["oy"]
         hx, hy = ref_cx + ox * scale, ref_cy + oy * scale
         r = max(2.5, (tap_hole_diameter * scale) / 2) if tap_hole_diameter > 0 else 3
-        page.draw_circle((hx, hy), r, color=coral, width=0.8)
-        label = f'X{ox:+.2f}", Y{oy:+.2f}"'
+        for _ in range(grp["count"]):
+            page.draw_circle((hx, hy), r, color=coral, width=0.8)
+        base_label = f'X{ox:+.2f}", Y{oy:+.2f}"'
+        label = base_label + (f' \xd7{grp["count"]}' if grp["count"] > 1 else "")
+        lw = len(label) * 2.5  # approximate half label width
         candidates = [
-            (hx - 16, hy - 2 - r), (hx - 16, hy + 10 + r),
-            (hx + r + 4, hy - 2), (hx - r - 4 - len(label) * 3, hy - 2),
-            (hx - 16, hy - 2 - r - 10), (hx - 16, hy + 10 + r + 10),
+            (hx - lw, hy - 2 - r - 2),
+            (hx - lw, hy + 11 + r),
+            (hx + r + 5, hy + 3),
+            (hx - r - 5 - lw * 2, hy + 3),
+            (hx - lw, hy - 2 - r - 13),
+            (hx - lw, hy + 22 + r),
+            (hx + r + 5, hy + 14),
+            (hx - r - 5 - lw * 2, hy + 14),
+            (hx - lw, hy - 2 - r - 24),
+            (hx - lw, hy + 33 + r),
+            (hx + r + 20, hy + 3),
+            (hx - r - 20 - lw * 2, hy + 3),
+            (hx - lw, hy - 2 - r - 36),
+            (hx - lw, hy + 44 + r),
         ]
-        cx0, cy0 = candidates[0]
-        _place_text(cx0, cy0, label, 5.5, gray, candidates=candidates[1:])
+        _place_text(candidates[0][0], candidates[0][1], label, 6, gray, candidates=candidates[1:])
 
     groove_positions = p.get("groove_positions") or []
     groove_dimension = parse_float(p.get("groove_dimension"))
+    # Same deduplication for groove positions.
+    _groove_groups: dict = {}
     for pos in groove_positions:
         ox = parse_float((pos or {}).get("x"))
         oy = parse_float((pos or {}).get("y"))
+        key = (round(ox, 2), round(oy, 2))
+        if key not in _groove_groups:
+            _groove_groups[key] = {"ox": ox, "oy": oy, "count": 0}
+        _groove_groups[key]["count"] += 1
+    for grp in _groove_groups.values():
+        ox, oy = grp["ox"], grp["oy"]
         gx, gy = ref_cx + ox * scale, ref_cy + oy * scale
         half_len = max(4, (groove_dimension * scale) / 2) if groove_dimension > 0 else 5
-        page.draw_line((gx - half_len, gy), (gx + half_len, gy), color=coral, width=1.5)
-        label = f'X{ox:+.2f}", Y{oy:+.2f}"'
+        for _ in range(grp["count"]):
+            page.draw_line((gx - half_len, gy), (gx + half_len, gy), color=coral, width=1.5)
+        base_label = f'X{ox:+.2f}", Y{oy:+.2f}"'
+        label = base_label + (f' \xd7{grp["count"]}' if grp["count"] > 1 else "")
+        lw = len(label) * 2.5
         candidates = [
-            (gx + half_len + 2, gy - 2), (gx - half_len - 2 - len(label) * 3, gy - 2),
-            (gx + half_len + 2, gy + 9), (gx - half_len - 2 - len(label) * 3, gy + 9),
+            (gx + half_len + 4, gy - 2),
+            (gx - half_len - 4 - lw * 2, gy - 2),
+            (gx + half_len + 4, gy + 10),
+            (gx - half_len - 4 - lw * 2, gy + 10),
+            (gx - lw, gy - 13),
+            (gx - lw, gy + 12),
+            (gx + half_len + 20, gy - 2),
+            (gx - half_len - 20 - lw * 2, gy - 2),
+            (gx - lw, gy - 25),
+            (gx - lw, gy + 23),
+            (gx + half_len + 36, gy - 2),
+            (gx - half_len - 36 - lw * 2, gy - 2),
+            (gx - lw, gy - 37),
+            (gx - lw, gy + 34),
         ]
-        cx0, cy0 = candidates[0]
-        _place_text(cx0, cy0, label, 5.5, gray, candidates=candidates[1:])
+        _place_text(candidates[0][0], candidates[0][1], label, 6, gray, candidates=candidates[1:])
 
     spec_y = 232
     page.draw_line((18, spec_y - 8), (W - 18, spec_y - 8), color=gray, width=0.5)
