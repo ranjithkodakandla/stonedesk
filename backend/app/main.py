@@ -1392,7 +1392,12 @@ class DrawingToPieceRequest(BaseModel):
     # (one full assembly per entry), and the combined project PDF renders
     # them as a Building x Floor matrix instead of a single destination
     # line — whichever way the data was entered is how it's drawn.
-    destinations: List[Dict[str, str]] = []
+    # Each entry is {"building", "floor", "flat"} and may optionally carry its
+    # own "piece_ids" (role -> existing piece id) so re-saving the same
+    # matrix updates its pieces in place instead of inserting a duplicate
+    # batch every time — mirrors the single-destination piece_ids contract
+    # above, just one map per destination instead of one for the whole call.
+    destinations: List[Dict[str, Any]] = []
 
 
 def _assembly_role_docs(project_id: int, req: "DrawingToPieceRequest", assembly: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1522,7 +1527,15 @@ def create_piece_from_drawing(project_id: int, req: DrawingToPieceRequest):
     anywhere downstream (crate planning, cut list, labels). Passing
     piece_ids for roles already in the project updates those pieces in
     place instead of creating duplicates, so re-opening a saved drawing to
-    tweak dimensions or toggle an accessory off doesn't leave orphans."""
+    tweak dimensions or toggle an accessory off doesn't leave orphans.
+
+    A matrix destination may likewise carry its own "piece_ids" (role ->
+    existing piece id for that specific building/floor/flat) — the response
+    echoes each destination's resulting piece_ids back, so a caller that
+    resubmits the same matrix (e.g. editing it again without reloading)
+    passes them back in and updates those pieces in place instead of
+    inserting a fresh duplicate batch. A destination with no piece_ids is
+    always treated as a brand-new entry, same as before."""
     try:
         errors = drawing_templates.validate_params(req.template_id, req.params)
         if errors:
@@ -1531,24 +1544,35 @@ def create_piece_from_drawing(project_id: int, req: DrawingToPieceRequest):
     except drawing_templates.TemplateError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    dest_results = []
     if req.destinations:
         # Matrix entry: the same drawing repeats across many building/floor/
-        # flat destinations. Each gets its own full assembly (in-place
-        # update tracking doesn't apply here — this is always a fresh batch,
-        # same as pasting a matrix of rows into Source Data).
+        # flat destinations. Each destination keeps its own piece_ids map
+        # (defaulting to empty, i.e. "create fresh"), mirroring the
+        # single-destination in-place-update contract per destination
+        # instead of for the whole batch.
         docs = []
         for dest in req.destinations:
+            dest_piece_ids = {
+                role: int(pid) for role, pid in (dest.get("piece_ids") or {}).items()
+            }
             dest_req = req.model_copy(update={
                 "building": dest.get("building", ""), "floor": dest.get("floor", ""),
-                "flat": dest.get("flat", ""), "piece_ids": {},
+                "flat": dest.get("flat", ""), "piece_ids": dest_piece_ids,
             })
-            docs.extend(_assembly_role_docs(project_id, dest_req, assembly))
+            dest_docs = _assembly_role_docs(project_id, dest_req, assembly)
+            docs.extend(dest_docs)
+            dest_results.append({
+                "building": dest_req.building, "floor": dest_req.floor, "flat": dest_req.flat,
+                "piece_ids": {d["assembly_role"]: d["id"] for d in dest_docs},
+            })
     else:
         docs = _assembly_role_docs(project_id, req, assembly)
     clear_manual_container_plan(project_id)
     return {
         "pieces": [piece_response(d) for d in docs],
         "piece_ids": {d["assembly_role"]: d["id"] for d in docs},
+        "destinations": dest_results,
     }
 
 
