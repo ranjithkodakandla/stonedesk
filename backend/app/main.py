@@ -2117,6 +2117,16 @@ def create_crate(project_id: int, data: Dict[str, Any]):
         "packing_family": str(data.get("packing_family", "") or ""),
         "created_at": utc_now(),
     }
+    # Optional passthrough so a manually-built crate can still carry the
+    # row/layer metadata the packing-schedule view reads (planner-generated
+    # crates always have these; a manual crate only does if the caller sets
+    # them — e.g. a manual edit flow built on top of an existing plan).
+    if "planner_v3_orientation" in data:
+        crate["planner_v3_orientation"] = data["planner_v3_orientation"]
+    if "main_layer_piece_ids" in data:
+        crate["main_layer_piece_ids"] = [int(pid) for pid in data["main_layer_piece_ids"]]
+    if "planner_v3_splash_layers" in data:
+        crate["planner_v3_splash_layers"] = data["planner_v3_splash_layers"]
     crates_col.insert_one(crate)
 
     if piece_ids:

@@ -58,3 +58,35 @@ def test_packing_schedule_endpoint_404s_for_missing_crate():
         assert False, "expected HTTPException"
     except Exception as exc:
         assert getattr(exc, "status_code", None) == 404
+
+
+def test_create_crate_passes_through_optional_planner_v3_fields():
+    _reset()
+    project = app_main.create_project()
+    p1 = app_main.create_piece(project["id"], app_main.PieceCreate(
+        part="Kitchen - Range Tops", category="Kitchen - Range Tops", length=79, width=25.5,
+    ))
+    created = app_main.create_crate(project["id"], {
+        "piece_ids": [p1["id"]],
+        "planner_v3_orientation": "horizontal",
+        "main_layer_piece_ids": [p1["id"]],
+        "planner_v3_splash_layers": [],
+    })
+    stored = app_main.crates_col.find_one({"id": created["id"]})
+    assert stored["planner_v3_orientation"] == "horizontal"
+    assert stored["main_layer_piece_ids"] == [p1["id"]]
+
+    result = app_main.get_crate_packing_schedule(project["id"], created["id"])
+    assert len(result["rows"]) == 1
+    assert result["rows"][0]["piece_ids"] == [p1["id"]]
+
+
+def test_create_crate_without_planner_v3_fields_still_works_unchanged():
+    _reset()
+    project = app_main.create_project()
+    p1 = app_main.create_piece(project["id"], app_main.PieceCreate(
+        part="Kitchen - Range Tops", category="Kitchen - Range Tops", length=79, width=25.5,
+    ))
+    created = app_main.create_crate(project["id"], {"piece_ids": [p1["id"]]})
+    stored = app_main.crates_col.find_one({"id": created["id"]})
+    assert "planner_v3_orientation" not in stored

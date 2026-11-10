@@ -17,6 +17,18 @@ function App() {
       );
    }
 
+   const packingScheduleDemo =
+      window.location.hash === '#packing-schedule-demo'
+      && (import.meta.env.DEV || new URLSearchParams(window.location.search).has('crateDemo'));
+   if (packingScheduleDemo) {
+      const PackingScheduleDevPage = React.lazy(() => import('./dev/PackingScheduleDevPage'));
+      return (
+         <React.Suspense fallback={<div className="p-8 text-sm text-slate-600">Loading packing schedule demo…</div>}>
+            <PackingScheduleDevPage />
+         </React.Suspense>
+      );
+   }
+
    return (
       <>
          {currentProjectId ? (
