@@ -11,6 +11,7 @@ _BASE_SUPPORT_IN = 2.0
 _HEADROOM = 4.0             # matches _HEADROOM below (shared upright-model constant)
 _ROW_SEPARATOR_IN = 0.75    # foam between main-top "rows" stacked along width
 _SIDE_FRAME = 4.0           # framing on the width/row-stack axis
+_ROW_PIECE_GAP_IN = 1.0     # clearance between two pieces sharing one row, laid end to end
 
 
 def _max_piece_length(pieces: List[Dict[str, Any]]) -> float:
@@ -25,6 +26,43 @@ def _piece_short_edge(p: Dict[str, Any]) -> float:
     if L > 0 and W > 0:
         return min(L, W)
     return max(L, W)
+
+
+def group_main_pieces_into_rows(
+    main_pieces: List[Dict[str, Any]],
+    usable_length: float,
+) -> List[List[Dict[str, Any]]]:
+    """Groups main pieces into packing "rows" — upright thickness-slots laid
+    side by side along the crate's length axis, matching the factory's real
+    packing drawings (e.g. the Kitchen And Range Tops reference: 6 rows of
+    one long piece each, then 6 rows pairing a 49" and a 19" piece that
+    together fit the same row). A piece too long to share a row with
+    anything gets a row to itself; two or more shorter pieces whose combined
+    length (plus a small gap) fits within usable_length share one row
+    instead of each claiming a separate thickness-slot, so the crate isn't
+    needlessly widened for pieces that could lie end to end.
+
+    Greedy largest-first: the biggest unplaced piece starts a new row, then
+    the largest remaining piece that still fits is added, repeating until
+    nothing more fits — this fills each row as full as possible before
+    starting the next one."""
+    if not main_pieces:
+        return []
+    remaining = sorted(main_pieces, key=lambda p: parse_float(p.get("length")), reverse=True)
+    rows: List[List[Dict[str, Any]]] = []
+    while remaining:
+        row = [remaining.pop(0)]
+        row_length = parse_float(row[0].get("length"))
+        i = 0
+        while i < len(remaining):
+            candidate_length = parse_float(remaining[i].get("length"))
+            if row_length + _ROW_PIECE_GAP_IN + candidate_length <= usable_length:
+                row.append(remaining.pop(i))
+                row_length += _ROW_PIECE_GAP_IN + candidate_length
+            else:
+                i += 1
+        rows.append(row)
+    return rows
 
 
 def horizontal_crate_dimensions(
@@ -69,10 +107,19 @@ def horizontal_crate_dimensions(
 
     internal_height = main_h + _BASE_SUPPORT_IN + _HEADROOM + splash_h
 
-    # Width: thickness-stack of main-top "rows" — one slot per main piece, foam between.
+    # Width: thickness-stack of main-top "rows". A row is a thickness-slot,
+    # not necessarily one piece — two or more pieces short enough to lie end
+    # to end within the crate's internal_length share one row instead of
+    # each claiming its own slot (see group_main_pieces_into_rows), so e.g.
+    # a 49" and a 19" piece pack into the same row a lone 79" piece needs to
+    # itself, matching the factory's real packing drawings.
     if main_pieces:
-        row_thicknesses = [thickness_inches(str(p.get("thickness") or default_thickness)) for p in main_pieces]
-        internal_width = sum(row_thicknesses) + max(0, len(main_pieces) - 1) * _ROW_SEPARATOR_IN + _SIDE_FRAME
+        rows = group_main_pieces_into_rows(main_pieces, usable_length=internal_length)
+        row_thicknesses = [
+            max(thickness_inches(str(p.get("thickness") or default_thickness)) for p in row)
+            for row in rows
+        ]
+        internal_width = sum(row_thicknesses) + max(0, len(rows) - 1) * _ROW_SEPARATOR_IN + _SIDE_FRAME
     else:
         internal_width = thickness_inches(default_thickness) + _SIDE_FRAME
 
