@@ -247,9 +247,15 @@ def _title_block(page, meta: Dict[str, Any]) -> None:
 
     dest_list = meta.get("destinations") or []
     if len(dest_list) > 1:
-        # Matrix entry: point at the destination table instead of repeating
-        # every building/floor/flat combo in a cramped sidebar row.
-        destination = f"{len(dest_list)} destinations - see table below"
+        # Matrix entry: point at the destination table/list instead of
+        # repeating every building/floor/flat combo in a cramped sidebar
+        # row. A house project has no floor, so it gets a building list
+        # instead of a Building x Floor table (see _destination_house_list).
+        has_floor = any(d.get("floor") for d in dest_list)
+        destination = (
+            f"{len(dest_list)} destinations - see table below" if has_floor
+            else f"{len(dest_list)} destinations - see building list below"
+        )
     else:
         destination = " / ".join(f"{label} {v}" for label, v in
                                   (("Bldg", meta.get("building")), ("Fl", meta.get("floor")), ("Flat", meta.get("flat"))) if v)
@@ -274,6 +280,22 @@ def _title_block(page, meta: Dict[str, Any]) -> None:
     row(y, "SCALE", scale_display, value_size=9)
 
 
+def _destination_house_list(page, destinations: List[Dict[str, Any]], buildings: List[str], start_y: float) -> None:
+    """Individual-house equivalent of _destination_matrix: just a list of
+    building names and how many of this drawing go to each — no floor/flat
+    columns, since those don't apply to a house project."""
+    gray = (0.4, 0.45, 0.5)
+    black = (0.06, 0.09, 0.14)
+    x0, y0 = 36, start_y
+    page.insert_text((x0, y0 - 6), f"Buildings  ({len(destinations)} total)", fontsize=8, color=gray)
+    y = y0 + 10
+    for building in buildings:
+        count = sum(1 for d in destinations if d.get("building") == building)
+        page.insert_text((x0, y), f"{building}", fontsize=8, color=black)
+        page.insert_text((x0 + 140, y), f"x{count}", fontsize=8, color=gray)
+        y += 14
+
+
 def _destination_matrix(page, destinations: List[Dict[str, Any]], start_y: float = 470) -> None:
     """Bottom-left Building x Floor destination table — one cell per
     building/floor combo, listing that cell's flat numbers (not just a
@@ -285,7 +307,14 @@ def _destination_matrix(page, destinations: List[Dict[str, Any]], start_y: float
         return
     buildings = sorted({d.get("building", "") for d in destinations if d.get("building")})
     floors = sorted({d.get("floor", "") for d in destinations if d.get("floor")})
-    if not buildings or not floors:
+    if not buildings:
+        return
+    if not floors:
+        # Individual-house projects have no floor/flat — a Building x Floor
+        # grid would be empty and misleading (every destination would be
+        # dropped). Render the flat list of buildings/quantities instead of
+        # silently drawing nothing, never inventing a floor/flat value.
+        _destination_house_list(page, destinations, buildings, start_y)
         return
     gray = (0.4, 0.45, 0.5)
     black = (0.06, 0.09, 0.14)

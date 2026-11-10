@@ -1549,18 +1549,31 @@ def _splash_params_for_piece(piece: Dict[str, Any], project_pieces: List[Dict[st
 
 
 def _reverse_map_piece(piece: Dict[str, Any], project_pieces: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Fills in drawing_template_id/drawing_template_params for a piece that
-    was entered manually (never saved through the Drawing Generator), so it
-    can still be drawn on its own combined-PDF page. Generator-created
-    pieces already carry both fields and pass through unchanged."""
-    if piece.get("drawing_template_id"):
-        return piece
-    template_id = _template_id_for_piece(piece)
+    """Fills in drawing_template_id/drawing_template_params for a piece so it
+    can be drawn on its own combined-PDF page, always from the piece's
+    CURRENT saved fields rather than whatever was true when it was last
+    generated/edited through the Drawing Generator.
+
+    A generator-created piece already carries drawing_template_id and its
+    original drawing_template_params (e.g. overhang, splash_height — values
+    with no flat-field equivalent), which we keep as a base. But if length/
+    width/sink fields were edited afterward directly (e.g. via the Source
+    Data table) without reopening the generator, those stored params would
+    silently drift from the piece's actual current dimensions — so the
+    dimension-/splash-derivable params are always recomputed from the
+    piece's current fields and layered on top, same as a manually-entered
+    piece. A piece with no stored template at all is reverse-mapped from
+    scratch, as before."""
+    template_id = piece.get("drawing_template_id") or _template_id_for_piece(piece)
     if not template_id:
-        return None
+        return piece if piece.get("drawing_template_id") else None
     template = drawing_templates.get_template(template_id)
     defaults = {p["id"]: p["default"] for p in template["parameters"]}
-    params = {**defaults, **_params_from_piece(template_id, piece), **_splash_params_for_piece(piece, project_pieces)}
+    stored = piece.get("drawing_template_params") or {}
+    params = {
+        **defaults, **stored,
+        **_params_from_piece(template_id, piece), **_splash_params_for_piece(piece, project_pieces),
+    }
     params = {k: v for k, v in params.items() if v is not None}
     return {**piece, "drawing_template_id": template_id, "drawing_template_params": params}
 
@@ -3124,13 +3137,7 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
         _draw_edge_mark(rx1 - 14, mid_y + 4, edge_map["right"])
 
     radius_corners = p.get("radius_corners") or {}
-    radius_corner_values = p.get("radius_corner_values") or {}
-    # Legacy pieces only ever had one shared radius_value applied to every
-    # checked corner; a piece with per-corner overrides falls back to that
-    # shared value, then to the configured app default, for any corner that
-    # has no override of its own — never one global radius for all corners.
-    legacy_radius_value = parse_float(p.get("radius_value"))
-    default_radius = _default_corner_radius_in()
+    radius_value = parse_float(p.get("radius_value"))
     active_corners = [c for c, v in radius_corners.items() if v]
     r_arc = 10
     corner_geometry = {
@@ -3145,8 +3152,7 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
             continue
         cx, cy, sx, sy = geo
         page.draw_curve((cx, cy + sy * r_arc), (cx, cy), (cx + sx * r_arc, cy), color=coral, width=1.2)
-        corner_radius = parse_float(radius_corner_values.get(corner)) or legacy_radius_value or default_radius
-        label = f'R{corner_radius:.3f}"' if corner_radius > 0 else "R"
+        label = f'R{radius_value:.2f}"' if radius_value > 0 else "R"
         label_x = cx + sx * (r_arc + 4) - (len(label) * 4 if sx < 0 else 0)
         label_y = cy + sy * (r_arc + 10) if sy < 0 else cy + sy * (r_arc + 4) + 10
         page.insert_text((label_x, label_y), label, fontsize=7, color=coral)
