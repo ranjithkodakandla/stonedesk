@@ -31,14 +31,16 @@ const COLUMNS = [
   { key: 'actions', label: 'Actions', width: 150 },
 ];
 const TOTAL_WIDTH = COLUMNS.reduce((sum, c) => sum + c.width, 0);
+const HOUSE_TOTAL_WIDTH = COLUMNS.filter(c => c.key !== 'floor' && c.key !== 'flat').reduce((sum, c) => sum + c.width, 0);
 const ROW_HEIGHT = 58;
 const LIST_HEIGHT = 460;
 
 const PieceRow = React.memo(({ index, style, data }) => {
   const {
     filteredPieces, selectedIds, toggleSelection, editingPartNo, setEditingPartNo,
-    savePartNo, onLoadDrawing, openEdit, onDelete, getWeight,
+    savePartNo, onLoadDrawing, openEdit, onDelete, getWeight, isHouse,
   } = data;
+  const rowWidth = isHouse ? HOUSE_TOTAL_WIDTH : TOTAL_WIDTH;
   const p = filteredPieces[index];
   const sqft = (p.length * p.width) / 144;
   const wt = getWeight(p);
@@ -47,7 +49,7 @@ const PieceRow = React.memo(({ index, style, data }) => {
 
   return (
     <div
-      style={{ ...style, width: TOTAL_WIDTH }}
+      style={{ ...style, width: rowWidth }}
       className={`flex border-b border-[#f1f5f9] transition-colors text-sm text-[#475569] ${isSelected ? 'bg-[#eff6ff]' : 'hover:bg-[#f8fafc]'}`}
     >
       <div className={`flex items-center p-3 sticky left-0 z-[2] border-r border-[#f1f5f9] ${cellBg}`} style={{ width: COLUMNS[0].width }}>
@@ -93,8 +95,8 @@ const PieceRow = React.memo(({ index, style, data }) => {
       <div className="flex items-center justify-end p-3 text-[#64748b]" style={{ width: COLUMNS[14].width }}>{sqft.toFixed(2)}</div>
       <div className="flex items-center justify-end p-3 text-[#64748b]" style={{ width: COLUMNS[15].width }}>{formatNumber(wt)}</div>
       <div className="flex items-center p-3 truncate text-[#64748b]" style={{ width: COLUMNS[16].width }}>{p.building}</div>
-      <div className="flex items-center p-3 truncate text-[#64748b]" style={{ width: COLUMNS[17].width }}>{p.floor}</div>
-      <div className="flex items-center p-3 truncate text-[#64748b]" style={{ width: COLUMNS[18].width }}>{p.flat}</div>
+      {!isHouse && <div className="flex items-center p-3 truncate text-[#64748b]" style={{ width: COLUMNS[17].width }}>{p.floor}</div>}
+      {!isHouse && <div className="flex items-center p-3 truncate text-[#64748b]" style={{ width: COLUMNS[18].width }}>{p.flat}</div>}
       <div className="flex flex-col justify-center p-3 text-xs text-[#64748b]" style={{ width: COLUMNS[19].width }}>
         <div className="truncate">{p.delivery_priority || 'Standard'} · {p.fragility || 'Standard'}</div>
         <div className="truncate">{p.stack_preference || 'Auto'}{p.weight_override ? ` · ${formatNumber(p.weight_override)} kg ea` : ''}</div>
@@ -531,8 +533,13 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing })
         </div>
       </div>
 
+      {(() => {
+        const isHouse = (project?.project_type || 'apartment') === 'house';
+        const totalWidth = isHouse ? HOUSE_TOTAL_WIDTH : TOTAL_WIDTH;
+        const visibleCols = isHouse ? COLUMNS.filter(c => c.key !== 'floor' && c.key !== 'flat') : COLUMNS;
+        return (
       <div className="overflow-x-auto overflow-y-hidden bg-white border border-[#e2e8f0] shadow-sm rounded-lg relative">
-        <div style={{ width: TOTAL_WIDTH }}>
+        <div style={{ width: totalWidth }}>
           <div className="flex bg-[#f1f5f9] text-[#334155] text-xs font-semibold shadow-sm border-b border-[#e2e8f0]">
             <div className="p-3 flex items-center sticky left-0 z-20 bg-[#f1f5f9]" style={{ width: COLUMNS[0].width }}>
               <input
@@ -543,13 +550,13 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing })
               />
             </div>
             <div className="p-3 flex items-center sticky z-20 bg-[#f1f5f9] whitespace-nowrap border-r border-[#e2e8f0]" style={{ width: COLUMNS[1].width, left: COLUMNS[0].width }}>Part #</div>
-            {COLUMNS.slice(2).map((col) => (
+            {visibleCols.slice(2).map((col) => (
               <div key={col.key} className="p-3 flex items-center" style={{ width: col.width }}>{col.label}</div>
             ))}
           </div>
 
           {filteredPieces.length === 0 ? (
-            <div className="p-8 text-center text-[#64748b] italic" style={{ width: TOTAL_WIDTH }}>
+            <div className="p-8 text-center text-[#64748b] italic" style={{ width: totalWidth }}>
               {pieces.length === 0 ? 'No pieces added to this project yet.' : `No pieces match “${partSearch}”`}
             </div>
           ) : (
@@ -557,10 +564,10 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing })
               height={LIST_HEIGHT}
               itemCount={filteredPieces.length}
               itemSize={ROW_HEIGHT}
-              width={TOTAL_WIDTH}
+              width={totalWidth}
               itemData={{
                 filteredPieces, selectedIds, toggleSelection, editingPartNo, setEditingPartNo,
-                savePartNo, onLoadDrawing, openEdit, onDelete, getWeight,
+                savePartNo, onLoadDrawing, openEdit, onDelete, getWeight, isHouse,
               }}
             >
               {PieceRow}
@@ -568,8 +575,12 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing })
           )}
         </div>
       </div>
+        );
+      })()}
 
-      {editMode && editDraft && (
+      {editMode && editDraft && (() => {
+        const isHouseEdit = (project?.project_type || 'apartment') === 'house';
+        return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
           <div className="w-full max-w-5xl rounded-xl bg-white shadow-2xl border border-[#e2e8f0] max-h-[90vh] overflow-y-auto">
             <div className="sticky top-0 z-10 flex items-center justify-between border-b border-[#e2e8f0] bg-white px-5 py-4">
@@ -607,8 +618,8 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing })
                   <div><label className="label-text">Stacking</label><select value={editDraft.stack_preference || 'Auto'} onChange={(e) => handleEditChange('stack_preference', e.target.value)} className="input-field">{pieceFormOptions.stacking.map((item) => <option key={item}>{item}</option>)}</select></div>
                   <div><label className="label-text">Weight Override (kg ea)</label><input type="number" step="0.1" value={editDraft.weight_override || ''} onChange={(e) => handleEditChange('weight_override', e.target.value)} className="input-field" /></div>
                   <div><label className="label-text">Building</label><input value={editDraft.building || ''} onChange={(e) => handleEditChange('building', e.target.value)} className="input-field" /></div>
-                  <div><label className="label-text">Floor</label><input value={editDraft.floor || ''} onChange={(e) => handleEditChange('floor', e.target.value)} className="input-field" /></div>
-                  <div><label className="label-text">Flat</label><input value={editDraft.flat || ''} onChange={(e) => handleEditChange('flat', e.target.value)} className="input-field" /></div>
+                  {!isHouseEdit && <div><label className="label-text">Floor</label><input value={editDraft.floor || ''} onChange={(e) => handleEditChange('floor', e.target.value)} className="input-field" /></div>}
+                  {!isHouseEdit && <div><label className="label-text">Flat</label><input value={editDraft.flat || ''} onChange={(e) => handleEditChange('flat', e.target.value)} className="input-field" /></div>}
                   <div className="md:col-span-3"><label className="label-text">Notes</label><input value={editDraft.notes || ''} onChange={(e) => handleEditChange('notes', e.target.value)} className="input-field" /></div>
                 </div>
               ) : (
@@ -636,8 +647,8 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing })
                   {renderBulkField('stack_preference', 'Stacking', <select value={editDraft.stack_preference.value} onChange={(e) => setBulkValue('stack_preference', e.target.value)} className="input-field">{pieceFormOptions.stacking.map((item) => <option key={item}>{item}</option>)}</select>)}
                   {renderBulkField('weight_override', 'Weight Override (kg ea)', <input type="number" step="0.1" value={editDraft.weight_override.value} onChange={(e) => setBulkValue('weight_override', e.target.value)} className="input-field" />)}
                   {renderBulkField('building', 'Building', <input value={editDraft.building.value} onChange={(e) => setBulkValue('building', e.target.value)} className="input-field" />)}
-                  {renderBulkField('floor', 'Floor', <input value={editDraft.floor.value} onChange={(e) => setBulkValue('floor', e.target.value)} className="input-field" />)}
-                  {renderBulkField('flat', 'Flat', <input value={editDraft.flat.value} onChange={(e) => setBulkValue('flat', e.target.value)} className="input-field" />)}
+                  {!isHouseEdit && renderBulkField('floor', 'Floor', <input value={editDraft.floor.value} onChange={(e) => setBulkValue('floor', e.target.value)} className="input-field" />)}
+                  {!isHouseEdit && renderBulkField('flat', 'Flat', <input value={editDraft.flat.value} onChange={(e) => setBulkValue('flat', e.target.value)} className="input-field" />)}
                   {renderBulkField('notes', 'Notes', <input value={editDraft.notes.value} onChange={(e) => setBulkValue('notes', e.target.value)} className="input-field" />)}
                 </div>
               )}
@@ -653,7 +664,8 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing })
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 };

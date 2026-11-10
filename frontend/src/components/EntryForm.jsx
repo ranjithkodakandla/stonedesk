@@ -471,6 +471,8 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
   // ── Destination Mode ──
   const [destMode, setDestMode] = useState('single'); // 'single' | 'matrix'
   const [matrixData, setMatrixData] = useState({ buildings: '', floors: '', cells: {} });
+  // ── House destination rows (project_type === 'house') ──
+  const [houseRows, setHouseRows] = useState([{ building: '', qty: 1 }]);
 
   // ── Clipboard state ──
   const [copiedParts, setCopiedParts] = useState(null);
@@ -771,6 +773,18 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
 
   // ── Build destinations ──
   const buildDestinations = () => {
+    // House mode: each row is a building + explicit qty (no floor/flat)
+    if (project.project_type === 'house') {
+      const dests = [];
+      houseRows.forEach(row => {
+        const bldg = (row.building || '').trim();
+        const qty = Number(row.qty) || 1;
+        if (bldg) {
+          for (let i = 0; i < qty; i++) dests.push({ building: bldg, floor: '', flat: '', matrixQty: null });
+        }
+      });
+      return dests.length ? dests : [{ building: '', floor: '', flat: '', matrixQty: null }];
+    }
     if (destMode === 'single') {
       const buildings = parseCommaList(drawingCtx.building).filter(Boolean);
       const floors = parseCommaList(drawingCtx.floor).filter(Boolean);
@@ -800,7 +814,7 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
 
   const destinations = useMemo(() => buildDestinations(),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [destMode, drawingCtx.building, drawingCtx.floor, drawingCtx.flat, matrixData, matrixConfig]);
+    [project.project_type, houseRows, destMode, drawingCtx.building, drawingCtx.floor, drawingCtx.flat, matrixData, matrixConfig]);
 
   useEffect(() => {
     const nextThickness = drawingCtx.thickness || project.thickness || '3CM';
@@ -969,6 +983,7 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
     thicknessAutoLockRef.current = false;
     setPieceRows([newRow(drawingCtx.thickness || project.thickness || '3CM')]);
     setMatrixData({ buildings: '', floors: '', cells: {} });
+    setHouseRows([{ building: '', qty: 1 }]);
     setMirrorMessage('');
     setEditBanner('');
     loadedPieceIdsRef.current = [];
@@ -1003,6 +1018,13 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
         <h2 className="text-lg font-bold text-[#1e293b] mb-4">Project Details</h2>
         <div className="grid grid-cols-2 md:grid-cols-8 gap-4">
           <div><label className="label-text">Project Name</label><input name="name" value={project.name || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
+          <div>
+            <label className="label-text">Project Type</label>
+            <select name="project_type" value={project.project_type || 'apartment'} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field">
+              <option value="apartment">🏢 Apartment</option>
+              <option value="house">🏠 Individual Houses</option>
+            </select>
+          </div>
           <div><label className="label-text">Material</label><select name="material" value={project.material} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field"><option>Granite</option><option>Quartz</option><option>Marble</option></select></div>
           <div>
             <label className="label-text">Stone Color</label>
@@ -1181,19 +1203,71 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
           <div className="px-5 py-3 border-b border-[#edf2f7] bg-[#f8fafc]">
             <div className="flex items-center gap-4 mb-3">
               <span className="text-sm font-semibold text-[#334155]">Destination</span>
-              <div className="flex gap-1">
-                <button type="button" onClick={() => setDestMode('single')}
-                  className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${destMode === 'single' ? 'bg-[#1e293b] text-white' : 'bg-white border border-[#cbd5e1] text-[#475569]'}`}>
-                  Single / Comma-List
-                </button>
-                <button type="button" onClick={() => setDestMode('matrix')}
-                  className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${destMode === 'matrix' ? 'bg-[#1e293b] text-white' : 'bg-white border border-[#cbd5e1] text-[#475569]'}`}>
-                  Matrix Grid
-                </button>
-              </div>
+              {project.project_type !== 'house' && (
+                <div className="flex gap-1">
+                  <button type="button" onClick={() => setDestMode('single')}
+                    className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${destMode === 'single' ? 'bg-[#1e293b] text-white' : 'bg-white border border-[#cbd5e1] text-[#475569]'}`}>
+                    Single / Comma-List
+                  </button>
+                  <button type="button" onClick={() => setDestMode('matrix')}
+                    className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${destMode === 'matrix' ? 'bg-[#1e293b] text-white' : 'bg-white border border-[#cbd5e1] text-[#475569]'}`}>
+                    Matrix Grid
+                  </button>
+                </div>
+              )}
+              {project.project_type === 'house' && (
+                <span className="text-xs text-[#64748b] bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">
+                  🏠 Individual Houses — enter each building name and piece count
+                </span>
+              )}
             </div>
 
-            {destMode === 'single' && (
+            {/* House destination table */}
+            {project.project_type === 'house' && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-[10px] font-semibold text-[#64748b] uppercase tracking-wide px-1">
+                  <span className="w-48">Building / House Name</span>
+                  <span className="w-20">Qty</span>
+                </div>
+                {houseRows.map((row, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <input
+                      className="input-field w-48"
+                      value={row.building}
+                      onChange={e => setHouseRows(prev => prev.map((r, i) => i === idx ? { ...r, building: e.target.value } : r))}
+                      placeholder="e.g., HH or Block A"
+                    />
+                    <input
+                      type="number"
+                      min="1"
+                      className="input-field w-20"
+                      value={row.qty}
+                      onChange={e => setHouseRows(prev => prev.map((r, i) => i === idx ? { ...r, qty: e.target.value } : r))}
+                    />
+                    {houseRows.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => setHouseRows(prev => prev.filter((_, i) => i !== idx))}
+                        className="text-rose-400 hover:text-rose-600 text-sm font-bold px-1"
+                        title="Remove row"
+                      >×</button>
+                    )}
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setHouseRows(prev => [...prev, { building: '', qty: 1 }])}
+                  className="text-xs text-[#1d4ed8] hover:text-[#1e40af] font-medium flex items-center gap-1 mt-1"
+                >
+                  + Add building
+                </button>
+                <div className="text-[10px] text-[#94a3b8] mt-1">
+                  Each row creates <em>Qty</em> pieces for that building. Floor and flat are left blank for individual houses.
+                </div>
+              </div>
+            )}
+
+            {project.project_type !== 'house' && destMode === 'single' && (
               <div className="grid grid-cols-3 gap-3">
                 <div><label className="label-text">Building</label><input name="building" value={drawingCtx.building} onChange={handleCtx} className="input-field" placeholder="e.g., 13 or A,B" /></div>
                 <div><label className="label-text">Floor</label><input name="floor" value={drawingCtx.floor} onChange={handleCtx} className="input-field" placeholder="e.g., 1,2,3" /></div>
@@ -1201,7 +1275,7 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
               </div>
             )}
 
-            {destMode === 'matrix' && (
+            {project.project_type !== 'house' && destMode === 'matrix' && (
               <div className="space-y-3">
                 <div className="grid grid-cols-2 gap-3">
                   <div><label className="label-text">Buildings (comma-separated)</label><input value={matrixData.buildings} onChange={e => setMatrixData(p => ({ ...p, buildings: e.target.value }))} className="input-field" placeholder="1,2,3,4" /></div>

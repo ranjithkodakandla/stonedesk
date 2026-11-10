@@ -342,6 +342,7 @@ def project_response(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         "preferred_container_mode": doc.get("preferred_container_mode", "recommended"),
         "date": doc.get("date", date.today().isoformat()),
         "flat_format": doc.get("flat_format", "manual"),
+        "project_type": doc.get("project_type", "apartment"),
         "description_thickness_map": doc.get("description_thickness_map", {}),
         "status": doc.get("status", "draft"),
         "dispatch_selection": doc.get("dispatch_selection", {}),
@@ -856,6 +857,7 @@ class ProjectUpdate(BaseModel):
     date: str
     flat_format: str = "manual"
     description_thickness_map: Dict[str, str] = {}
+    project_type: str = "apartment"
 
 
 class PlannerPayloadUpdate(BaseModel):
@@ -1038,6 +1040,7 @@ def update_project(project_id: int, data: ProjectUpdate):
         "date": data.date,
         "flat_format": data.flat_format,
         "description_thickness_map": data.description_thickness_map,
+        "project_type": data.project_type,
         "updated_at": utc_now(),
     }
     projects_col.update_one({"id": project_id}, {"$set": update})
@@ -2920,6 +2923,7 @@ def export_manual_crate_plan_xlsx(project_id: int, body: Dict):
                 label_text,
             ])
     _auto_width(ws2)
+    _hide_empty_columns(ws2)
 
     output = BytesIO()
     wb.save(output)
@@ -3234,7 +3238,8 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
     page.insert_text((18, spec_y + 30), radius_line, fontsize=8, color=black)
     weight = pw(p, str(p.get("material") or material), thickness, str(p.get("stone_color") or stone_color))
     page.insert_text((18, spec_y + 41), f"Weight: {weight:.2f} kg", fontsize=8, color=black)
-    page.insert_text((W - 100, spec_y + 41), f"{p.get('building', '')}/{p.get('floor', '')}/{p.get('flat', '')}", fontsize=8, color=gray)
+    _dest_parts = [str(p.get(k, "") or "") for k in ("building", "floor", "flat")]
+    page.insert_text((W - 100, spec_y + 41), "/".join(v for v in _dest_parts if v), fontsize=8, color=gray)
 
 @app.post("/api/projects/{project_id}/process-labels/export")
 def export_process_labels_pdf(project_id: int, body: Dict):
