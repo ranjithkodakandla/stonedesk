@@ -1337,7 +1337,7 @@ const CrateGrid = ({ pieces, crates, assignments, project, onDataChange }) => {
                         <div>
                           <div className="font-medium text-[#0f172a]">{piece.part}</div>
                           <div className="text-xs text-[#64748b]">
-                            {piece.drawing || 'No drawing'} · {piece.building || 'B?'} / {piece.floor || 'F?'} / {piece.flat || 'Unit?'}
+                            {piece.drawing || 'No drawing'} · {(project?.project_type || 'apartment') === 'house' ? (piece.building || 'B?') : `${piece.building || 'B?'} / ${piece.floor || 'F?'} / ${piece.flat || 'Unit?'}`}
                           </div>
                         </div>
                       </label>
@@ -1491,7 +1491,7 @@ const CrateGrid = ({ pieces, crates, assignments, project, onDataChange }) => {
                               <div>
                                 <div className="font-medium text-[#0f172a]">{piece.part}</div>
                                 <div className="text-xs text-[#64748b]">
-                                  {piece.drawing || 'No drawing'} · {piece.building || 'B?'} / {piece.floor || 'F?'} / {piece.flat || 'Unit?'}
+                                  {piece.drawing || 'No drawing'} · {(project?.project_type || 'apartment') === 'house' ? (piece.building || 'B?') : `${piece.building || 'B?'} / ${piece.floor || 'F?'} / ${piece.flat || 'Unit?'}`}
                                 </div>
                               </div>
                             </label>
@@ -1654,7 +1654,7 @@ const CrateGrid = ({ pieces, crates, assignments, project, onDataChange }) => {
                       <div key={piece.id} className="rounded-2xl border border-[#e2e8f0] bg-white px-3 py-3 text-sm">
                         <div className="font-medium text-[#0f172a]">{piece.part}</div>
                         <div className="text-xs text-[#64748b]">
-                          {piece.drawing || 'No drawing'} · {piece.building || 'B?'} / {piece.floor || 'F?'} / {piece.flat || 'Unit?'}
+                          {piece.drawing || 'No drawing'} · {(project?.project_type || 'apartment') === 'house' ? (piece.building || 'B?') : `${piece.building || 'B?'} / ${piece.floor || 'F?'} / ${piece.flat || 'Unit?'}`}
                         </div>
                       </div>
                     ))}

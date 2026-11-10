@@ -2923,6 +2923,7 @@ def export_manual_crate_plan_xlsx(project_id: int, body: Dict):
                 label_text,
             ])
     _auto_width(ws2)
+    _hide_empty_columns(ws2)
 
     output = BytesIO()
     wb.save(output)
@@ -3237,7 +3238,8 @@ def _build_process_label_page(page, p: Dict[str, Any], crate_no, material: str, 
     page.insert_text((18, spec_y + 30), radius_line, fontsize=8, color=black)
     weight = pw(p, str(p.get("material") or material), thickness, str(p.get("stone_color") or stone_color))
     page.insert_text((18, spec_y + 41), f"Weight: {weight:.2f} kg", fontsize=8, color=black)
-    page.insert_text((W - 100, spec_y + 41), f"{p.get('building', '')}/{p.get('floor', '')}/{p.get('flat', '')}", fontsize=8, color=gray)
+    _dest_parts = [str(p.get(k, "") or "") for k in ("building", "floor", "flat")]
+    page.insert_text((W - 100, spec_y + 41), "/".join(v for v in _dest_parts if v), fontsize=8, color=gray)
 
 @app.post("/api/projects/{project_id}/process-labels/export")
 def export_process_labels_pdf(project_id: int, body: Dict):
