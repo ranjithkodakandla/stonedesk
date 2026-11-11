@@ -53,16 +53,18 @@ def test_a_lone_long_piece_never_shares_a_row_it_cannot_fit_in():
     assert len(rows) == 2
 
 
-def test_many_short_pieces_fill_one_row_before_starting_the_next():
+def test_many_identical_short_pieces_combine_using_the_no_standout_floor():
+    # Five identical 15" pieces, nothing else in the selection: there is no
+    # standout "longest piece" (everything ties), so deriving the cap from
+    # a single 15" piece (15+6=21") would force one piece per row — five
+    # thin, wasteful rows for pieces that obviously belong together. The
+    # 120" no-standout floor lets them combine properly instead.
     pieces = [{"id": f"short-{i}", "length": 15, "width": 25.5, "thickness": "3CM"} for i in range(5)]
     dims = horizontal_crate_dimensions(pieces, [], "3CM", wood_thickness=1.25)
     rows = group_main_pieces_into_rows(pieces, usable_length=dims["internal_length"])
-    # internal_length = 15 + 6 = 21; each additional piece needs +1 gap +15,
-    # so only one 15" piece fits per row at a time once 15 is already placed
-    # (15 + 1 + 15 = 31 > 21) — same number of rows as pieces in this case,
-    # which is correct: the crate is sized to its own longest piece (15"),
-    # leaving no spare room to pair two of them.
-    assert len(rows) == 5
+    # 5*15 + 4*1 = 79 <= 120 — all five fit in a single row.
+    assert len(rows) == 1
+    assert len(rows[0]) == 5
 
 
 def test_internal_width_reflects_row_count_not_raw_piece_count():
@@ -135,4 +137,46 @@ def test_dissimilar_leftover_pieces_never_merge_with_each_other():
     dims = horizontal_crate_dimensions(pieces, [], "3CM", wood_thickness=1.25)
     rows = group_main_pieces_into_rows(pieces, usable_length=dims["internal_length"])
     assert len(rows) == 2
+    assert all(len(row) == 1 for row in rows)
+
+
+def test_no_standout_floor_does_not_apply_when_a_distinct_longer_piece_exists():
+    # Mixed lengths (67 + three 25s) ALWAYS has a standout (67 is clearly
+    # longer than the 25s) — the 120" floor must never kick in here, or it
+    # would change the already-verified 67-alone / 25x3-combined result.
+    pieces = [
+        {"id": "big", "length": 67, "width": 25.5, "thickness": "3CM"},
+        {"id": "a", "length": 25, "width": 25.5, "thickness": "3CM"},
+        {"id": "b", "length": 25, "width": 25.5, "thickness": "3CM"},
+        {"id": "c", "length": 25, "width": 25.5, "thickness": "3CM"},
+    ]
+    dims = horizontal_crate_dimensions(pieces, [], "3CM", wood_thickness=1.25)
+    rows = group_main_pieces_into_rows(pieces, usable_length=dims["internal_length"])
+    assert len(rows) == 2
+    by_len = sorted(rows, key=len)
+    assert len(by_len[0]) == 1 and by_len[0][0]["id"] == "big"
+    assert len(by_len[1]) == 3
+    assert dims["internal_length"] == 83.0  # unchanged from the dedicated consolidation test
+
+
+def test_no_standout_floor_does_not_apply_to_the_reference_18_piece_drawing():
+    # The reference drawing has three distinct lengths (79, 49, 19) — even
+    # though six pieces tie for the max (79), that is not a "no standout"
+    # case (49/19 are clearly shorter), so the 120" floor must not apply —
+    # the six 79" pieces must stay six separate rows, exactly as before.
+    pieces = _reference_18_pieces()
+    dims = horizontal_crate_dimensions(pieces, [], "3CM", wood_thickness=1.25)
+    rows = group_main_pieces_into_rows(pieces, usable_length=dims["internal_length"])
+    assert len(rows) == 12
+    assert dims["internal_length"] == 85.0
+
+
+def test_no_standout_floor_still_respects_a_single_piece_longer_than_120():
+    # If the one shared length itself already exceeds 120", the floor must
+    # never shrink the cap below what a single piece needs.
+    pieces = [{"id": f"p{i}", "length": 150, "width": 25.5, "thickness": "3CM"} for i in range(3)]
+    dims = horizontal_crate_dimensions(pieces, [], "3CM", wood_thickness=1.25)
+    rows = group_main_pieces_into_rows(pieces, usable_length=dims["internal_length"])
+    # 150+1+150 = 301, far beyond even a 156" cap (150+6) — still one piece per row.
+    assert len(rows) == 3
     assert all(len(row) == 1 for row in rows)

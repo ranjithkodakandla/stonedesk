@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { groupPiecesIntoRows, rowRawLength } from './rowPacking';
+import { groupPiecesIntoRows, rowRawLength, rowGroupingCap } from './rowPacking';
 
 const referenceRows18 = () => {
   const pieces = [];
@@ -60,5 +60,39 @@ describe('groupPiecesIntoRows (mirrors backend group_main_pieces_into_rows)', ()
 
   it('returns an empty array for no pieces', () => {
     expect(groupPiecesIntoRows([], 100)).toEqual([]);
+  });
+
+  it('many identical pieces combine properly using the no-standout floor', () => {
+    const pieces = Array.from({ length: 5 }, (_, i) => ({ id: `s${i}`, length: 15 }));
+    const cap = rowGroupingCap(pieces, 6); // same clearance convention as backend's +6
+    const rows = groupPiecesIntoRows(pieces, cap);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveLength(5);
+  });
+});
+
+describe('rowGroupingCap (120" floor only when there is truly no standout piece)', () => {
+  it('uses the normal longest-piece-plus-clearance cap when a standout exists', () => {
+    const pieces = [{ length: 67 }, { length: 25 }, { length: 25 }, { length: 25 }];
+    expect(rowGroupingCap(pieces, 6)).toBe(73);
+  });
+
+  it('does not treat a tied max (six 79s alongside shorter pieces) as "no standout"', () => {
+    const pieces = referenceRows18();
+    expect(rowGroupingCap(pieces, 6)).toBe(85); // 79 + 6, not the 120 floor
+  });
+
+  it('applies the 120" floor only when every piece shares one exact length', () => {
+    const pieces = Array.from({ length: 5 }, () => ({ length: 15 }));
+    expect(rowGroupingCap(pieces, 6)).toBe(120);
+  });
+
+  it('never shrinks the cap below what a single piece needs, even when homogeneous', () => {
+    const pieces = Array.from({ length: 3 }, () => ({ length: 150 }));
+    expect(rowGroupingCap(pieces, 6)).toBe(156); // 150 + 6, bigger than the 120 floor
+  });
+
+  it('returns 0 for an empty selection', () => {
+    expect(rowGroupingCap([], 6)).toBe(0);
   });
 });

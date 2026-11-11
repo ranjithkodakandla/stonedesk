@@ -51,4 +51,17 @@ describe('computeCrateDimensions (the actual "Filter parts and build crates" scr
     const expectedLength = 79 + DEFAULT_DIM_CONFIG.kv.lengthMargin * 2;
     expect(dims.internal_length).toBeCloseTo(expectedLength, 1); // not 6*79+gaps
   });
+
+  it('combines many identical pieces sensibly (no standout piece) instead of one row each', () => {
+    // No distinct longer piece anywhere in the selection — deriving the
+    // row cap from a single 15" piece would force one piece per row for
+    // all 5, which isn't "smart stacking." The 120" no-standout floor
+    // should let them combine into far fewer rows.
+    const parts = Array.from({ length: 5 }, (_, i) => rangeTop(`p${i}`, 15));
+    const dims = computeCrateDimensions(parts, DEFAULT_DIM_CONFIG);
+    const perRowThickness = 1.18;
+    const rowSeparator = 0.75;
+    const oneRowPerPieceWidth = 5 * perRowThickness + 4 * rowSeparator + DEFAULT_DIM_CONFIG.kv.widthMargin * 2;
+    expect(dims.internal_width).toBeLessThan(oneRowPerPieceWidth);
+  });
 });

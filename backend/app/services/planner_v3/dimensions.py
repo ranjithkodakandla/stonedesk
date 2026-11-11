@@ -12,6 +12,7 @@ _HEADROOM = 4.0             # matches _HEADROOM below (shared upright-model cons
 _ROW_SEPARATOR_IN = 0.75    # foam between main-top "rows" stacked along width
 _SIDE_FRAME = 4.0           # framing on the width/row-stack axis
 _ROW_PIECE_GAP_IN = 1.0     # clearance between two pieces sharing one row, laid end to end
+_NO_STANDOUT_ROW_CAP_IN = 120.0  # see _row_grouping_cap()
 
 
 def _max_piece_length(pieces: List[Dict[str, Any]]) -> float:
@@ -74,6 +75,31 @@ def _consolidate_same_length_leftovers(rows: List[List[Dict[str, Any]]]) -> List
                 changed = True
                 break
     return rows
+
+
+def _row_grouping_cap(pieces: List[Dict[str, Any]]) -> float:
+    """The Phase-A row-grouping cap: normally the longest single piece's
+    length + clearance — that piece is the crate's natural "standout" size,
+    and anything shorter tries to fit within it (e.g. a 67" piece plus
+    three 25"s: the 67" sets the cap, the 25"s combine within it).
+
+    But when EVERY selected piece is the exact same length, there is no
+    standout at all — every piece ties for "the max" — and deriving the cap
+    from that single shared length is uselessly tight: a batch of many
+    identical 25" pieces would get a ~31" cap (barely 1 piece), forcing one
+    piece per row instead of combining several efficiently. In that
+    specific case (and ONLY that case — any batch with more than one
+    distinct length keeps the normal cap, so e.g. six identical 79" pieces
+    alongside 49"/19" pairs are unaffected), use a 120" floor instead, so
+    same-length duplicates can still combine several at a time rather than
+    each claiming its own row."""
+    if not pieces:
+        return 0.0
+    normal_cap = _max_piece_length(pieces) + 6.0
+    distinct_lengths = {round(parse_float(p.get("length")), 3) for p in pieces}
+    if len(distinct_lengths) <= 1:
+        return max(normal_cap, _NO_STANDOUT_ROW_CAP_IN)
+    return normal_cap
 
 
 def group_main_pieces_into_rows(
@@ -146,7 +172,7 @@ def horizontal_crate_dimensions(
     # leftover same-length singletons into an existing row past that cap —
     # so the crate's actual internal_length must be derived from whatever
     # the longest row ends up being, not frozen at the pre-grouping cap.
-    phase_a_cap = _max_piece_length(all_p) + 6.0
+    phase_a_cap = _row_grouping_cap(main_pieces) if main_pieces else _max_piece_length(all_p) + 6.0
     rows_for_length = group_main_pieces_into_rows(main_pieces, usable_length=phase_a_cap) if main_pieces else []
     longest_row_raw = max((_row_raw_length(row) for row in rows_for_length), default=0.0)
     internal_length = max(_max_piece_length(all_p), longest_row_raw) + 6.0

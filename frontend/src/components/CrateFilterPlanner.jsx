@@ -3,7 +3,7 @@ import axios from 'axios';
 import { API_BASE } from '../utils/plannerUtils';
 import { weightBatchParts } from '../utils/crateEstimator';
 import { thicknessInchesFromLabel } from '../utils/thicknessConstants';
-import { groupPiecesIntoRows, rowRawLength, ROW_SEPARATOR_IN } from '../utils/rowPacking';
+import { groupPiecesIntoRows, rowRawLength, rowGroupingCap, ROW_SEPARATOR_IN } from '../utils/rowPacking';
 import MultiSelectDropdown from './MultiSelectDropdown';
 import TargetWeightControl from './TargetWeightControl';
 
@@ -194,7 +194,7 @@ export function computeCrateDimensions(parts, dimConfig) {
   const rowSource = mainTops.length ? mainTops : parts;
 
   const maxSingleLong = Math.max(...parts.map((p) => Math.max(p.length || 0, p.width || 0)));
-  const phaseACap = maxSingleLong + cfg.lengthMargin * 2;
+  const phaseACap = rowSource.length ? rowGroupingCap(rowSource, cfg.lengthMargin * 2) : 0;
   const rows = rowSource.length ? groupPiecesIntoRows(rowSource, phaseACap) : [];
   const longestRowRaw = rows.length ? Math.max(...rows.map((r) => rowRawLength(r))) : 0;
 

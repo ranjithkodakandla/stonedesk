@@ -9,6 +9,27 @@ export const ROW_SEPARATOR_IN = 0.75;  // foam between rows stacked along the cr
 const pieceLength = (p) => Number(p.length) || 0;
 const roundLen = (n) => Math.round(n * 1000) / 1000;
 
+// Mirrors backend _row_grouping_cap(): normally the longest single piece's
+// length + clearance (the crate's natural "standout" size). But when every
+// piece in the selection is the exact same length, there is no standout at
+// all, and deriving the cap from that one shared length is uselessly tight
+// (e.g. five identical 15" pieces would get a ~21" cap, forcing one piece
+// per row). In that specific case only, use a 120" floor instead so
+// identical pieces can still combine several at a time. Any selection with
+// more than one distinct length keeps the normal cap — six identical 79"
+// pieces alongside 49"/19" pairs are unaffected, since 49/19 are clearly
+// shorter and the 79s never needed combining with anything in the first
+// place.
+export const NO_STANDOUT_ROW_CAP_IN = 120;
+
+export const rowGroupingCap = (pieces, clearanceIn) => {
+  if (!pieces || !pieces.length) return 0;
+  const normalCap = Math.max(...pieces.map(pieceLength)) + clearanceIn;
+  const distinctLengths = new Set(pieces.map((p) => roundLen(pieceLength(p))));
+  if (distinctLengths.size <= 1) return Math.max(normalCap, NO_STANDOUT_ROW_CAP_IN);
+  return normalCap;
+};
+
 export const rowRawLength = (row) => {
   const total = row.reduce((s, p) => s + pieceLength(p), 0);
   return total + Math.max(0, row.length - 1) * ROW_PIECE_GAP_IN;
