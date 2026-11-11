@@ -93,12 +93,14 @@ const DEFAULT_EDGE_MAP     = { top: 'none', bottom: 'none', left: 'none', right:
 const DEFAULT_RADIUS_CORNERS = { top_left: false, top_right: false, bottom_left: false, bottom_right: false };
 const DEFAULT_RADIUS_CORNER_VALUES = {};
 const DEFAULT_RADIUS_CORNER_EXPLICIT = { top_left: false, top_right: false, bottom_left: false, bottom_right: false };
+const DEFAULT_GROOVE_EDGE_MAP = { top: '', bottom: '', left: '', right: '' };
 
 const EMPTY_ROW = {
   part_no: '', part: '', length: '', width: '', thickness: '3CM', qty: 1,
   sink_type: 'No Sink', sink_cut: '-', sink_numbers: null,
   tap_holes: '-', tap_hole_diameter: '', tap_hole_positions: null,
   grooves: '-', groove_dimension: '', groove_positions: null,
+  groove_edge_map: null,    // will be set in newRow()
   edge: 'None', edge_area: '',
   edge_map: null,           // will be set in newRow()
   edge_polish_manual: '',
@@ -120,6 +122,7 @@ export const newRow = (defaultThickness = '3CM') => ({
   sink_numbers: [],
   tap_hole_positions: [],
   groove_positions: [],
+  groove_edge_map: { ...DEFAULT_GROOVE_EDGE_MAP },
   edge_map: { ...DEFAULT_EDGE_MAP },
   radius_corners: { ...DEFAULT_RADIUS_CORNERS },
   radius_corner_values: { ...DEFAULT_RADIUS_CORNER_VALUES },
@@ -202,6 +205,7 @@ export const dupeRow = (row) => ({
   sink_numbers: Array.isArray(row.sink_numbers) ? [...row.sink_numbers] : [],
   tap_hole_positions: Array.isArray(row.tap_hole_positions) ? row.tap_hole_positions.map(p => ({ ...p })) : [],
   groove_positions: Array.isArray(row.groove_positions) ? row.groove_positions.map(p => ({ ...p })) : [],
+  groove_edge_map: row.groove_edge_map ? { ...row.groove_edge_map } : { ...DEFAULT_GROOVE_EDGE_MAP },
   dest_qty_overrides: { ...(row.dest_qty_overrides || {}) },
   _id: rowIdCounter++,
 });

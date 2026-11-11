@@ -134,48 +134,26 @@ import contextvars
 # to one project, so that project can override the shared/global color density
 # without touching any other project. None = fall back to the global color table.
 #
-# Pieces can now carry their own material/stone_color (drawing-level "use project
-# material/color" checkbox unchecked) that differs from the project's own default.
-# The override only makes sense for the project's own material+color — a piece
-# using a drawing-specific color has nothing to do with this project's override,
-# so it must fall through to the normal global/custom lookup for its own color.
-# _project_default_mat_color holds the project's own (material, color) tuple so
-# get_color_density can tell which case it's in.
-_project_density_override: "contextvars.ContextVar[Optional[float]]" = contextvars.ContextVar(
-    "_project_density_override", default=None,
-)
-_project_default_mat_color: "contextvars.ContextVar[Optional[Tuple[str, str]]]" = contextvars.ContextVar(
-    "_project_default_mat_color", default=None,
-)
+# (The per-project density override that used to live here was removed per
+# factory feedback — teams use the per-thickness weight multiplier below
+# instead.)
 
 
-def set_project_density_override(density_kg_m3: Optional[float], material: str = "", color: str = ""):
-    """Returns a (token, token) pair; pass to reset_project_density_override() when done."""
-    return (
-        _project_density_override.set(density_kg_m3),
-        _project_default_mat_color.set((material, color) if density_kg_m3 is not None else None),
-    )
-
-
-def reset_project_density_override(tokens) -> None:
-    override_token, mat_color_token = tokens
-    _project_density_override.reset(override_token)
-    _project_default_mat_color.reset(mat_color_token)
-
-
-# Per-project weight MULTIPLYING FACTOR (kg per sqft) — an alternative to
-# density-based weight for teams that manually estimate weight as
-# sqft × flat factor (e.g. 7.75) regardless of color/thickness. Takes
-# precedence over density and the generic material/thickness table outright
-# — unlike the density override, it isn't scoped to matching material/color,
-# since it's meant to replace the whole density calc for the project.
-_project_weight_multiplier: "contextvars.ContextVar[Optional[float]]" = contextvars.ContextVar(
+# Per-project weight MULTIPLYING FACTOR, per thickness (kg per sqft) — an
+# alternative to density-based weight for teams that manually estimate
+# weight as sqft x a flat factor per thickness (e.g. 2CM -> 5.5, 3CM -> 7.75)
+# rather than by color/density. Keyed by thickness label ("2CM"/"3CM"); a
+# thickness with no factor set falls through to density-based weight, same
+# as the field being unset entirely. Takes precedence over density and the
+# generic material/thickness table outright for whichever thickness it's
+# set for.
+_project_weight_multiplier: "contextvars.ContextVar[Optional[Dict[str, float]]]" = contextvars.ContextVar(
     "_project_weight_multiplier", default=None,
 )
 
 
-def set_project_weight_multiplier(multiplier_kg_per_sqft: Optional[float]):
-    return _project_weight_multiplier.set(multiplier_kg_per_sqft)
+def set_project_weight_multiplier(multiplier_kg_per_sqft_by_thickness: Optional[Dict[str, float]]):
+    return _project_weight_multiplier.set(multiplier_kg_per_sqft_by_thickness or None)
 
 
 def reset_project_weight_multiplier(token) -> None:
@@ -183,9 +161,6 @@ def reset_project_weight_multiplier(token) -> None:
 
 
 def get_color_density(material: str, color: str) -> Optional[float]:
-    override = _project_density_override.get()
-    if override is not None and _project_default_mat_color.get() == (material, color):
-        return override
     if not color:
         return None
     if material in _CUSTOM_COLOR_DENSITIES and color in _CUSTOM_COLOR_DENSITIES[material]:
@@ -209,9 +184,11 @@ def get_wood_density_factor(wood_type: str) -> float:
 
 
 def weight_factor(material: str, thickness: str, color: str = "") -> float:
-    multiplier = _project_weight_multiplier.get()
-    if multiplier is not None:
-        return multiplier
+    multiplier_map = _project_weight_multiplier.get()
+    if multiplier_map:
+        multiplier = multiplier_map.get(thickness)
+        if multiplier is not None:
+            return multiplier
     density = get_color_density(material, color)
     if density is not None:
         t_m = _THICKNESS_M.get(thickness, 0.025)

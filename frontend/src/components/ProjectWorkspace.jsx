@@ -122,8 +122,7 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
   }, [
     projectId,
     pieces.length,
-    project?.density_override_kg_m3,
-    project?.weight_multiplier_kg_per_sqft,
+    project?.weight_multiplier_kg_per_sqft_by_thickness,
     project?.material,
     project?.stone_color,
     project?.thickness,
@@ -190,6 +189,7 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
         grooves: piece.grooves || '-',
         groove_dimension: piece.groove_dimension || '',
         groove_positions: piece.groove_positions || [],
+        groove_edge_map: piece.groove_edge_map || {},
         edge: piece.edge || 'None',
         edge_area: piece.edge_area || '',
         edge_map: piece.edge_map || {},
