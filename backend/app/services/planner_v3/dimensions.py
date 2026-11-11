@@ -27,6 +27,12 @@ _KV_WIDTH_CLEARANCE_IN = 1.0
 _KV_HEIGHT_CLEARANCE_IN = 2.0
 _KV_HEADROOM_PER_SPLASH_LAYER_IN = 1.0
 
+# Crate internal width must stay within the fabricator's standard crate stock —
+# too narrow and the walls can't be framed, too wide and it stops fitting the
+# container's row budget (reference calc: 92" container / 3 rows - framing = 26").
+CRATE_INTERNAL_WIDTH_MIN_IN = 10.0
+CRATE_INTERNAL_WIDTH_MAX_IN = 26.0
+
 
 def _max_piece_length(pieces: List[Dict[str, Any]]) -> float:
     if not pieces:
@@ -155,6 +161,30 @@ def group_main_pieces_into_rows(
     return _consolidate_same_length_leftovers(rows)
 
 
+def group_splash_pieces_side_by_side(
+    splash_pieces: List[Dict[str, Any]],
+    usable_length: float,
+    default_thickness: str,
+) -> List[List[Dict[str, Any]]]:
+    """Packs splash pieces of the same material thickness side by side into a
+    shared layer when their combined length fits the row-length budget,
+    instead of always splitting them into fixed-size stacked groups. Pieces
+    never share a layer with a different thickness — mixing thicknesses in
+    one layer would leave the thinner piece unsupported, so each thickness
+    only stacks a new layer when its own pieces stop fitting side by side."""
+    if not splash_pieces:
+        return []
+    by_thickness: Dict[float, List[Dict[str, Any]]] = {}
+    for p in splash_pieces:
+        t = round(thickness_inches(str(p.get("thickness") or default_thickness)), 3)
+        by_thickness.setdefault(t, []).append(p)
+
+    layers: List[List[Dict[str, Any]]] = []
+    for t in sorted(by_thickness):
+        layers.extend(group_main_pieces_into_rows(by_thickness[t], usable_length))
+    return layers
+
+
 def horizontal_crate_dimensions(
     main_pieces: List[Dict[str, Any]],
     splash_layers: List[List[Dict[str, Any]]],
@@ -220,6 +250,8 @@ def horizontal_crate_dimensions(
         internal_width = sum(row_thicknesses) + _KV_WIDTH_CLEARANCE_IN
     else:
         internal_width = thickness_inches(default_thickness) + _KV_WIDTH_CLEARANCE_IN
+
+    internal_width = max(CRATE_INTERNAL_WIDTH_MIN_IN, min(internal_width, CRATE_INTERNAL_WIDTH_MAX_IN))
 
     return {
         "internal_length": round(internal_length, 1),

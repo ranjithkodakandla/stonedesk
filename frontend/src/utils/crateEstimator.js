@@ -405,6 +405,11 @@ const HORIZ_LENGTH_CLEAR  = 6.0;   // internal end clearance (3" each end)
 const HORIZ_WIDTH_PAD     = 6.0;   // internal side clearance (3" each side)
 const HORIZ_LAYER_SEP     = 1.0;   // foam separator between layers
 
+// Crate internal width bounds — mirrors CRATE_INTERNAL_WIDTH_MIN_IN /
+// CRATE_INTERNAL_WIDTH_MAX_IN in services/planner_v3/dimensions.py.
+export const CRATE_INTERNAL_WIDTH_MIN_IN = 10.0;
+export const CRATE_INTERNAL_WIDTH_MAX_IN = 26.0;
+
 function isBackSplashPiece(piece) {
   return /back.?splash/i.test(piece.part || '');
 }
@@ -475,7 +480,7 @@ export function estimateLeaningFamilyBundleDimensions(pieces, layerGapIn = HORIZ
     depth += rowStackDepth(rows) + Math.max(0, rows.length - 1) * gap;
   }
 
-  const intW = depth;
+  const intW = Math.max(CRATE_INTERNAL_WIDTH_MIN_IN, Math.min(depth, CRATE_INTERNAL_WIDTH_MAX_IN));
 
   return {
     internal_length: round2(intL),

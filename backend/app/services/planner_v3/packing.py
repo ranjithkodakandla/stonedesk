@@ -4,7 +4,12 @@ from ..planning_engine import piece_weight
 from .bundles import island_bundle_adjacency_sort_key
 from .classify import build_families, classify_piece, flat_key
 from .container_layout import CONTAINER_20FT
-from .dimensions import horizontal_crate_dimensions, island_vertical_dimensions, total_piece_weight
+from .dimensions import (
+    group_splash_pieces_side_by_side,
+    horizontal_crate_dimensions,
+    island_vertical_dimensions,
+    total_piece_weight,
+)
 from .dispatch import dispatch_group_label, sort_pieces_by_dispatch
 from .emit_gate import finalize_emit_gates, needs_merge_absorption
 from .phase_a_island import (
@@ -17,7 +22,7 @@ from .phase_bc_horizontal import (
     pack_phase_c_vanity_operational,
 )
 
-SPLASHES_PER_LAYER = 4
+_SPLASH_ROW_LENGTH_FLOOR_IN = 30.0  # fallback row budget when there are no mains to size against
 
 # Safety: horizontal B/C/D/misc — max **main-bed** slabs per crate (splashes stack above; do not count toward this split).
 _MAX_MAIN_PIECES_PER_HORIZONTAL_CRATE = 10
@@ -81,13 +86,22 @@ def _bootstrap_horizontal_planner_debug(category: str, pieces: List[Dict[str, An
     }
 
 
-def _chunk_splashes(splashes: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+def _chunk_splashes(
+    splashes: List[Dict[str, Any]],
+    mains: Optional[List[Dict[str, Any]]] = None,
+    default_thickness: str = "3CM",
+) -> List[List[Dict[str, Any]]]:
+    """Packs splashes side by side (sharing a layer) when their thickness
+    matches and they fit the row's length budget, instead of always
+    stacking them into fixed-size groups."""
     if not splashes:
         return []
-    layers: List[List[Dict[str, Any]]] = []
-    for i in range(0, len(splashes), SPLASHES_PER_LAYER):
-        layers.append(splashes[i : i + SPLASHES_PER_LAYER])
-    return layers
+    ref = mains or splashes
+    usable_length = max(
+        (float(p.get("length") or 0) for p in ref),
+        default=_SPLASH_ROW_LENGTH_FLOOR_IN,
+    ) + 6.0
+    return group_splash_pieces_side_by_side(splashes, usable_length, default_thickness)
 
 
 def _family_weight(fam: Dict[str, Any], material: str, thickness: str, color: str) -> float:
@@ -381,7 +395,7 @@ def _horizontal_units_from_families(
     for fam in cats:
         mains = list(fam["main_pieces"])
         splashes = list(fam["splash_pieces"])
-        splash_layers = _chunk_splashes(splashes)
+        splash_layers = _chunk_splashes(splashes, mains, thickness)
         wt = total_piece_weight(mains + splashes, material, thickness, color)
 
         if wt <= spec["max_kg"]:
@@ -681,7 +695,7 @@ def _merge_horizontal_crates_pair(
             splashes.append(p)
         else:
             mains.append(p)
-    splash_layers = _chunk_splashes(splashes)
+    splash_layers = _chunk_splashes(splashes, mains, thickness)
     cat = str(a.get("category") or b.get("category") or "misc")
     spec = TYPE_SPECS.get(cat, TYPE_SPECS["misc"])
     letter = str(spec["letter"])
