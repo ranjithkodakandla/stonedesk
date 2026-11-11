@@ -1,49 +1,64 @@
 import { describe, it, expect } from 'vitest';
-import { deriveCornersFromEdgeChange, effectiveCornerRadius, EDGE_TO_CORNERS } from './PartDrawer';
+import { deriveCornersFromEdgeMap, effectiveCornerRadius, EDGE_TO_CORNERS, CORNER_TO_EDGES } from './PartDrawer';
 
 const NONE = { top_left: false, top_right: false, bottom_left: false, bottom_right: false };
+const ALL_NONE_EDGES = { top: 'none', bottom: 'none', left: 'none', right: 'none' };
 const NOT_EXPLICIT = { top_left: false, top_right: false, bottom_left: false, bottom_right: false };
 
-describe('deriveCornersFromEdgeChange (edge polish -> corner radius auto-link)', () => {
-  it('selecting an edge auto-selects both of its corners at default', () => {
-    const result = deriveCornersFromEdgeChange('top', 'none', 'polished', NONE, NOT_EXPLICIT);
-    expect(result.top_left).toBe(true);
-    expect(result.top_right).toBe(true);
+describe('deriveCornersFromEdgeMap (edge polish -> corner radius auto-link)', () => {
+  it('selecting only one of a corner\'s two edges does not round it', () => {
+    const edgeMap = { ...ALL_NONE_EDGES, top: 'polished' };
+    const result = deriveCornersFromEdgeMap(edgeMap, NONE, NOT_EXPLICIT);
+    expect(result.top_left).toBe(false);
+    expect(result.top_right).toBe(false);
     expect(result.bottom_left).toBe(false);
     expect(result.bottom_right).toBe(false);
   });
 
-  it.each(Object.keys(EDGE_TO_CORNERS))('selecting the %s edge only touches its own two corners', (side) => {
-    const result = deriveCornersFromEdgeChange(side, 'none', 'polished', NONE, NOT_EXPLICIT);
-    const touched = Object.entries(result).filter(([, v]) => v).map(([k]) => k).sort();
-    expect(touched).toEqual([...EDGE_TO_CORNERS[side]].sort());
+  it('a corner rounds once both of its edges are selected (intersection, not union)', () => {
+    // Left, right, bottom polished, top not — matches the reported case:
+    // only bottom_left and bottom_right should round (each sits at the
+    // intersection of two selected edges); top_left/top_right each touch
+    // the unselected top edge, so neither should round.
+    const edgeMap = { top: 'none', bottom: 'polished', left: 'polished', right: 'polished' };
+    const result = deriveCornersFromEdgeMap(edgeMap, NONE, NOT_EXPLICIT);
+    expect(result.top_left).toBe(false);
+    expect(result.top_right).toBe(false);
+    expect(result.bottom_left).toBe(true);
+    expect(result.bottom_right).toBe(true);
   });
 
-  it('removing edge polish (back to none) never changes corner selection', () => {
-    const selected = { top_left: true, top_right: true, bottom_left: false, bottom_right: false };
-    const result = deriveCornersFromEdgeChange('top', 'polished', 'none', selected, NOT_EXPLICIT);
-    expect(result).toEqual(selected);
+  it.each(Object.keys(CORNER_TO_EDGES))('%s only rounds when both its own two edges are selected', (corner) => {
+    const [edgeA, edgeB] = CORNER_TO_EDGES[corner];
+    const bothSelected = { ...ALL_NONE_EDGES, [edgeA]: 'polished', [edgeB]: 'polished' };
+    const result = deriveCornersFromEdgeMap(bothSelected, NONE, NOT_EXPLICIT);
+    expect(result[corner]).toBe(true);
+    Object.keys(NONE).filter((c) => c !== corner).forEach((other) => {
+      expect(result[other]).toBe(false);
+    });
   });
 
-  it('switching between two non-none edge finishes does not re-trigger auto-selection', () => {
-    const selected = { top_left: false, top_right: false, bottom_left: false, bottom_right: false };
-    // Already polished -> changing to flat_chamfer is not "turning on" from off.
-    const result = deriveCornersFromEdgeChange('top', 'polished', 'flat_chamfer', selected, NOT_EXPLICIT);
-    expect(result).toEqual(selected);
+  it('turning an edge back off un-rounds a corner no longer at an intersection', () => {
+    const selected = { top_left: false, top_right: false, bottom_left: true, bottom_right: true };
+    const edgeMapAfterTurningLeftOff = { top: 'none', bottom: 'polished', left: 'none', right: 'polished' };
+    const result = deriveCornersFromEdgeMap(edgeMapAfterTurningLeftOff, selected, NOT_EXPLICIT);
+    expect(result.bottom_left).toBe(false); // left no longer selected, so its intersection with bottom is gone
+    expect(result.bottom_right).toBe(true); // bottom + right still both selected
   });
 
   it('never overrides a corner the user already explicitly configured', () => {
     const selected = { top_left: false, top_right: false, bottom_left: false, bottom_right: false };
     const explicit = { top_left: true, top_right: false, bottom_left: false, bottom_right: false };
-    const result = deriveCornersFromEdgeChange('top', 'none', 'polished', selected, explicit);
-    expect(result.top_left).toBe(false); // explicit corner left alone
-    expect(result.top_right).toBe(true);  // non-explicit corner still auto-selected
+    const edgeMap = { ...ALL_NONE_EDGES, top: 'polished', left: 'polished' };
+    const result = deriveCornersFromEdgeMap(edgeMap, selected, explicit);
+    expect(result.top_left).toBe(false); // explicit corner left alone, even though top+left are now both selected
+    expect(result.top_right).toBe(false); // top alone isn't enough (needs right too)
   });
 
-  it('changing one edge does not affect a corner only reachable via another edge', () => {
-    const selected = { top_left: false, top_right: false, bottom_left: true, bottom_right: false };
-    const result = deriveCornersFromEdgeChange('top', 'none', 'polished', selected, NOT_EXPLICIT);
-    expect(result.bottom_left).toBe(true); // untouched, preserved exactly
+  it.each(Object.keys(EDGE_TO_CORNERS))('EDGE_TO_CORNERS and CORNER_TO_EDGES agree for %s', (side) => {
+    EDGE_TO_CORNERS[side].forEach((corner) => {
+      expect(CORNER_TO_EDGES[corner]).toContain(side);
+    });
   });
 });
 
