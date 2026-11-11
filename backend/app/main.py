@@ -395,7 +395,6 @@ def piece_response(doc: Dict[str, Any]) -> Dict[str, Any]:
         "grooves": doc.get("grooves", "-"),
         "groove_dimension": doc.get("groove_dimension"),
         "groove_positions": doc.get("groove_positions", []),
-        "groove_edge_map": doc.get("groove_edge_map", {}),
         "sink_offset_left": doc.get("sink_offset_left"),
         "sink_offset_right": doc.get("sink_offset_right"),
         "sink_length": doc.get("sink_length"),
@@ -769,13 +768,6 @@ class PieceCreate(BaseModel):
     grooves: str = "-"
     groove_dimension: Optional[float] = None
     groove_positions: List[Dict[str, Any]] = []
-    # Groove, per sink edge, as a distance from that sink edge (inches) —
-    # keys top/bottom/left/right, empty/absent = no groove on that side.
-    # Replaces the old numbered groove_positions (offset from sink center)
-    # as the primary way grooves are captured; groove_positions/
-    # groove_dimension/grooves are kept for backward compatibility with
-    # existing saved data, not removed.
-    groove_edge_map: Dict[str, str] = {}
     sink_offset_left: Optional[float] = None
     sink_offset_right: Optional[float] = None
     sink_length: Optional[float] = None
@@ -836,13 +828,6 @@ class PieceUpdate(BaseModel):
     grooves: str = "-"
     groove_dimension: Optional[float] = None
     groove_positions: List[Dict[str, Any]] = []
-    # Groove, per sink edge, as a distance from that sink edge (inches) —
-    # keys top/bottom/left/right, empty/absent = no groove on that side.
-    # Replaces the old numbered groove_positions (offset from sink center)
-    # as the primary way grooves are captured; groove_positions/
-    # groove_dimension/grooves are kept for backward compatibility with
-    # existing saved data, not removed.
-    groove_edge_map: Dict[str, str] = {}
     sink_offset_left: Optional[float] = None
     sink_offset_right: Optional[float] = None
     sink_length: Optional[float] = None
@@ -1310,7 +1295,6 @@ def _build_piece_doc(project_id: int, piece: PieceCreate, piece_id: int, extra: 
         "grooves": piece.grooves,
         "groove_dimension": piece.groove_dimension,
         "groove_positions": piece.groove_positions,
-        "groove_edge_map": piece.groove_edge_map,
         "sink_offset_left": piece.sink_offset_left,
         "sink_offset_right": piece.sink_offset_right,
         "sink_length": piece.sink_length,
@@ -1743,8 +1727,7 @@ def create_pieces_batch(project_id: int, pieces_data: List[PieceCreate]):
                 "grooves": piece.grooves,
                 "groove_dimension": piece.groove_dimension,
                 "groove_positions": piece.groove_positions,
-                "groove_edge_map": piece.groove_edge_map,
-                "sink_offset_left": piece.sink_offset_left,
+                        "sink_offset_left": piece.sink_offset_left,
                 "sink_offset_right": piece.sink_offset_right,
                 "sink_length": piece.sink_length,
                 "sink_width": piece.sink_width,
@@ -1820,7 +1803,6 @@ def get_project_drawings(project_id: int):
                     "grooves": p.get("grooves") or "-",
                     "groove_dimension": p.get("groove_dimension"),
                     "groove_positions": p.get("groove_positions") or [],
-                    "groove_edge_map": p.get("groove_edge_map") or {},
                     "edge": p.get("edge") or "None",
                     "edge_area": p.get("edge_area") or "",
                     "edge_map": p.get("edge_map") or {},
@@ -1925,7 +1907,6 @@ def update_piece(piece_id: int, piece: PieceUpdate):
         "grooves": piece.grooves,
         "groove_dimension": piece.groove_dimension,
         "groove_positions": piece.groove_positions,
-        "groove_edge_map": piece.groove_edge_map,
         "sink_offset_left": piece.sink_offset_left,
         "sink_offset_right": piece.sink_offset_right,
         "sink_length": piece.sink_length,
