@@ -17,6 +17,18 @@ function App() {
       );
    }
 
+   const crate3dDemo =
+      window.location.hash === '#crate-3d-demo'
+      && (import.meta.env.DEV || new URLSearchParams(window.location.search).has('crateDemo'));
+   if (crate3dDemo) {
+      const Crate3DDevPage = React.lazy(() => import('./dev/Crate3DDevPage'));
+      return (
+         <React.Suspense fallback={<div className="p-8 text-sm text-slate-600">Loading crate 3D demo…</div>}>
+            <Crate3DDevPage />
+         </React.Suspense>
+      );
+   }
+
    const packingScheduleDemo =
       window.location.hash === '#packing-schedule-demo'
       && (import.meta.env.DEV || new URLSearchParams(window.location.search).has('crateDemo'));
