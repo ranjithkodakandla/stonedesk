@@ -64,20 +64,22 @@ describe('deriveCornersFromEdgeMap (edge polish -> corner radius auto-link)', ()
 
 describe('effectiveCornerRadius (per-corner independent values, no shared global override)', () => {
   it('uses the explicit per-corner override when present', () => {
-    expect(effectiveCornerRadius('top_left', { top_left: 0.25 }, '', 0.125)).toBe(0.25);
+    expect(effectiveCornerRadius('top_left', { top_left: 0.25 }, 0.125)).toBe(0.25);
   });
 
-  it('falls back to the legacy shared radius_value when no per-corner override exists', () => {
-    expect(effectiveCornerRadius('top_left', {}, '0.5', 0.125)).toBe(0.5);
+  it('falls back to the configured app default when no per-corner override exists', () => {
+    expect(effectiveCornerRadius('top_left', {}, 0.125)).toBe(0.125);
   });
 
-  it('falls back to the configured app default when neither is set', () => {
-    expect(effectiveCornerRadius('top_left', {}, '', 0.125)).toBe(0.125);
+  it('a piece\'s old flat radius_value no longer overrides the app default', () => {
+    // Pre-per-corner-system data (radius_value) must not silently override
+    // the app-wide default for a corner nobody has explicitly set here.
+    expect(effectiveCornerRadius('top_left', {}, 0.125)).toBe(0.125);
   });
 
   it('one corner override does not affect another corner\'s effective radius', () => {
     const overrides = { top_left: 0.5 };
-    expect(effectiveCornerRadius('top_left', overrides, '', 0.125)).toBe(0.5);
-    expect(effectiveCornerRadius('top_right', overrides, '', 0.125)).toBe(0.125);
+    expect(effectiveCornerRadius('top_left', overrides, 0.125)).toBe(0.5);
+    expect(effectiveCornerRadius('top_right', overrides, 0.125)).toBe(0.125);
   });
 });

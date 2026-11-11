@@ -77,14 +77,14 @@ export const deriveCornersFromEdgeMap = (edgeMap, radiusCorners, radiusCornerExp
 };
 
 // Effective radius shown/used for a corner: an explicit per-corner override
-// wins; otherwise the piece's legacy shared radius_value (old data); otherwise
-// the configured app default. Never one global radius silently applied over
-// an explicit override.
-export const effectiveCornerRadius = (corner, radiusCornerValues, legacyRadiusValue, defaultRadiusIn) => {
+// wins; otherwise the configured app default — always, regardless of what
+// a piece's old flat `radius_value` field (pre-per-corner-system data) holds.
+// That field no longer feeds this: a corner that hasn't been explicitly
+// overridden here always shows the app default, which a user can change
+// either per corner (right here) or app-wide (Configuration).
+export const effectiveCornerRadius = (corner, radiusCornerValues, defaultRadiusIn) => {
   const override = Number(radiusCornerValues?.[corner]);
   if (Number.isFinite(override) && override > 0) return override;
-  const legacy = Number(legacyRadiusValue);
-  if (Number.isFinite(legacy) && legacy > 0) return legacy;
   return defaultRadiusIn ?? FALLBACK_DEFAULT_CORNER_RADIUS_IN;
 };
 
@@ -335,7 +335,7 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo, defaultCor
     corner,
     checked: rc[corner] || false,
     radiusValue: local.radius_corner_values?.[corner] ?? '',
-    placeholderRadius: effectiveCornerRadius(corner, local.radius_corner_values, local.radius_value, defaultRadius).toFixed(3),
+    placeholderRadius: effectiveCornerRadius(corner, local.radius_corner_values, defaultRadius).toFixed(3),
     onToggle: setCorner,
     onRadiusChange: setCornerRadius,
   });
