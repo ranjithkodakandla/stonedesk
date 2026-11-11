@@ -10,6 +10,7 @@ import KitchenOperationalReview from './KitchenOperationalReview';
 // when this screen actually renders a 3D preview, not on every page view.
 const Container3DPreview = React.lazy(() => import('./planner3d/Container3DPreview'));
 import CrateOperationalDiagram2D from './planner2d/CrateOperationalDiagram2D';
+import CratePackingSchedule from './CratePackingSchedule';
 import ContainerTopDown2D from './planner2d/ContainerTopDown2D';
 import PlannerManualMovePanel from './PlannerManualMovePanel';
 import UnderloadedCrateAssistant from './UnderloadedCrateAssistant';
@@ -531,6 +532,15 @@ const PlannerV3Screen = ({
                   </tbody>
                 </table>
               </div>
+              {selectedCrate && (
+                <div className="mt-8">
+                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[#64748b] mb-2">Packing schedule</div>
+                  <CratePackingSchedule
+                    projectId={projectId} crateId={selectedCrate.id} crateLabel={selectedCrate.crate_id}
+                    material={project?.material} stoneColor={project?.stone_color}
+                  />
+                </div>
+              )}
               {selectedCrate && (
                 <div className="mt-6 grid gap-4 lg:grid-cols-2">
                   <div>

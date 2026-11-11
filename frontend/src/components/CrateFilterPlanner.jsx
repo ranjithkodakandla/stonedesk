@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import axios from 'axios';
 import { API_BASE } from '../utils/plannerUtils';
 import { weightBatchParts } from '../utils/crateEstimator';
+import { thicknessInchesFromLabel } from '../utils/thicknessConstants';
+import { groupPiecesIntoRows, rowRawLength, rowGroupingCap, ROW_SEPARATOR_IN } from '../utils/rowPacking';
 import MultiSelectDropdown from './MultiSelectDropdown';
 import TargetWeightControl from './TargetWeightControl';
 
@@ -116,16 +118,12 @@ const DEFAULT_CLASS_DIM_CONFIG = {
   extHeight: 7,
 };
 
-const DEFAULT_DIM_CONFIG = {
+export const DEFAULT_DIM_CONFIG = {
   kv: { ...DEFAULT_CLASS_DIM_CONFIG },
   island: { ...DEFAULT_CLASS_DIM_CONFIG, extHeight: 9 },
 };
 
-const THICKNESS_INCH = { '2CM': 0.79, '3CM': 1.18, '4CM': 1.57 };
-function thicknessInches(t) {
-  const key = String(t || '').trim().toUpperCase().replace(' ', '');
-  return THICKNESS_INCH[key] ?? 1.18;
-}
+const thicknessInches = thicknessInchesFromLabel;
 
 // Mirrors estimateHorizontalLayeredDimensions() in crateEstimator.js — the
 // established packing model: bigger parts (tops) form one layer, back
@@ -141,7 +139,7 @@ function isSideSplashPart(p) {
   return /side.?splash/i.test(p.part || '');
 }
 
-function computeCrateDimensions(parts, dimConfig) {
+export function computeCrateDimensions(parts, dimConfig) {
   if (!parts.length) {
     return { internal_length: 0, internal_width: 0, internal_height: 0, external_length: 0, external_width: 0, external_height: 0 };
   }
@@ -180,26 +178,47 @@ function computeCrateDimensions(parts, dimConfig) {
     };
   }
 
-  // Kitchen/Vanity — flat-lay: length/width from footprint, height from
-  // layered same-role groups (mirrors estimateHorizontalLayeredDimensions()).
-  const rawLength = Math.max(...parts.map((p) => p.length || 0));
-  const rawWidth = Math.max(...parts.map((p) => p.width || 0));
-
+  // Kitchen/Vanity/Perimeter/Range — pieces stand upright on their short
+  // edge (the "standing height"), leaning side by side; thickness stacks
+  // into the crate's WIDTH axis via "rows" (a thickness-slot that can hold
+  // more than one piece end to end — see rowPacking.js, which mirrors
+  // backend group_main_pieces_into_rows()/horizontal_crate_dimensions()
+  // exactly). This replaced a flat-stack model that took Math.max() of
+  // thicknesses (as if only one piece's worth of material existed
+  // regardless of how many were actually selected) and used a piece's own
+  // face-width as the crate's width — the literal "generic bounding box,
+  // oblivious to piece count" problem.
   const backSplash = parts.filter(isBackSplashPart);
   const sideSplash = parts.filter(isSideSplashPart);
   const mainTops = parts.filter((p) => !isBackSplashPart(p) && !isSideSplashPart(p));
+  const rowSource = mainTops.length ? mainTops : parts;
 
-  const mainH = mainTops.length ? Math.max(...mainTops.map((p) => thicknessInches(p.thickness))) : 0;
+  const maxSingleLong = Math.max(...parts.map((p) => Math.max(p.length || 0, p.width || 0)));
+  const phaseACap = rowSource.length ? rowGroupingCap(rowSource, cfg.lengthMargin * 2) : 0;
+  const rows = rowSource.length ? groupPiecesIntoRows(rowSource, phaseACap) : [];
+  const longestRowRaw = rows.length ? Math.max(...rows.map((r) => rowRawLength(r))) : 0;
+
+  const heightRef = mainTops.length ? mainTops : parts;
+  const standingHeight = heightRef.length
+    ? Math.max(...heightRef.map((p) => {
+        const L = p.length || 0;
+        const W = p.width || 0;
+        return L > 0 && W > 0 ? Math.min(L, W) : Math.max(L, W);
+      }))
+    : 0;
   const backH = backSplash.length ? Math.max(...backSplash.map((p) => thicknessInches(p.thickness))) : 0;
   const sideH = sideSplash.length ? Math.max(...sideSplash.map((p) => thicknessInches(p.thickness))) : 0;
 
-  let stackedHeight = 0;
-  if (mainH > 0) stackedHeight += mainH;
+  let stackedHeight = standingHeight;
   if (backH > 0) stackedHeight += LAYER_SEPARATOR_IN + backH;
   if (sideH > 0) stackedHeight += LAYER_SEPARATOR_IN + sideH;
 
-  const internal_length = rawLength + cfg.lengthMargin * 2;
-  const internal_width = rawWidth + cfg.widthMargin * 2;
+  const rowThicknessSum = rows.reduce((s, row) => s + Math.max(...row.map((p) => thicknessInches(p.thickness))), 0);
+
+  const internal_length = Math.max(maxSingleLong, longestRowRaw) + cfg.lengthMargin * 2;
+  const internal_width = rows.length
+    ? rowThicknessSum + Math.max(0, rows.length - 1) * ROW_SEPARATOR_IN + cfg.widthMargin * 2
+    : cfg.widthMargin * 2;
   const internal_height = stackedHeight + cfg.heightMargin;
 
   return {
@@ -683,6 +702,12 @@ const CrateFilterPlanner = ({ projectId }) => {
     });
     setSelectedPartIds(new Set());
     setManualCrateNo('');
+    // The active filters often match exactly the parts just allocated into
+    // this crate — leaving them in place would show an empty table even
+    // though other, unallocated parts remain in the pool. Clear them so the
+    // user immediately sees what's left to build next.
+    setFilters(EMPTY_FILTERS);
+    setSelectCount('');
   }, [filteredParts, selectedPartIds, manualCrateNo, crates, dimConfig, filters, logCrateAction]);
 
   const handleAutoBucket = useCallback(() => {
@@ -694,6 +719,10 @@ const CrateFilterPlanner = ({ projectId }) => {
       const added = batches.map((parts) => crateFromParts(nextNo++, parts, dimConfig));
       return [...prev, ...added];
     });
+    // Same reasoning as handleCreateManualCrate: everything the filter was
+    // showing just got allocated, so reset it to reveal the remaining pool.
+    setFilters(EMPTY_FILTERS);
+    setSelectCount('');
   }, [filteredParts, targetWeightKg, dimConfig]);
 
   const handleMovePart = useCallback((partId, fromCrateNo, toCrateNoRaw) => {

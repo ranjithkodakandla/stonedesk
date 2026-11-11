@@ -163,6 +163,7 @@ def build_store():
             "cutlist_drafts": mongo_db["cutlist_drafts"],
             "cutlist_projects": mongo_db["cutlist_projects"],
             "crate_action_log": mongo_db["crate_action_log"],
+            "app_settings": mongo_db["app_settings"],
         }
         return store, "mongo"
     except Exception as e:
@@ -182,6 +183,7 @@ def build_store():
             "cutlist_drafts": InMemoryCollection(),
             "cutlist_projects": InMemoryCollection(),
             "crate_action_log": InMemoryCollection(),
+            "app_settings": InMemoryCollection(),
         }, "memory"
 
 
@@ -198,6 +200,7 @@ cutlist_runs_col = store["cutlist_runs"]
 cutlist_drafts_col = store["cutlist_drafts"]
 cutlist_projects_col = store["cutlist_projects"]
 crate_action_log_col = store["crate_action_log"]
+app_settings_col = store["app_settings"]
 
 
 def ensure_indexes() -> None:
@@ -383,6 +386,8 @@ def piece_response(doc: Dict[str, Any]) -> Dict[str, Any]:
         "radius": doc.get("radius", "-"),
         "radius_value": doc.get("radius_value", ""),
         "radius_corners": doc.get("radius_corners", {}),
+        "radius_corner_values": doc.get("radius_corner_values", {}),
+        "radius_corner_explicit": doc.get("radius_corner_explicit", {}),
         "shape_type": doc.get("shape_type", ""),
         "sink_type": doc.get("sink_type", "No Sink"),
         "sink_cut": doc.get("sink_cut", "-"),
@@ -783,6 +788,15 @@ class PieceCreate(BaseModel):
     radius: str = "-"
     radius_value: str = ""
     radius_corners: Dict[str, bool] = {}
+    # Independent per-corner radius override (inches), keyed by
+    # top_left/top_right/bottom_left/bottom_right. A corner selected in
+    # radius_corners but absent here uses the configured default
+    # (DEFAULT_CORNER_RADIUS_IN / /api/settings/fabrication-defaults).
+    radius_corner_values: Dict[str, float] = {}
+    # Marks a corner as explicitly set by the user (selection and/or radius
+    # value), so auto-selecting corners from an edge-polish choice never
+    # overwrites a corner the user already configured by hand.
+    radius_corner_explicit: Dict[str, bool] = {}
     shape_type: str = ""
     notes: str = ""
 
@@ -834,6 +848,8 @@ class PieceUpdate(BaseModel):
     radius: str = "-"
     radius_value: str = ""
     radius_corners: Dict[str, bool] = {}
+    radius_corner_values: Dict[str, float] = {}
+    radius_corner_explicit: Dict[str, bool] = {}
     shape_type: str = ""
     notes: str = ""
 
@@ -951,6 +967,7 @@ def create_project():
     doc = {
         "id": project_id,
         "name": "",
+        "project_type": "apartment",
         "material": "Granite",
         "thickness": "3CM",
         "stone_color": "",
@@ -1230,6 +1247,36 @@ def delete_crate_wood_type(wood_type_id: int):
     return {"message": "ok"}
 
 
+DEFAULT_CORNER_RADIUS_IN = 0.125
+FABRICATION_DEFAULTS_SETTINGS_ID = "fabrication_defaults"
+
+
+class FabricationDefaultsUpdate(BaseModel):
+    default_corner_radius_in: float = DEFAULT_CORNER_RADIUS_IN
+
+
+def _default_corner_radius_in() -> float:
+    doc = app_settings_col.find_one({"id": FABRICATION_DEFAULTS_SETTINGS_ID})
+    value = (doc or {}).get("default_corner_radius_in")
+    return float(value) if value is not None and value > 0 else DEFAULT_CORNER_RADIUS_IN
+
+
+@app.get("/api/settings/fabrication-defaults")
+def get_fabrication_defaults():
+    return {"default_corner_radius_in": _default_corner_radius_in()}
+
+
+@app.put("/api/settings/fabrication-defaults")
+def update_fabrication_defaults(data: FabricationDefaultsUpdate):
+    value = max(0.0, float(data.default_corner_radius_in))
+    app_settings_col.update_one(
+        {"id": FABRICATION_DEFAULTS_SETTINGS_ID},
+        {"$set": {"id": FABRICATION_DEFAULTS_SETTINGS_ID, "default_corner_radius_in": value}},
+        upsert=True,
+    )
+    return {"default_corner_radius_in": value}
+
+
 @app.get("/api/projects/{project_id}/pieces/")
 def get_pieces(project_id: int):
     pieces = sorted(pieces_col.find({"project_id": project_id}, {"_id": 0}), key=lambda doc: doc["id"])
@@ -1391,7 +1438,12 @@ class DrawingToPieceRequest(BaseModel):
     # (one full assembly per entry), and the combined project PDF renders
     # them as a Building x Floor matrix instead of a single destination
     # line — whichever way the data was entered is how it's drawn.
-    destinations: List[Dict[str, str]] = []
+    # Each entry is {"building", "floor", "flat"} and may optionally carry its
+    # own "piece_ids" (role -> existing piece id) so re-saving the same
+    # matrix updates its pieces in place instead of inserting a duplicate
+    # batch every time — mirrors the single-destination piece_ids contract
+    # above, just one map per destination instead of one for the whole call.
+    destinations: List[Dict[str, Any]] = []
 
 
 def _assembly_role_docs(project_id: int, req: "DrawingToPieceRequest", assembly: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1497,18 +1549,31 @@ def _splash_params_for_piece(piece: Dict[str, Any], project_pieces: List[Dict[st
 
 
 def _reverse_map_piece(piece: Dict[str, Any], project_pieces: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Fills in drawing_template_id/drawing_template_params for a piece that
-    was entered manually (never saved through the Drawing Generator), so it
-    can still be drawn on its own combined-PDF page. Generator-created
-    pieces already carry both fields and pass through unchanged."""
-    if piece.get("drawing_template_id"):
-        return piece
-    template_id = _template_id_for_piece(piece)
+    """Fills in drawing_template_id/drawing_template_params for a piece so it
+    can be drawn on its own combined-PDF page, always from the piece's
+    CURRENT saved fields rather than whatever was true when it was last
+    generated/edited through the Drawing Generator.
+
+    A generator-created piece already carries drawing_template_id and its
+    original drawing_template_params (e.g. overhang, splash_height — values
+    with no flat-field equivalent), which we keep as a base. But if length/
+    width/sink fields were edited afterward directly (e.g. via the Source
+    Data table) without reopening the generator, those stored params would
+    silently drift from the piece's actual current dimensions — so the
+    dimension-/splash-derivable params are always recomputed from the
+    piece's current fields and layered on top, same as a manually-entered
+    piece. A piece with no stored template at all is reverse-mapped from
+    scratch, as before."""
+    template_id = piece.get("drawing_template_id") or _template_id_for_piece(piece)
     if not template_id:
-        return None
+        return piece if piece.get("drawing_template_id") else None
     template = drawing_templates.get_template(template_id)
     defaults = {p["id"]: p["default"] for p in template["parameters"]}
-    params = {**defaults, **_params_from_piece(template_id, piece), **_splash_params_for_piece(piece, project_pieces)}
+    stored = piece.get("drawing_template_params") or {}
+    params = {
+        **defaults, **stored,
+        **_params_from_piece(template_id, piece), **_splash_params_for_piece(piece, project_pieces),
+    }
     params = {k: v for k, v in params.items() if v is not None}
     return {**piece, "drawing_template_id": template_id, "drawing_template_params": params}
 
@@ -1521,7 +1586,15 @@ def create_piece_from_drawing(project_id: int, req: DrawingToPieceRequest):
     anywhere downstream (crate planning, cut list, labels). Passing
     piece_ids for roles already in the project updates those pieces in
     place instead of creating duplicates, so re-opening a saved drawing to
-    tweak dimensions or toggle an accessory off doesn't leave orphans."""
+    tweak dimensions or toggle an accessory off doesn't leave orphans.
+
+    A matrix destination may likewise carry its own "piece_ids" (role ->
+    existing piece id for that specific building/floor/flat) — the response
+    echoes each destination's resulting piece_ids back, so a caller that
+    resubmits the same matrix (e.g. editing it again without reloading)
+    passes them back in and updates those pieces in place instead of
+    inserting a fresh duplicate batch. A destination with no piece_ids is
+    always treated as a brand-new entry, same as before."""
     try:
         errors = drawing_templates.validate_params(req.template_id, req.params)
         if errors:
@@ -1530,24 +1603,35 @@ def create_piece_from_drawing(project_id: int, req: DrawingToPieceRequest):
     except drawing_templates.TemplateError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    dest_results = []
     if req.destinations:
         # Matrix entry: the same drawing repeats across many building/floor/
-        # flat destinations. Each gets its own full assembly (in-place
-        # update tracking doesn't apply here — this is always a fresh batch,
-        # same as pasting a matrix of rows into Source Data).
+        # flat destinations. Each destination keeps its own piece_ids map
+        # (defaulting to empty, i.e. "create fresh"), mirroring the
+        # single-destination in-place-update contract per destination
+        # instead of for the whole batch.
         docs = []
         for dest in req.destinations:
+            dest_piece_ids = {
+                role: int(pid) for role, pid in (dest.get("piece_ids") or {}).items()
+            }
             dest_req = req.model_copy(update={
                 "building": dest.get("building", ""), "floor": dest.get("floor", ""),
-                "flat": dest.get("flat", ""), "piece_ids": {},
+                "flat": dest.get("flat", ""), "piece_ids": dest_piece_ids,
             })
-            docs.extend(_assembly_role_docs(project_id, dest_req, assembly))
+            dest_docs = _assembly_role_docs(project_id, dest_req, assembly)
+            docs.extend(dest_docs)
+            dest_results.append({
+                "building": dest_req.building, "floor": dest_req.floor, "flat": dest_req.flat,
+                "piece_ids": {d["assembly_role"]: d["id"] for d in dest_docs},
+            })
     else:
         docs = _assembly_role_docs(project_id, req, assembly)
     clear_manual_container_plan(project_id)
     return {
         "pieces": [piece_response(d) for d in docs],
         "piece_ids": {d["assembly_role"]: d["id"] for d in docs},
+        "destinations": dest_results,
     }
 
 
@@ -1676,6 +1760,8 @@ def create_pieces_batch(project_id: int, pieces_data: List[PieceCreate]):
                 "radius": piece.radius,
                 "radius_value": piece.radius_value,
                 "radius_corners": piece.radius_corners,
+                "radius_corner_values": piece.radius_corner_values,
+                "radius_corner_explicit": piece.radius_corner_explicit,
                 "shape_type": piece.shape_type,
                 "notes": piece.notes,
                 "created_at": utc_now(),
@@ -1854,6 +1940,8 @@ def update_piece(piece_id: int, piece: PieceUpdate):
         "radius": piece.radius,
         "radius_value": piece.radius_value,
         "radius_corners": piece.radius_corners,
+        "radius_corner_values": piece.radius_corner_values,
+        "radius_corner_explicit": piece.radius_corner_explicit,
         "shape_type": piece.shape_type,
         "notes": piece.notes,
     }
@@ -1967,6 +2055,29 @@ def get_crates(project_id: int):
     return snapshot["crate_rows"]
 
 
+@app.get("/api/projects/{project_id}/crates/{crate_id}/packing-schedule")
+def get_crate_packing_schedule(project_id: int, crate_id: int):
+    """Row-by-row packing schedule for one crate — which pieces share a row,
+    in what order, matching a real factory packing drawing (see
+    planner_v3.packing_schedule). Always recomputed from the crate's
+    persisted piece assignment and dimensions, never a separately stored
+    (and therefore driftable) snapshot."""
+    from .services.planner_v3.packing_schedule import build_packing_schedule
+
+    crate = crates_col.find_one({"id": crate_id, "project_id": project_id}, {"_id": 0})
+    if not crate:
+        raise HTTPException(status_code=404, detail="Crate not found")
+
+    referenced_ids = set(crate.get("main_layer_piece_ids") or [])
+    for layer in (crate.get("planner_v3_splash_layers") or []):
+        referenced_ids.update(layer or [])
+    pieces = pieces_col.find({"project_id": project_id, "id": {"$in": list(referenced_ids)}}, {"_id": 0})
+    pieces_by_id = {p["id"]: p for p in pieces}
+
+    schedule = build_packing_schedule(crate, pieces_by_id)
+    return {"crate_id": crate.get("crate_id", ""), **schedule}
+
+
 @app.post("/api/projects/{project_id}/crates/")
 def create_crate(project_id: int, data: Dict[str, Any]):
     serial = crate_serial_for_project(project_id)
@@ -2006,6 +2117,16 @@ def create_crate(project_id: int, data: Dict[str, Any]):
         "packing_family": str(data.get("packing_family", "") or ""),
         "created_at": utc_now(),
     }
+    # Optional passthrough so a manually-built crate can still carry the
+    # row/layer metadata the packing-schedule view reads (planner-generated
+    # crates always have these; a manual crate only does if the caller sets
+    # them — e.g. a manual edit flow built on top of an existing plan).
+    if "planner_v3_orientation" in data:
+        crate["planner_v3_orientation"] = data["planner_v3_orientation"]
+    if "main_layer_piece_ids" in data:
+        crate["main_layer_piece_ids"] = [int(pid) for pid in data["main_layer_piece_ids"]]
+    if "planner_v3_splash_layers" in data:
+        crate["planner_v3_splash_layers"] = data["planner_v3_splash_layers"]
     crates_col.insert_one(crate)
 
     if piece_ids:

@@ -157,6 +157,31 @@ def test_render_pdf_bytes_with_matrix_destinations_shows_table_not_row():
     assert "3 destinations" in text  # sidebar points at the table instead of listing them inline
 
 
+def test_render_pdf_bytes_house_matrix_shows_building_list_not_empty_table():
+    # Individual-house destinations have no floor/flat at all — the old
+    # Building x Floor table silently drew nothing in this case (it
+    # required both buildings AND floors to be non-empty) while the
+    # sidebar still said "see table below", leaving the page with a
+    # dangling reference to a table that was never drawn.
+    import fitz
+
+    geo = dt.build_geometry("island_standard", {"length": 96, "width": 42})
+    destinations = [
+        {"building": "Lot 12", "floor": "", "flat": ""},
+        {"building": "Lot 12", "floor": "", "flat": ""},
+        {"building": "Lot 14", "floor": "", "flat": ""},
+    ]
+    pdf_bytes = render_pdf_bytes(geo, {"part": "Island A", "destinations": destinations})
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    text = doc[0].get_text()
+    doc.close()
+    assert "Bldg #'s / Floor" not in text  # never a floor table for a house project
+    assert "3 destinations" in text and "see building" in text  # may wrap onto its own line
+    assert "Buildings" in text
+    assert "Lot 12" in text and "Lot 14" in text
+    assert "x2" in text  # Lot 12 appears twice
+
+
 def test_sink_shape_is_selectable_and_not_baked_into_the_template():
     # Same template, same dimensions — only sink_shape differs. Real fab
     # drawings show the same countertop category (Vanity Top) with an oval,

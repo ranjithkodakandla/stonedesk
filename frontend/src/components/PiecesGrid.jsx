@@ -1,6 +1,7 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import PartDrawer from './PartDrawer';
 import { calcSqft, calcWeight } from '../utils/pieceCalc';
+import { useDefaultCornerRadiusIn } from '../utils/fabricationDefaults';
 
 // ── Part options ────────────────────────────────────────────────────────────
 const PART_OPTIONS = {
@@ -90,6 +91,8 @@ export const DEFAULT_THICKNESS_MAP = {
 // ── Row factory ─────────────────────────────────────────────────────────────
 const DEFAULT_EDGE_MAP     = { top: 'none', bottom: 'none', left: 'none', right: 'none' };
 const DEFAULT_RADIUS_CORNERS = { top_left: false, top_right: false, bottom_left: false, bottom_right: false };
+const DEFAULT_RADIUS_CORNER_VALUES = {};
+const DEFAULT_RADIUS_CORNER_EXPLICIT = { top_left: false, top_right: false, bottom_left: false, bottom_right: false };
 
 const EMPTY_ROW = {
   part_no: '', part: '', length: '', width: '', thickness: '3CM', qty: 1,
@@ -102,6 +105,8 @@ const EMPTY_ROW = {
   radius: '-',
   radius_value: '',
   radius_corners: null,     // will be set in newRow()
+  radius_corner_values: null,    // will be set in newRow()
+  radius_corner_explicit: null,  // will be set in newRow()
   shape_type: '',
   notes: '',
   dest_qty_overrides: {},
@@ -117,6 +122,8 @@ export const newRow = (defaultThickness = '3CM') => ({
   groove_positions: [],
   edge_map: { ...DEFAULT_EDGE_MAP },
   radius_corners: { ...DEFAULT_RADIUS_CORNERS },
+  radius_corner_values: { ...DEFAULT_RADIUS_CORNER_VALUES },
+  radius_corner_explicit: { ...DEFAULT_RADIUS_CORNER_EXPLICIT },
   dest_qty_overrides: {},
   _id: rowIdCounter++,
 });
@@ -190,6 +197,8 @@ export const dupeRow = (row) => ({
   part_no: incrementPartNo(row.part_no),
   edge_map: row.edge_map ? { ...row.edge_map } : { ...DEFAULT_EDGE_MAP },
   radius_corners: row.radius_corners ? { ...row.radius_corners } : { ...DEFAULT_RADIUS_CORNERS },
+  radius_corner_values: row.radius_corner_values ? { ...row.radius_corner_values } : { ...DEFAULT_RADIUS_CORNER_VALUES },
+  radius_corner_explicit: row.radius_corner_explicit ? { ...row.radius_corner_explicit } : { ...DEFAULT_RADIUS_CORNER_EXPLICIT },
   sink_numbers: Array.isArray(row.sink_numbers) ? [...row.sink_numbers] : [],
   tap_hole_positions: Array.isArray(row.tap_hole_positions) ? row.tap_hole_positions.map(p => ({ ...p })) : [],
   groove_positions: Array.isArray(row.groove_positions) ? row.groove_positions.map(p => ({ ...p })) : [],
@@ -329,6 +338,7 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
   const [drawerRow, setDrawerRow] = useState(null);
   const [drawerScrollTo, setDrawerScrollTo] = useState(null);
   const descOptions = useMemo(() => masterDescriptions || MASTER_DESCRIPTIONS, [masterDescriptions]);
+  const defaultCornerRadiusIn = useDefaultCornerRadiusIn();
 
   const openDrawer = (row, section = null) => {
     setDrawerRow(row);
@@ -603,6 +613,7 @@ const PiecesGrid = ({ rows, setRows, material, thickness, defaultThickness, onCa
           onUpdate={updateRowFull}
           onClose={() => setDrawerRow(null)}
           scrollTo={drawerScrollTo}
+          defaultCornerRadiusIn={defaultCornerRadiusIn}
         />
       )}
     </div>

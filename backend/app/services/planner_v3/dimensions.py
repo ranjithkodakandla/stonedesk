@@ -11,6 +11,8 @@ _BASE_SUPPORT_IN = 2.0
 _HEADROOM = 4.0             # matches _HEADROOM below (shared upright-model constant)
 _ROW_SEPARATOR_IN = 0.75    # foam between main-top "rows" stacked along width
 _SIDE_FRAME = 4.0           # framing on the width/row-stack axis
+_ROW_PIECE_GAP_IN = 1.0     # clearance between two pieces sharing one row, laid end to end
+_NO_STANDOUT_ROW_CAP_IN = 120.0  # see _row_grouping_cap()
 
 
 def _max_piece_length(pieces: List[Dict[str, Any]]) -> float:
@@ -25,6 +27,119 @@ def _piece_short_edge(p: Dict[str, Any]) -> float:
     if L > 0 and W > 0:
         return min(L, W)
     return max(L, W)
+
+
+def _row_raw_length(row: List[Dict[str, Any]]) -> float:
+    """Sum of a row's piece lengths plus the gaps between them — before any
+    end-of-crate clearance is added."""
+    total = sum(parse_float(p.get("length")) for p in row)
+    return total + max(0, len(row) - 1) * _ROW_PIECE_GAP_IN
+
+
+def _consolidate_same_length_leftovers(rows: List[List[Dict[str, Any]]]) -> List[List[Dict[str, Any]]]:
+    """Phase B: a piece that ended up alone in its own row (because the
+    Phase-A cap blocked it from joining pieces of its own exact length)
+    gets folded into an existing row made ENTIRELY of that same length,
+    even though that makes the row longer than the original cap — three
+    identical 25" pieces become one clean row of 75" instead of a pair plus
+    an awkward leftover single.
+
+    This never merges rows just because doing so would cut the row count:
+    it only ever extends a row that ALREADY successfully combined >=2
+    pieces of one exact length with ANOTHER piece of that exact length. Six
+    identical 79" pieces that never paired up in Phase A (each already a
+    singleton on its own) stay six separate rows — there is no multi-piece
+    79" row to extend them into, so nothing here merges them. That keeps
+    the factory's real packing drawing (six separate 79" rows) intact while
+    still cleaning up the leftover-singleton case."""
+    def is_homogeneous(row: List[Dict[str, Any]]) -> bool:
+        lengths = {round(parse_float(p.get("length")), 3) for p in row}
+        return len(lengths) == 1
+
+    changed = True
+    while changed:
+        changed = False
+        for i, row in enumerate(rows):
+            if len(row) != 1:
+                continue
+            singleton_len = round(parse_float(row[0].get("length")), 3)
+            target = next(
+                (j for j, other in enumerate(rows)
+                 if j != i and len(other) >= 2 and is_homogeneous(other)
+                 and round(parse_float(other[0].get("length")), 3) == singleton_len),
+                None,
+            )
+            if target is not None:
+                rows[target].append(row[0])
+                del rows[i]
+                changed = True
+                break
+    return rows
+
+
+def _row_grouping_cap(pieces: List[Dict[str, Any]]) -> float:
+    """The Phase-A row-grouping cap: normally the longest single piece's
+    length + clearance — that piece is the crate's natural "standout" size,
+    and anything shorter tries to fit within it (e.g. a 67" piece plus
+    three 25"s: the 67" sets the cap, the 25"s combine within it).
+
+    But when EVERY selected piece is the exact same length, there is no
+    standout at all — every piece ties for "the max" — and deriving the cap
+    from that single shared length is uselessly tight: a batch of many
+    identical 25" pieces would get a ~31" cap (barely 1 piece), forcing one
+    piece per row instead of combining several efficiently. In that
+    specific case (and ONLY that case — any batch with more than one
+    distinct length keeps the normal cap, so e.g. six identical 79" pieces
+    alongside 49"/19" pairs are unaffected), use a 120" floor instead, so
+    same-length duplicates can still combine several at a time rather than
+    each claiming its own row."""
+    if not pieces:
+        return 0.0
+    normal_cap = _max_piece_length(pieces) + 6.0
+    distinct_lengths = {round(parse_float(p.get("length")), 3) for p in pieces}
+    if len(distinct_lengths) <= 1:
+        return max(normal_cap, _NO_STANDOUT_ROW_CAP_IN)
+    return normal_cap
+
+
+def group_main_pieces_into_rows(
+    main_pieces: List[Dict[str, Any]],
+    usable_length: float,
+) -> List[List[Dict[str, Any]]]:
+    """Groups main pieces into packing "rows" — upright thickness-slots laid
+    side by side along the crate's length axis, matching the factory's real
+    packing drawings (e.g. the Kitchen And Range Tops reference: 6 rows of
+    one long piece each, then 6 rows pairing a 49" and a 19" piece that
+    together fit the same row). A piece too long to share a row with
+    anything gets a row to itself; two or more shorter pieces whose combined
+    length (plus a small gap) fits within usable_length share one row
+    instead of each claiming a separate thickness-slot, so the crate isn't
+    needlessly widened for pieces that could lie end to end.
+
+    Greedy largest-first (Phase A): the biggest unplaced piece starts a new
+    row, then the largest remaining piece that still fits within
+    usable_length is added, repeating until nothing more fits. A second pass
+    (Phase B, _consolidate_same_length_leftovers) then folds any leftover
+    same-length singleton into an already-combined row of that same length,
+    even past usable_length — see that function's docstring for why this
+    never merges dissimilar pieces just to cut the row count."""
+    if not main_pieces:
+        return []
+    remaining = sorted(main_pieces, key=lambda p: parse_float(p.get("length")), reverse=True)
+    rows: List[List[Dict[str, Any]]] = []
+    while remaining:
+        row = [remaining.pop(0)]
+        row_length = parse_float(row[0].get("length"))
+        i = 0
+        while i < len(remaining):
+            candidate_length = parse_float(remaining[i].get("length"))
+            if row_length + _ROW_PIECE_GAP_IN + candidate_length <= usable_length:
+                row.append(remaining.pop(i))
+                row_length += _ROW_PIECE_GAP_IN + candidate_length
+            else:
+                i += 1
+        rows.append(row)
+    return _consolidate_same_length_leftovers(rows)
 
 
 def horizontal_crate_dimensions(
@@ -52,7 +167,15 @@ def horizontal_crate_dimensions(
             "external_height": 0.0,
         }
 
-    internal_length = _max_piece_length(all_p) + 6.0
+    # Phase A uses the longest single piece (+ clearance) as the row-grouping
+    # cap. Phase B (inside group_main_pieces_into_rows) can then consolidate
+    # leftover same-length singletons into an existing row past that cap —
+    # so the crate's actual internal_length must be derived from whatever
+    # the longest row ends up being, not frozen at the pre-grouping cap.
+    phase_a_cap = _row_grouping_cap(main_pieces) if main_pieces else _max_piece_length(all_p) + 6.0
+    rows_for_length = group_main_pieces_into_rows(main_pieces, usable_length=phase_a_cap) if main_pieces else []
+    longest_row_raw = max((_row_raw_length(row) for row in rows_for_length), default=0.0)
+    internal_length = max(_max_piece_length(all_p), longest_row_raw) + 6.0
 
     # Height: main tops stand upright on their short edge, pallet + headroom below/above,
     # then splash layers stack on top (each layer already foam-separated).
@@ -69,10 +192,19 @@ def horizontal_crate_dimensions(
 
     internal_height = main_h + _BASE_SUPPORT_IN + _HEADROOM + splash_h
 
-    # Width: thickness-stack of main-top "rows" — one slot per main piece, foam between.
+    # Width: thickness-stack of main-top "rows". A row is a thickness-slot,
+    # not necessarily one piece — two or more pieces short enough to lie end
+    # to end within the crate's internal_length share one row instead of
+    # each claiming its own slot (see group_main_pieces_into_rows), so e.g.
+    # a 49" and a 19" piece pack into the same row a lone 79" piece needs to
+    # itself, matching the factory's real packing drawings.
     if main_pieces:
-        row_thicknesses = [thickness_inches(str(p.get("thickness") or default_thickness)) for p in main_pieces]
-        internal_width = sum(row_thicknesses) + max(0, len(main_pieces) - 1) * _ROW_SEPARATOR_IN + _SIDE_FRAME
+        rows = rows_for_length
+        row_thicknesses = [
+            max(thickness_inches(str(p.get("thickness") or default_thickness)) for p in row)
+            for row in rows
+        ]
+        internal_width = sum(row_thicknesses) + max(0, len(rows) - 1) * _ROW_SEPARATOR_IN + _SIDE_FRAME
     else:
         internal_width = thickness_inches(default_thickness) + _SIDE_FRAME
 

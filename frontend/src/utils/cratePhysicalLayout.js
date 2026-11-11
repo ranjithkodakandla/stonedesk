@@ -3,19 +3,9 @@
  * Aligns with crateEstimator horizontal stack + island cassette models.
  */
 import { round2 } from './plannerUtils';
+import { parseThicknessIn } from './thicknessConstants';
 
-const THICKNESS_IN = {
-  '2CM': 0.79, '3CM': 1.18, '4CM': 1.57, '2.0CM': 0.79, '3.0CM': 1.18, Mixed: 0.98,
-};
-
-export function parseThicknessIn(t) {
-  if (!t) return 1.18;
-  const key = String(t).trim().toUpperCase().replace(' ', '');
-  if (THICKNESS_IN[key] != null) return THICKNESS_IN[key];
-  if (THICKNESS_IN[String(t).trim()] != null) return THICKNESS_IN[String(t).trim()];
-  const n = parseFloat(t);
-  return Number.isFinite(n) ? n : 1.18;
-}
+export { parseThicknessIn };
 
 export function isBackSplashPiece(piece) {
   return /back.?splash/i.test(piece?.part || '');
