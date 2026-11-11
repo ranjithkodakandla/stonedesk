@@ -81,3 +81,58 @@ def test_internal_width_reflects_row_count_not_raw_piece_count():
     # have given for these same 18 pieces (18 slots instead of 12).
     old_one_row_per_piece_width = round(18 * thickness_inches("3CM") + 17 * _ROW_SEPARATOR_IN + _SIDE_FRAME, 1)
     assert dims["internal_width"] < old_one_row_per_piece_width
+
+
+def test_three_identical_leftover_pieces_consolidate_past_the_original_cap():
+    # Real example: a 67" piece (the longest single piece) plus three
+    # identical 25" pieces. Capping every row at "longest piece + clearance"
+    # would pair two 25s (50" <= cap) and strand the third alone — wasting a
+    # whole extra row. The three 25s should instead consolidate into one
+    # clean 75"-ish row, growing the crate past its original 67"-based cap.
+    pieces = [
+        {"id": "big", "length": 67, "width": 25.5, "thickness": "3CM"},
+        {"id": "a", "length": 25, "width": 25.5, "thickness": "3CM"},
+        {"id": "b", "length": 25, "width": 25.5, "thickness": "3CM"},
+        {"id": "c", "length": 25, "width": 25.5, "thickness": "3CM"},
+    ]
+    dims = horizontal_crate_dimensions(pieces, [], "3CM", wood_thickness=1.25)
+    rows = group_main_pieces_into_rows(pieces, usable_length=dims["internal_length"])
+
+    assert len(rows) == 2  # not 3 — the big piece alone, all three 25s together
+    by_length = sorted(rows, key=len)
+    assert len(by_length[0]) == 1 and by_length[0][0]["id"] == "big"
+    assert len(by_length[1]) == 3
+    assert sorted(p["id"] for p in by_length[1]) == ["a", "b", "c"]
+
+    # Crate length grew to fit the 3x25 row (25*3 + 2 gaps of 1" = 77") plus
+    # the standard 6" end clearance — not capped at the original 67" piece.
+    assert dims["internal_length"] == 83.0
+
+
+def test_identical_pieces_that_never_paired_up_at_all_stay_separate():
+    # Six identical 79" pieces (same lengths as the reference drawing's
+    # single rows) with NO other pieces at all: none of them ever forms a
+    # multi-piece row in Phase A (79+1+79 always exceeds the cap), so there
+    # is nothing for the consolidation pass to extend — they must stay six
+    # separate rows, never merged just because it would cut the row count.
+    pieces = [{"id": f"p{i}", "length": 79, "width": 25.5, "thickness": "3CM"} for i in range(6)]
+    dims = horizontal_crate_dimensions(pieces, [], "3CM", wood_thickness=1.25)
+    rows = group_main_pieces_into_rows(pieces, usable_length=dims["internal_length"])
+    assert len(rows) == 6
+    assert all(len(row) == 1 for row in rows)
+    assert dims["internal_length"] == 85.0  # unchanged: 79 + 6, no consolidation applies
+
+
+def test_dissimilar_leftover_pieces_never_merge_with_each_other():
+    # A leftover singleton (67") and a leftover singleton of a DIFFERENT
+    # length (19", with nothing else to pair with) must never merge with
+    # each other — consolidation only ever extends an existing SAME-length
+    # multi-piece row, it never combines two unrelated leftovers.
+    pieces = [
+        {"id": "big", "length": 67, "width": 25.5, "thickness": "3CM"},
+        {"id": "odd", "length": 19, "width": 25.5, "thickness": "3CM"},
+    ]
+    dims = horizontal_crate_dimensions(pieces, [], "3CM", wood_thickness=1.25)
+    rows = group_main_pieces_into_rows(pieces, usable_length=dims["internal_length"])
+    assert len(rows) == 2
+    assert all(len(row) == 1 for row in rows)
