@@ -31,6 +31,85 @@ const StatusBadge = ({ status }) => {
   );
 };
 
+const formatBytes = (bytes) => {
+  const n = Number(bytes) || 0;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+// One shared shop drawing PDF per project, so everyone working on it looks at
+// the same document. Re-uploading replaces it — no version history is kept.
+const ShopDrawingCard = ({ project, projectId, onDataChange }) => {
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState('');
+  const fileInputRef = React.useRef(null);
+  const hasFile = !!project.shop_drawing_filename;
+
+  const handleFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting the same filename later
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+      setError('Only PDF files are supported');
+      return;
+    }
+    setError('');
+    setUploading(true);
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      await axios.post(`${API_BASE}/projects/${projectId}/shop-drawing`, formData);
+      onDataChange?.();
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[20px] border border-[#e2e8f0] bg-[#f8fafc] px-4 py-3">
+      <div className="flex items-center gap-3 min-w-0">
+        <span className="text-xl">📄</span>
+        <div className="min-w-0">
+          <div className="text-xs uppercase tracking-[0.16em] text-[#64748b]">Shop Drawing</div>
+          {hasFile ? (
+            <div className="text-sm text-[#0f172a] truncate">
+              <span className="font-medium">{project.shop_drawing_filename}</span>
+              <span className="text-[#94a3b8]"> · {formatBytes(project.shop_drawing_size)}
+                {project.shop_drawing_uploaded_at && ` · uploaded ${new Date(project.shop_drawing_uploaded_at).toLocaleDateString()}`}
+              </span>
+            </div>
+          ) : (
+            <div className="text-sm text-[#94a3b8]">No shop drawing uploaded yet</div>
+          )}
+        </div>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        {hasFile && (
+          <>
+            <a href={`${API_BASE}/projects/${projectId}/shop-drawing/file`} target="_blank" rel="noreferrer"
+              className="rounded-lg border border-[#cbd5e1] bg-white px-3 py-1.5 text-xs font-medium text-[#334155] hover:bg-[#f1f5f9]">
+              Review
+            </a>
+            <a href={`${API_BASE}/projects/${projectId}/shop-drawing/file?download=1`}
+              className="rounded-lg border border-[#cbd5e1] bg-white px-3 py-1.5 text-xs font-medium text-[#334155] hover:bg-[#f1f5f9]">
+              Download
+            </a>
+          </>
+        )}
+        <button type="button" disabled={uploading} onClick={() => fileInputRef.current?.click()}
+          className="rounded-lg border border-[#1d4ed8] bg-[#1d4ed8] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#1e40af] disabled:opacity-60">
+          {uploading ? 'Uploading…' : hasFile ? 'Replace' : 'Upload'}
+        </button>
+        <input ref={fileInputRef} type="file" accept="application/pdf" className="hidden" onChange={handleFileChange} />
+      </div>
+      {error && <div className="w-full text-xs text-red-600">{error}</div>}
+    </div>
+  );
+};
+
 const ProjectWorkspace = ({ projectId, goBack }) => {
   const project = usePlannerStore((state) => state.project);
   const pieces = usePlannerStore((state) => state.pieces);
@@ -369,6 +448,7 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
                 </div>
               </div>
             </div>
+            <ShopDrawingCard project={project} projectId={projectId} onDataChange={refreshWorkspace} />
           </div>
 
           {/* ── Workspace steps ──────────────────────────────────────────────
@@ -390,29 +470,10 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
                 hint: 'Enter or upload parts',
                 content: () => (
                   <>
-                    {/* Manual Entry | Automated Upload sub-navigation */}
-                    <div className="border-b border-[#edf2f7] px-6 pt-4 pb-0 flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => setEntryMode('manual')}
-                        className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-all -mb-px ${
-                          entryMode === 'manual'
-                            ? 'border-[#1d4ed8] text-[#1d4ed8]'
-                            : 'border-transparent text-[#64748b] hover:text-[#334155]'
-                        }`}>
-                        Manual Entry
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setEntryMode('upload')}
-                        className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-all -mb-px ${
-                          entryMode === 'upload'
-                            ? 'border-[#1d4ed8] text-[#1d4ed8]'
-                            : 'border-transparent text-[#64748b] hover:text-[#334155]'
-                        }`}>
-                        Automated Upload
-                      </button>
-                    </div>
+                    {/* Manual Entry | Automated Upload sub-navigation — Automated
+                        Upload is hidden for now (not in use); entryMode stays
+                        'manual' always, but the tab bar and the 'upload'
+                        branch below are left in place to bring back easily. */}
 
                     <div className="px-6 py-6 pb-64">
                       {entryMode === 'manual' && (

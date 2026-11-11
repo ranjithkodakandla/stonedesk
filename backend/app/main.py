@@ -162,6 +162,7 @@ def build_store():
             "cutlist_projects": mongo_db["cutlist_projects"],
             "crate_action_log": mongo_db["crate_action_log"],
             "app_settings": mongo_db["app_settings"],
+            "shop_drawings": mongo_db["shop_drawings"],
         }
         return store, "mongo"
     except Exception as e:
@@ -182,6 +183,7 @@ def build_store():
             "cutlist_projects": InMemoryCollection(),
             "crate_action_log": InMemoryCollection(),
             "app_settings": InMemoryCollection(),
+            "shop_drawings": InMemoryCollection(),
         }, "memory"
 
 
@@ -199,6 +201,7 @@ cutlist_drafts_col = store["cutlist_drafts"]
 cutlist_projects_col = store["cutlist_projects"]
 crate_action_log_col = store["crate_action_log"]
 app_settings_col = store["app_settings"]
+shop_drawings_col = store["shop_drawings"]
 
 
 def ensure_indexes() -> None:
@@ -355,6 +358,9 @@ def project_response(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         "planner_v3_container_optimization": _json_safe_floats(doc.get("planner_v3_container_optimization")),
         "delivery_payload_cap_kg": float(doc.get("delivery_payload_cap_kg") or 24000),
         "weight_multiplier_kg_per_sqft_by_thickness": doc.get("weight_multiplier_kg_per_sqft_by_thickness", {}),
+        "shop_drawing_filename": doc.get("shop_drawing_filename", ""),
+        "shop_drawing_size": doc.get("shop_drawing_size", 0),
+        "shop_drawing_uploaded_at": as_iso(doc.get("shop_drawing_uploaded_at")) if doc.get("shop_drawing_uploaded_at") else "",
         "created_at": as_iso(doc.get("created_at")),
         "updated_at": as_iso(doc.get("updated_at")),
     }
@@ -4764,6 +4770,77 @@ async def upload_pdf(project_id: int, file: UploadFile = File(...)):
         "similar_drawing": similar_drawing,
         "parser_summary": result.get("metadata", {}).get("page_summary", {}),
     }
+
+
+# ── Shop drawing (project-level reference document, not parsed) ──────────────
+# A single PDF the whole team can open to see what's being fabricated.
+# Re-uploading replaces it — no version history is kept.
+
+@app.post("/api/projects/{project_id}/shop-drawing")
+async def upload_shop_drawing(project_id: int, file: UploadFile = File(...)):
+    if not projects_col.find_one({"id": project_id}, {"_id": 0}):
+        raise HTTPException(status_code=404, detail="Project not found")
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    data = await file.read()
+    if len(data) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (max 20 MB)")
+
+    uploaded_at = utc_now()
+    shop_drawings_col.update_one(
+        {"project_id": project_id},
+        {"$set": {
+            "project_id": project_id,
+            "filename": file.filename,
+            "content_type": "application/pdf",
+            "data": data,
+            "uploaded_at": uploaded_at,
+        }},
+        upsert=True,
+    )
+    projects_col.update_one(
+        {"id": project_id},
+        {"$set": {
+            "shop_drawing_filename": file.filename,
+            "shop_drawing_size": len(data),
+            "shop_drawing_uploaded_at": uploaded_at,
+            "updated_at": uploaded_at,
+        }},
+    )
+    return {
+        "shop_drawing_filename": file.filename,
+        "shop_drawing_size": len(data),
+        "shop_drawing_uploaded_at": as_iso(uploaded_at),
+    }
+
+
+@app.get("/api/projects/{project_id}/shop-drawing/file")
+def get_shop_drawing_file(project_id: int, download: bool = False):
+    doc = shop_drawings_col.find_one({"project_id": project_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="No shop drawing uploaded for this project")
+    disposition = "attachment" if download else "inline"
+    filename = doc.get("filename") or "shop-drawing.pdf"
+    return Response(
+        content=bytes(doc["data"]),
+        media_type=doc.get("content_type", "application/pdf"),
+        headers={"Content-Disposition": f'{disposition}; filename="{filename}"'},
+    )
+
+
+@app.delete("/api/projects/{project_id}/shop-drawing")
+def delete_shop_drawing(project_id: int):
+    shop_drawings_col.delete_one({"project_id": project_id})
+    projects_col.update_one(
+        {"id": project_id},
+        {"$set": {
+            "shop_drawing_filename": "",
+            "shop_drawing_size": 0,
+            "shop_drawing_uploaded_at": None,
+            "updated_at": utc_now(),
+        }},
+    )
+    return {"message": "ok"}
 
 
 # ── NIM per-page parse ────────────────────────────────────────────────────────
