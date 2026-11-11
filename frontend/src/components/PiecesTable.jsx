@@ -465,7 +465,6 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing })
         grooves: piece.grooves || '-',
         groove_dimension: piece.groove_dimension,
         groove_positions: piece.groove_positions || [],
-        groove_edge_map: piece.groove_edge_map || {},
         fragility: piece.fragility || 'Standard',
         orientation: piece.orientation || 'Auto',
         delivery_priority: piece.delivery_priority || 'Standard',

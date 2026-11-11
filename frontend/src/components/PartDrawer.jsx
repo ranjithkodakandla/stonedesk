@@ -16,13 +16,12 @@ const HOLE_COUNT_OPTIONS = ['-', '0', '1', '2', '3', '4', '5', '6', '7', '8'];
 
 const DEFAULT_EDGE_MAP = { top: 'none', bottom: 'none', left: 'none', right: 'none' };
 const DEFAULT_RADIUS_CORNERS = { top_left: false, top_right: false, bottom_left: false, bottom_right: false };
-// Groove per sink edge: '' = no groove on that side, otherwise a distance
-// (inches) from that sink edge. Replaces the old numbered "Groove 1, 2..."
-// list with X/Y offsets from the sink's center point — factory feedback was
-// to select which sink edge(s) need a groove (like Edge Polish) and capture
-// each one's distance from the sink edge, not an arbitrary center-point offset.
-const DEFAULT_GROOVE_EDGE_MAP = { top: '', bottom: '', left: '', right: '' };
 const DEFAULT_RADIUS_CORNER_VALUES = {};
+// Click-to-place groove points: up to this many per piece, each snapped to
+// whichever sink edge the click landed nearest, and stored as {x, y} offsets
+// from the sink's center point (same model tap holes already use, and what
+// the technical-drawing renderer already expects).
+const MAX_GROOVE_POSITIONS = 8;
 const DEFAULT_RADIUS_CORNER_EXPLICIT = { top_left: false, top_right: false, bottom_left: false, bottom_right: false };
 
 // Fallback used only if the fabrication-defaults setting hasn't loaded yet.
@@ -112,7 +111,6 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo, defaultCor
     tap_hole_positions: Array.isArray(r.tap_hole_positions) ? r.tap_hole_positions : [],
     groove_dimension: r.groove_dimension ?? '',
     groove_positions: Array.isArray(r.groove_positions) ? r.groove_positions : [],
-    groove_edge_map: (r.groove_edge_map && typeof r.groove_edge_map === 'object') ? r.groove_edge_map : { ...DEFAULT_GROOVE_EDGE_MAP },
   });
 
   const [local, setLocal] = useState(() => hydrate(row));
@@ -178,13 +176,22 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo, defaultCor
     push({ ...local, tap_hole_positions: next });
   };
 
-  // ── Sink grooves: select which sink edge(s) need a groove, distance from
-  // that sink edge (same interaction pattern as Edge Polish). The old
-  // count + X/Y-offset-from-center fields (grooves/groove_dimension/
-  // groove_positions) are left in the data untouched for any existing
-  // saved piece, just no longer edited from this UI.
-  const setGrooveEdge = (side, v) => {
-    push({ ...local, groove_edge_map: { ...(local.groove_edge_map || DEFAULT_GROOVE_EDGE_MAP), [side]: v } });
+  // ── Sink grooves: click a point on the sink diagram to drop a groove there
+  // (snapped to the nearest sink edge), up to MAX_GROOVE_POSITIONS. Each point
+  // is stored as an {x, y} offset from the sink's center — the same model tap
+  // holes already use and what the technical-drawing renderer expects.
+  const addGroovePosition = (x, y) => {
+    if (local.groove_positions.length >= MAX_GROOVE_POSITIONS) return;
+    const next = [...local.groove_positions, { x, y }];
+    push({ ...local, groove_positions: next, grooves: String(next.length) });
+  };
+  const removeGroovePosition = (idx) => {
+    const next = local.groove_positions.filter((_, i) => i !== idx);
+    push({ ...local, groove_positions: next, grooves: next.length > 0 ? String(next.length) : '-' });
+  };
+  const setGroovePos = (idx, axis, v) => {
+    const next = local.groove_positions.map((p, i) => (i === idx ? { ...p, [axis]: v } : p));
+    push({ ...local, groove_positions: next });
   };
 
   const em = local.edge_map || DEFAULT_EDGE_MAP;
@@ -195,8 +202,8 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo, defaultCor
   const W = Number(local.width) || 0;
   const hasSink = local.sink_type && local.sink_type !== 'No Sink';
   const tapHoleCount = countFromOption(local.tap_holes);
-  const grooveEdgeMap = local.groove_edge_map || DEFAULT_GROOVE_EDGE_MAP;
-  const activeGrooveEdges = Object.values(grooveEdgeMap).filter((v) => v !== '' && v != null).length;
+  const sinkLenIn = Number(local.sink_length) || Math.max(L * 0.3, 1);
+  const sinkWidIn = Number(local.sink_width) || Math.max(W * 0.5, 1);
 
   const EdgeBtn = ({ side, label }) => {
     const val = em[side] || 'none';
@@ -234,29 +241,66 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo, defaultCor
     );
   };
 
-  const GrooveEdgeField = ({ side, label }) => {
-    const value = grooveEdgeMap[side] ?? '';
-    const checked = value !== '' && value != null;
-    return (
-      <div className={`rounded-lg border transition-all px-3 py-2.5 ${checked ? 'bg-violet-50 border-violet-300' : 'bg-white border-slate-200'}`}>
-        <label className="flex items-center gap-2 text-xs font-medium cursor-pointer select-none">
-          <input type="checkbox" checked={checked}
-            onChange={e => setGrooveEdge(side, e.target.checked ? (value || '0.5') : '')}
-            className="accent-violet-600 w-3.5 h-3.5" />
-          <span className={checked ? 'text-violet-700' : 'text-slate-500'}>{label}</span>
-        </label>
-        {checked && (
-          <div className="flex items-center gap-1.5 mt-1.5 pl-5">
-            <input type="number" step="0.0625" min="0"
-              value={value}
-              onChange={e => setGrooveEdge(side, e.target.value)}
-              className="w-16 text-[11px] border border-slate-200 rounded px-1.5 py-1" />
-            <span className="text-[10px] text-slate-400">in from edge</span>
-          </div>
-        )}
-      </div>
-    );
+  // Click anywhere in the diagram -> snap to whichever sink edge the click
+  // landed nearest -> record an {x, y} offset from the sink's center, in
+  // inches, exactly on that edge.
+  const GROOVE_SVG_W = 260;
+  const GROOVE_SVG_H = 160;
+  const GROOVE_PAD = 20;
+  const grooveScale = Math.min(
+    (GROOVE_SVG_W - GROOVE_PAD * 2) / sinkLenIn,
+    (GROOVE_SVG_H - GROOVE_PAD * 2) / sinkWidIn,
+  );
+  const grooveCx = GROOVE_SVG_W / 2;
+  const grooveCy = GROOVE_SVG_H / 2;
+  const grooveRectX = grooveCx - (sinkLenIn * grooveScale) / 2;
+  const grooveRectY = grooveCy - (sinkWidIn * grooveScale) / 2;
+  const grooveRectW = sinkLenIn * grooveScale;
+  const grooveRectH = sinkWidIn * grooveScale;
+
+  const handleGrooveDiagramClick = (e) => {
+    if (local.groove_positions.length >= MAX_GROOVE_POSITIONS) return;
+    const svg = e.currentTarget;
+    const rect = svg.getBoundingClientRect();
+    const px = ((e.clientX - rect.left) / rect.width) * GROOVE_SVG_W;
+    const py = ((e.clientY - rect.top) / rect.height) * GROOVE_SVG_H;
+    const halfLen = sinkLenIn / 2;
+    const halfWid = sinkWidIn / 2;
+    let ox = Math.max(-halfLen, Math.min(halfLen, (px - grooveCx) / grooveScale));
+    let oy = Math.max(-halfWid, Math.min(halfWid, (py - grooveCy) / grooveScale));
+    // Snap to whichever edge is closest (smallest remaining distance to it).
+    const distToH = halfLen - Math.abs(ox); // distance to left/right edge
+    const distToV = halfWid - Math.abs(oy); // distance to top/bottom edge
+    if (distToH <= distToV) {
+      ox = ox < 0 ? -halfLen : halfLen;
+    } else {
+      oy = oy < 0 ? -halfWid : halfWid;
+    }
+    addGroovePosition(Number(ox.toFixed(3)), Number(oy.toFixed(3)));
   };
+
+  const GrooveSinkDiagram = () => (
+    <svg
+      viewBox={`0 0 ${GROOVE_SVG_W} ${GROOVE_SVG_H}`}
+      className="w-full border border-slate-200 rounded-lg bg-slate-50 cursor-crosshair"
+      style={{ height: GROOVE_SVG_H }}
+      onClick={handleGrooveDiagramClick}
+    >
+      <rect x={grooveRectX} y={grooveRectY} width={grooveRectW} height={grooveRectH}
+        fill="#fff" stroke="#94a3b8" strokeWidth="1.5" rx="3" />
+      <text x={grooveCx} y={grooveRectY - 6} textAnchor="middle" fontSize="9" fill="#64748b">
+        Sink ({sinkLenIn.toFixed(1)}" × {sinkWidIn.toFixed(1)}")
+      </text>
+      {local.groove_positions.map((pos, i) => (
+        <circle key={i}
+          cx={grooveCx + Number(pos.x || 0) * grooveScale}
+          cy={grooveCy + Number(pos.y || 0) * grooveScale}
+          r="4.5" fill="#7c3aed" stroke="#fff" strokeWidth="1"
+          onClick={(e) => { e.stopPropagation(); removeGroovePosition(i); }}
+        />
+      ))}
+    </svg>
+  );
 
   const validDests = (destinations || []).filter(d => d.building || d.floor || d.flat);
   const handleSave = () => {
@@ -393,22 +437,42 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo, defaultCor
 
           {/* Section 3 — Sink Grooves */}
           <Section id="section-grooves" title="Sink Grooves" defaultOpen={false}>
-            <div className="space-y-3">
-              <p className="text-[11px] text-slate-500">
-                Select which side(s) of the sink need a groove, then enter each one's distance from that sink edge.
-              </p>
-              <div>
-                <label className="label-text block mb-2">
-                  Sink Edges{activeGrooveEdges > 0 ? ` (${activeGrooveEdges} selected)` : ''}
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <GrooveEdgeField side="top" label="↑ Top" />
-                  <GrooveEdgeField side="bottom" label="↓ Bottom" />
-                  <GrooveEdgeField side="left" label="← Left" />
-                  <GrooveEdgeField side="right" label="→ Right" />
+            {!hasSink ? (
+              <p className="text-[11px] text-slate-500">Select a sink type above first.</p>
+            ) : (
+              <div className="space-y-3">
+                <p className="text-[11px] text-slate-500">
+                  Click the sink outline where each groove goes (snaps to the nearest edge) — up to {MAX_GROOVE_POSITIONS}.
+                  Click a point again to remove it.
+                </p>
+                <GrooveSinkDiagram />
+                <div>
+                  <label className="label-text">Groove Width (in)</label>
+                  <input type="number" step="0.0625" min="0" value={local.groove_dimension ?? ''}
+                    onChange={e => set('groove_dimension', e.target.value)} className="input-field" placeholder="e.g., 0.5" />
                 </div>
+                {local.groove_positions.length > 0 && (
+                  <div className="space-y-2">
+                    <label className="label-text">
+                      Grooves ({local.groove_positions.length})
+                    </label>
+                    {local.groove_positions.map((pos, i) => (
+                      <div key={i} className="grid grid-cols-[auto_1fr_1fr_auto] gap-2 items-center">
+                        <span className="text-xs font-medium text-slate-600">{i + 1}</span>
+                        <input type="number" step="0.0625" value={pos.x ?? ''}
+                          onChange={e => setGroovePos(i, 'x', e.target.value)}
+                          className="input-field" placeholder="X offset" />
+                        <input type="number" step="0.0625" value={pos.y ?? ''}
+                          onChange={e => setGroovePos(i, 'y', e.target.value)}
+                          className="input-field" placeholder="Y offset" />
+                        <button type="button" onClick={() => removeGroovePosition(i)}
+                          className="text-slate-400 hover:text-red-500 text-xs px-1">✕</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            </div>
+            )}
           </Section>
 
           {/* Section 4 — Outline Shape (the piece's overall outline — separate
