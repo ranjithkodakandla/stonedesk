@@ -535,7 +535,10 @@ const PlannerV3Screen = ({
               {selectedCrate && (
                 <div className="mt-8">
                   <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[#64748b] mb-2">Packing schedule</div>
-                  <CratePackingSchedule projectId={projectId} crateId={selectedCrate.id} crateLabel={selectedCrate.crate_id} />
+                  <CratePackingSchedule
+                    projectId={projectId} crateId={selectedCrate.id} crateLabel={selectedCrate.crate_id}
+                    material={project?.material} stoneColor={project?.stone_color}
+                  />
                 </div>
               )}
               {selectedCrate && (

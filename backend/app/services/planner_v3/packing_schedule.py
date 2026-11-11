@@ -35,6 +35,12 @@ def _row_entry(row_index: int, layer: str, pieces: List[Dict[str, Any]], sequenc
                 "length": p.get("length"),
                 "width": p.get("width"),
                 "thickness": p.get("thickness"),
+                # Sink cutout, when present — lets a 3D/visual view draw the
+                # actual cutout on the slab's face instead of a bare rectangle.
+                "sink_type": p.get("sink_type") or "No Sink",
+                "sink_offset_left": p.get("sink_offset_left"),
+                "sink_length": p.get("sink_length"),
+                "sink_width": p.get("sink_width"),
             }
             for p in pieces
         ],

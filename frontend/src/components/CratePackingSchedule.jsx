@@ -1,5 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import axios from 'axios';
+
+const Crate3DPacking = React.lazy(() => import('./planner3d/Crate3DPacking'));
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
@@ -114,7 +116,7 @@ const CrossSection = ({ rows, internalWidthIn, internalHeightIn }) => {
   );
 };
 
-const CratePackingSchedule = ({ projectId, crateId, crateLabel }) => {
+const CratePackingSchedule = ({ projectId, crateId, crateLabel, material, stoneColor }) => {
   const [schedule, setSchedule] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -135,10 +137,31 @@ const CratePackingSchedule = ({ projectId, crateId, crateLabel }) => {
   if (error) return <div className="p-4 text-sm text-red-600">{error}</div>;
   if (!schedule || !schedule.rows?.length) return <div className="p-4 text-sm text-slate-400">No packing schedule for this crate yet.</div>;
 
-  const { rows, unassigned_piece_ids: unassigned, internal_width: internalWidthIn, internal_height: internalHeightIn } = schedule;
+  const {
+    rows, unassigned_piece_ids: unassigned,
+    internal_length: internalLengthIn, internal_width: internalWidthIn, internal_height: internalHeightIn,
+  } = schedule;
 
   return (
     <div className="space-y-4">
+      {/* Real 3D scene — same row data, stone/wood materials driven by the
+          project's own material + color (never an AI-generated image). */}
+      <div className="rounded-xl border border-[#e2e8f0] bg-white p-4">
+        <div className="text-xs font-semibold uppercase tracking-[0.14em] text-[#64748b] mb-3">
+          Crate {crateLabel || schedule.crate_id} — 3D ({material || 'Granite'}{stoneColor ? ` · ${stoneColor}` : ''})
+        </div>
+        <Suspense fallback={<div className="p-8 text-sm text-slate-500">Loading 3D preview…</div>}>
+          <Crate3DPacking
+            rows={rows}
+            internalLength={internalLengthIn}
+            internalWidth={internalWidthIn}
+            internalHeight={internalHeightIn}
+            material={material}
+            stoneColor={stoneColor}
+          />
+        </Suspense>
+      </div>
+
       {/* Cross-section: how the pieces actually stand inside the crate. */}
       <div className="rounded-xl border border-[#e2e8f0] bg-white p-4 overflow-x-auto">
         <div className="text-xs font-semibold uppercase tracking-[0.14em] text-[#64748b] mb-3">

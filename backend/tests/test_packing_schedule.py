@@ -107,3 +107,27 @@ def test_missing_piece_is_reported_as_unassigned_not_silently_dropped():
     all_piece_ids = [pid for r in schedule["rows"] for pid in r["piece_ids"]]
     assert "deleted-piece" not in all_piece_ids
     assert "top-1" in all_piece_ids
+
+
+def test_sink_cutout_info_passes_through_dimensions_when_present():
+    pieces_by_id = {
+        "top-1": {
+            "id": "top-1", "length": 79, "width": 25.5, "thickness": "3CM",
+            "sink_type": "Single Bowl", "sink_offset_left": 20, "sink_length": 30, "sink_width": 18,
+        },
+        "top-2": {"id": "top-2", "length": 79, "width": 25.5, "thickness": "3CM"},
+    }
+    crate = {
+        "planner_v3_orientation": "horizontal",
+        "internal_length": 85.0,
+        "main_layer_piece_ids": ["top-1", "top-2"],
+        "planner_v3_splash_layers": [],
+    }
+    schedule = build_packing_schedule(crate, pieces_by_id)
+    by_piece = {d["piece_id"]: d for r in schedule["rows"] for d in r["dimensions"]}
+    assert by_piece["top-1"]["sink_type"] == "Single Bowl"
+    assert by_piece["top-1"]["sink_offset_left"] == 20
+    assert by_piece["top-1"]["sink_length"] == 30
+    assert by_piece["top-1"]["sink_width"] == 18
+    # A piece with no sink still gets the field, defaulted, never omitted.
+    assert by_piece["top-2"]["sink_type"] == "No Sink"
