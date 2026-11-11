@@ -10,10 +10,20 @@ assignment every time, so it can never drift from what was actually packed.
 """
 from typing import Any, Dict, List, Optional
 
+from ..planning_engine import thickness_inches
 from .dimensions import group_main_pieces_into_rows
 
 
 def _row_entry(row_index: int, layer: str, pieces: List[Dict[str, Any]], sequence: int, orientation: str) -> Dict[str, Any]:
+    # Physical packing model (horizontal_crate_dimensions): each row is a
+    # thickness-slot — pieces stand upright, leaning side by side, wrapped
+    # in foam (see the supplied factory photos). A row's "slot thickness" is
+    # the widest piece thickness in it (how much of the crate's width axis
+    # it consumes); its "standing height" is the tallest piece's width (the
+    # short edge standing upright). These are what a cross-section view
+    # needs to draw the row as an actual upright slab, not a flat bar.
+    slot_thickness = max((thickness_inches(str(p.get("thickness") or "3CM")) for p in pieces), default=0.0)
+    standing_height = max((float(p.get("width") or 0) for p in pieces), default=0.0)
     return {
         "row": row_index,
         "layer": layer,
@@ -31,6 +41,8 @@ def _row_entry(row_index: int, layer: str, pieces: List[Dict[str, Any]], sequenc
         "quantity": len(pieces),
         "orientation": orientation,
         "sequence": sequence,
+        "slot_thickness_in": round(slot_thickness, 3),
+        "standing_height_in": round(standing_height, 2),
     }
 
 
@@ -72,4 +84,10 @@ def build_packing_schedule(crate: Dict[str, Any], pieces_by_id: Dict[Any, Dict[s
             row_index += 1
             sequence += 1
 
-    return {"rows": rows, "unassigned_piece_ids": unassigned}
+    return {
+        "rows": rows,
+        "unassigned_piece_ids": unassigned,
+        "internal_length": internal_length,
+        "internal_width": float(crate.get("internal_width") or 0.0),
+        "internal_height": float(crate.get("internal_height") or 0.0),
+    }

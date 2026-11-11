@@ -1,3 +1,5 @@
+import pytest
+
 from app.services.planner_v3.packing_schedule import build_packing_schedule
 
 
@@ -43,8 +45,37 @@ def test_scenario_g_schedule_matches_the_reference_packing_drawing():
     # Every schedule row is tagged "main" (no splash layers in this fixture).
     assert all(r["layer"] == "main" for r in rows)
 
+    # Every row's slot_thickness/standing_height reflect the real physical
+    # packing model (pieces stand upright, thickness stacks sideways): all
+    # rows here share the same 3CM thickness and 25.5" standing width.
+    for r in rows:
+        assert r["slot_thickness_in"] == pytest.approx(1.18)
+        assert r["standing_height_in"] == pytest.approx(25.5)
+
+    assert schedule["internal_length"] == 85.0
+
     all_piece_ids = [pid for r in rows for pid in r["piece_ids"]]
     assert sorted(all_piece_ids) == sorted(pieces_by_id.keys())
+
+
+def test_slot_thickness_is_the_widest_piece_in_a_shared_row():
+    pieces_by_id = {
+        "thin": {"id": "thin", "length": 40, "width": 25.5, "thickness": "2CM"},
+        "thick": {"id": "thick", "length": 30, "width": 20, "thickness": "3CM"},
+    }
+    crate = {
+        "planner_v3_orientation": "horizontal",
+        "internal_length": 76.0,
+        "main_layer_piece_ids": ["thin", "thick"],
+        "planner_v3_splash_layers": [],
+    }
+    schedule = build_packing_schedule(crate, pieces_by_id)
+    assert len(schedule["rows"]) == 1
+    row = schedule["rows"][0]
+    # Thicker of the two pieces determines the slot; taller of the two
+    # determines the standing height — never averaged, never the thinner one.
+    assert row["slot_thickness_in"] == pytest.approx(1.18)
+    assert row["standing_height_in"] == pytest.approx(25.5)
 
 
 def test_splash_layers_become_their_own_schedule_rows():
