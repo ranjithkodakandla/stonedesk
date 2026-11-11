@@ -494,6 +494,7 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
         r.grooves = p.grooves || '-';
         r.groove_dimension = p.groove_dimension || '';
         r.groove_positions = Array.isArray(p.groove_positions) ? p.groove_positions.map(pos => ({ ...pos })) : [];
+        r.groove_edge_map = p.groove_edge_map ? { ...r.groove_edge_map, ...p.groove_edge_map } : { ...r.groove_edge_map };
         r.edge = p.edge || 'None';
         r.edge_area = p.edge_area || '';
         r.edge_map = p.edge_map ? { ...r.edge_map, ...p.edge_map } : { ...r.edge_map };
@@ -687,6 +688,7 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
           r.grooves = p.grooves || '-';
           r.groove_dimension = p.groove_dimension || '';
           r.groove_positions = Array.isArray(p.groove_positions) ? p.groove_positions.map(pos => ({ ...pos })) : [];
+          r.groove_edge_map = p.groove_edge_map ? { ...r.groove_edge_map, ...p.groove_edge_map } : { ...r.groove_edge_map };
           r.edge = p.edge || 'None';
           r.edge_area = p.edge_area || '';
           r.edge_map = p.edge_map ? { ...r.edge_map, ...p.edge_map } : { ...r.edge_map };
@@ -840,6 +842,7 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
             grooves: row.grooves || '-',
             groove_dimension: row.groove_dimension || '',
             groove_positions: row.groove_positions || [],
+            groove_edge_map: row.groove_edge_map || {},
             fragility: drawingCtx.fragility || 'Standard',
             orientation: drawingCtx.orientation || 'Auto',
             delivery_priority: drawingCtx.delivery_priority || 'Standard',

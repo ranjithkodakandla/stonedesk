@@ -189,6 +189,7 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
         grooves: piece.grooves || '-',
         groove_dimension: piece.groove_dimension || '',
         groove_positions: piece.groove_positions || [],
+        groove_edge_map: piece.groove_edge_map || {},
         edge: piece.edge || 'None',
         edge_area: piece.edge_area || '',
         edge_map: piece.edge_map || {},
