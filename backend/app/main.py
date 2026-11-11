@@ -41,8 +41,6 @@ from .services.planning_engine import (
     piece_weight as planning_piece_weight,
     reset_custom_color_densities,
     reset_wood_density_factors,
-    reset_project_density_override,
-    set_project_density_override,
     reset_project_weight_multiplier,
     set_project_weight_multiplier,
     weight_factor as planning_weight_factor,
@@ -356,8 +354,7 @@ def project_response(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         "planner_v3_unshippable_crates": _json_safe_floats(doc.get("planner_v3_unshippable_crates") or []),
         "planner_v3_container_optimization": _json_safe_floats(doc.get("planner_v3_container_optimization")),
         "delivery_payload_cap_kg": float(doc.get("delivery_payload_cap_kg") or 24000),
-        "density_override_kg_m3": doc.get("density_override_kg_m3"),
-        "weight_multiplier_kg_per_sqft": doc.get("weight_multiplier_kg_per_sqft"),
+        "weight_multiplier_kg_per_sqft_by_thickness": doc.get("weight_multiplier_kg_per_sqft_by_thickness", {}),
         "created_at": as_iso(doc.get("created_at")),
         "updated_at": as_iso(doc.get("updated_at")),
     }
@@ -398,6 +395,7 @@ def piece_response(doc: Dict[str, Any]) -> Dict[str, Any]:
         "grooves": doc.get("grooves", "-"),
         "groove_dimension": doc.get("groove_dimension"),
         "groove_positions": doc.get("groove_positions", []),
+        "groove_edge_map": doc.get("groove_edge_map", {}),
         "sink_offset_left": doc.get("sink_offset_left"),
         "sink_offset_right": doc.get("sink_offset_right"),
         "sink_length": doc.get("sink_length"),
@@ -771,6 +769,13 @@ class PieceCreate(BaseModel):
     grooves: str = "-"
     groove_dimension: Optional[float] = None
     groove_positions: List[Dict[str, Any]] = []
+    # Groove, per sink edge, as a distance from that sink edge (inches) —
+    # keys top/bottom/left/right, empty/absent = no groove on that side.
+    # Replaces the old numbered groove_positions (offset from sink center)
+    # as the primary way grooves are captured; groove_positions/
+    # groove_dimension/grooves are kept for backward compatibility with
+    # existing saved data, not removed.
+    groove_edge_map: Dict[str, str] = {}
     sink_offset_left: Optional[float] = None
     sink_offset_right: Optional[float] = None
     sink_length: Optional[float] = None
@@ -831,6 +836,13 @@ class PieceUpdate(BaseModel):
     grooves: str = "-"
     groove_dimension: Optional[float] = None
     groove_positions: List[Dict[str, Any]] = []
+    # Groove, per sink edge, as a distance from that sink edge (inches) —
+    # keys top/bottom/left/right, empty/absent = no groove on that side.
+    # Replaces the old numbered groove_positions (offset from sink center)
+    # as the primary way grooves are captured; groove_positions/
+    # groove_dimension/grooves are kept for backward compatibility with
+    # existing saved data, not removed.
+    groove_edge_map: Dict[str, str] = {}
     sink_offset_left: Optional[float] = None
     sink_offset_right: Optional[float] = None
     sink_length: Optional[float] = None
@@ -913,33 +925,26 @@ _PROJECT_ID_IN_PATH = re.compile(r"/projects/(\d+)")
 
 
 @app.middleware("http")
-async def apply_project_density_override(request: Request, call_next):
+async def apply_project_weight_multiplier(request: Request, call_next):
     """
-    Scopes every per-project weight calculation to that project's density override
-    (if any) for the duration of the request — see get_color_density() in
-    planning_engine.py, the single choke point all weight math funnels through.
+    Scopes every per-project weight calculation to that project's per-thickness
+    weight multiplier (if any) for the duration of the request — see
+    weight_factor() in planning_engine.py, the single choke point all weight
+    math funnels through.
     """
     match = _PROJECT_ID_IN_PATH.search(request.url.path)
-    tokens = None
     multiplier_token = None
     if match:
         project_id = int(match.group(1))
         project_doc = projects_col.find_one(
             {"id": project_id},
-            {"density_override_kg_m3": 1, "material": 1, "stone_color": 1, "weight_multiplier_kg_per_sqft": 1, "_id": 0},
+            {"weight_multiplier_kg_per_sqft_by_thickness": 1, "_id": 0},
         )
         pd = project_doc or {}
-        tokens = set_project_density_override(
-            pd.get("density_override_kg_m3"),
-            pd.get("material", "Granite"),
-            pd.get("stone_color", "") or "",
-        )
-        multiplier_token = set_project_weight_multiplier(pd.get("weight_multiplier_kg_per_sqft"))
+        multiplier_token = set_project_weight_multiplier(pd.get("weight_multiplier_kg_per_sqft_by_thickness"))
     try:
         return await call_next(request)
     finally:
-        if tokens is not None:
-            reset_project_density_override(tokens)
         if multiplier_token is not None:
             reset_project_weight_multiplier(multiplier_token)
 
@@ -990,45 +995,39 @@ def get_project(project_id: int):
     return project_response(project)
 
 
-@app.patch("/api/projects/{project_id}/density-override")
-def patch_density_override(project_id: int, data: Dict[str, Any] = Body(...)):
-    """
-    Per-project density override (kg/m³) — takes precedence over the shared/global
-    stone color density for this project only, for every weight calc (summary,
-    dispatch inventory, crate planning). Pass density_kg_m3: null to clear it and
-    fall back to the global color density again.
-    """
-    raw = data.get("density_kg_m3")
-    value = float(raw) if raw not in (None, "") else None
-    if value is not None and value <= 0:
-        raise HTTPException(status_code=400, detail="density_kg_m3 must be positive")
-    projects_col.update_one(
-        {"id": project_id},
-        {"$set": {"density_override_kg_m3": value, "updated_at": utc_now()}},
-    )
-    return {"density_override_kg_m3": value}
+_WEIGHT_MULTIPLIER_THICKNESSES = ("2CM", "3CM")
 
 
 @app.patch("/api/projects/{project_id}/weight-multiplier")
 def patch_weight_multiplier(project_id: int, data: Dict[str, Any] = Body(...)):
     """
-    Per-project weight MULTIPLYING FACTOR (kg per sqft) — an alternative to
-    density-based weight, for teams that estimate weight manually as
-    sqft × flat factor (e.g. 7.75) regardless of color/thickness. Takes
-    precedence over density and the material/thickness table outright for
-    every weight calc in this project (summary, crate planning, exports).
-    Pass weight_multiplier_kg_per_sqft: null to clear it and fall back to
-    density-based weight again.
+    Per-project weight MULTIPLYING FACTOR (kg per sqft), set separately per
+    thickness (2CM/3CM) — an alternative to density-based weight, for teams
+    that estimate weight manually as sqft x a flat factor per thickness
+    (e.g. 2CM -> 5.5, 3CM -> 7.75) rather than by color/density. Takes
+    precedence over density and the material/thickness table outright, for
+    whichever thickness it's set, for every weight calc in this project
+    (summary, crate planning, exports). Pass weight_multiplier_kg_per_sqft_by_thickness:
+    {"2CM": null} (or omit a key) to clear that thickness and fall back to
+    density-based weight for it again.
     """
-    raw = data.get("weight_multiplier_kg_per_sqft")
-    value = float(raw) if raw not in (None, "") else None
-    if value is not None and value <= 0:
-        raise HTTPException(status_code=400, detail="weight_multiplier_kg_per_sqft must be positive")
+    raw = data.get("weight_multiplier_kg_per_sqft_by_thickness") or {}
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="weight_multiplier_kg_per_sqft_by_thickness must be an object")
+    by_thickness: Dict[str, float] = {}
+    for thickness in _WEIGHT_MULTIPLIER_THICKNESSES:
+        value = raw.get(thickness)
+        if value in (None, ""):
+            continue
+        value = float(value)
+        if value <= 0:
+            raise HTTPException(status_code=400, detail=f"{thickness} weight multiplier must be positive")
+        by_thickness[thickness] = value
     projects_col.update_one(
         {"id": project_id},
-        {"$set": {"weight_multiplier_kg_per_sqft": value, "updated_at": utc_now()}},
+        {"$set": {"weight_multiplier_kg_per_sqft_by_thickness": by_thickness, "updated_at": utc_now()}},
     )
-    return {"weight_multiplier_kg_per_sqft": value}
+    return {"weight_multiplier_kg_per_sqft_by_thickness": by_thickness}
 
 
 @app.patch("/api/projects/{project_id}/planner-payload")
@@ -1311,6 +1310,7 @@ def _build_piece_doc(project_id: int, piece: PieceCreate, piece_id: int, extra: 
         "grooves": piece.grooves,
         "groove_dimension": piece.groove_dimension,
         "groove_positions": piece.groove_positions,
+        "groove_edge_map": piece.groove_edge_map,
         "sink_offset_left": piece.sink_offset_left,
         "sink_offset_right": piece.sink_offset_right,
         "sink_length": piece.sink_length,
@@ -1743,6 +1743,7 @@ def create_pieces_batch(project_id: int, pieces_data: List[PieceCreate]):
                 "grooves": piece.grooves,
                 "groove_dimension": piece.groove_dimension,
                 "groove_positions": piece.groove_positions,
+                "groove_edge_map": piece.groove_edge_map,
                 "sink_offset_left": piece.sink_offset_left,
                 "sink_offset_right": piece.sink_offset_right,
                 "sink_length": piece.sink_length,
@@ -1819,6 +1820,7 @@ def get_project_drawings(project_id: int):
                     "grooves": p.get("grooves") or "-",
                     "groove_dimension": p.get("groove_dimension"),
                     "groove_positions": p.get("groove_positions") or [],
+                    "groove_edge_map": p.get("groove_edge_map") or {},
                     "edge": p.get("edge") or "None",
                     "edge_area": p.get("edge_area") or "",
                     "edge_map": p.get("edge_map") or {},
@@ -1923,6 +1925,7 @@ def update_piece(piece_id: int, piece: PieceUpdate):
         "grooves": piece.grooves,
         "groove_dimension": piece.groove_dimension,
         "groove_positions": piece.groove_positions,
+        "groove_edge_map": piece.groove_edge_map,
         "sink_offset_left": piece.sink_offset_left,
         "sink_offset_right": piece.sink_offset_right,
         "sink_length": piece.sink_length,

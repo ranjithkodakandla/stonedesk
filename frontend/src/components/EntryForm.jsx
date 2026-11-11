@@ -317,90 +317,33 @@ const MirrorModal = ({ drawings, loading, onClose, onApply }) => {
   );
 };
 
-// Per-project density override (kg/m³) — overrides the shared/global stone color
-// density for this project only. Every weight calc (summary, dispatch inventory,
-// crate planning) recalculates live once this is saved.
-function DensityOverrideControl({ project, onDataChange }) {
-  const [value, setValue] = useState(project.density_override_kg_m3 ?? '');
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    setValue(project.density_override_kg_m3 ?? '');
-  }, [project.id, project.density_override_kg_m3]);
-
-  const persisted = project.density_override_kg_m3 ?? '';
-  const dirty = String(value) !== String(persisted);
-
-  const save = async (nextValue) => {
-    setSaving(true);
-    try {
-      await axios.patch(`${API_BASE}/projects/${project.id}/density-override`, {
-        density_kg_m3: nextValue === '' ? null : Number(nextValue),
-      });
-      onDataChange?.();
-    } catch (err) {
-      console.error('Failed to save density override', err);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div>
-      <label className="label-text">Density Override (kg/m³)</label>
-      <div className="flex gap-1.5">
-        <input
-          type="number"
-          min="1"
-          placeholder="Global default"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && dirty && save(value)}
-          className="input-field"
-        />
-        {dirty && (
-          <button
-            type="button"
-            disabled={saving}
-            onClick={() => save(value)}
-            className="rounded-lg border border-blue-600 bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700 whitespace-nowrap"
-          >
-            {saving ? 'Updating…' : 'Update'}
-          </button>
-        )}
-        {!dirty && project.density_override_kg_m3 != null && (
-          <button
-            type="button"
-            disabled={saving}
-            onClick={() => { setValue(''); save(''); }}
-            className="rounded-lg border border-slate-200 px-2 text-xs text-slate-500 hover:bg-slate-50 whitespace-nowrap"
-            title="Clear override, use global density again"
-          >
-            Clear
-          </button>
-        )}
-      </div>
-      <p className="mt-1 text-[10px] text-slate-400">This project only — leave blank to use the global color density. Changes apply on Update.</p>
-    </div>
-  );
-}
-
+// Per-project, per-thickness weight MULTIPLYING FACTOR (kg per sqft) — an
+// alternative to density-based weight, for teams that estimate weight
+// manually as sqft x a flat factor per thickness (e.g. 2CM -> 5.5,
+// 3CM -> 7.75) rather than by color/density. A thickness left blank falls
+// back to density-based weight for that thickness only. Replaces the old
+// single flat factor (which ignored thickness) and the per-project density
+// override (removed — this is the supported override mechanism now).
 function WeightMultiplierControl({ project, onDataChange }) {
-  const [value, setValue] = useState(project.weight_multiplier_kg_per_sqft ?? '');
+  const persisted = project.weight_multiplier_kg_per_sqft_by_thickness || {};
+  const [values, setValues] = useState({ '2CM': persisted['2CM'] ?? '', '3CM': persisted['3CM'] ?? '' });
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    setValue(project.weight_multiplier_kg_per_sqft ?? '');
-  }, [project.id, project.weight_multiplier_kg_per_sqft]);
+    const p = project.weight_multiplier_kg_per_sqft_by_thickness || {};
+    setValues({ '2CM': p['2CM'] ?? '', '3CM': p['3CM'] ?? '' });
+  }, [project.id, project.weight_multiplier_kg_per_sqft_by_thickness]);
 
-  const persisted = project.weight_multiplier_kg_per_sqft ?? '';
-  const dirty = String(value) !== String(persisted);
+  const dirty = ['2CM', '3CM'].some((t) => String(values[t]) !== String(persisted[t] ?? ''));
 
-  const save = async (nextValue) => {
+  const save = async (nextValues) => {
     setSaving(true);
     try {
       await axios.patch(`${API_BASE}/projects/${project.id}/weight-multiplier`, {
-        weight_multiplier_kg_per_sqft: nextValue === '' ? null : Number(nextValue),
+        weight_multiplier_kg_per_sqft_by_thickness: {
+          '2CM': nextValues['2CM'] === '' ? null : Number(nextValues['2CM']),
+          '3CM': nextValues['3CM'] === '' ? null : Number(nextValues['3CM']),
+        },
       });
       onDataChange?.();
     } catch (err) {
@@ -410,44 +353,45 @@ function WeightMultiplierControl({ project, onDataChange }) {
     }
   };
 
+  const setThickness = (thickness, v) => setValues((prev) => ({ ...prev, [thickness]: v }));
+
   return (
-    <div>
+    <div className="md:col-span-2">
       <label className="label-text">Weight Multiplying Factor (kg/sqft)</label>
-      <div className="flex gap-1.5">
-        <input
-          type="number"
-          min="0.1"
-          step="0.01"
-          placeholder="e.g., 7.75"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && dirty && save(value)}
-          className="input-field"
-        />
+      <div className="flex gap-1.5 items-start">
+        <div className="flex-1">
+          <span className="text-[10px] text-slate-400">2CM</span>
+          <input
+            type="number" min="0.1" step="0.01" placeholder="e.g., 5.5"
+            value={values['2CM']}
+            onChange={(e) => setThickness('2CM', e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && dirty && save(values)}
+            className="input-field"
+          />
+        </div>
+        <div className="flex-1">
+          <span className="text-[10px] text-slate-400">3CM</span>
+          <input
+            type="number" min="0.1" step="0.01" placeholder="e.g., 7.75"
+            value={values['3CM']}
+            onChange={(e) => setThickness('3CM', e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && dirty && save(values)}
+            className="input-field"
+          />
+        </div>
         {dirty && (
           <button
             type="button"
             disabled={saving}
-            onClick={() => save(value)}
-            className="rounded-lg border border-blue-600 bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700 whitespace-nowrap"
+            onClick={() => save(values)}
+            className="rounded-lg border border-blue-600 bg-blue-600 px-3 py-2 mt-3.5 text-xs font-semibold text-white hover:bg-blue-700 whitespace-nowrap"
           >
             {saving ? 'Updating…' : 'Update'}
           </button>
         )}
-        {!dirty && project.weight_multiplier_kg_per_sqft != null && (
-          <button
-            type="button"
-            disabled={saving}
-            onClick={() => { setValue(''); save(''); }}
-            className="rounded-lg border border-slate-200 px-2 text-xs text-slate-500 hover:bg-slate-50 whitespace-nowrap"
-            title="Clear override, use density-based weight again"
-          >
-            Clear
-          </button>
-        )}
       </div>
       <p className="mt-1 text-[10px] text-slate-400">
-        Overrides density entirely: weight = sqft × this factor. Leave blank to use color density instead. Changes apply on Update.
+        Overrides density for that thickness only: weight = sqft × this factor. Leave a thickness blank to use color density for it instead. Changes apply on Update.
       </p>
     </div>
   );
@@ -1041,7 +985,6 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
           <div><label className="label-text">Customer</label><input name="customer" value={project.customer || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
           <div><label className="label-text">Job #</label><input name="job_number" value={project.job_number || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
           <div><label className="label-text">Date</label><input type="date" name="date" value={project.date || ''} onChange={handleProjectChange} onBlur={handleProjectBlur} className="input-field" /></div>
-          <DensityOverrideControl project={project} onDataChange={onDataChange} />
           <WeightMultiplierControl project={project} onDataChange={onDataChange} />
         </div>
 

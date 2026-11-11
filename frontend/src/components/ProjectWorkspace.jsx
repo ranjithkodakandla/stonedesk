@@ -122,8 +122,7 @@ const ProjectWorkspace = ({ projectId, goBack }) => {
   }, [
     projectId,
     pieces.length,
-    project?.density_override_kg_m3,
-    project?.weight_multiplier_kg_per_sqft,
+    project?.weight_multiplier_kg_per_sqft_by_thickness,
     project?.material,
     project?.stone_color,
     project?.thickness,
