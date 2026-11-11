@@ -1,9 +1,15 @@
 """Reproduces the supplied Kitchen And Range Tops packing drawing (Scenario
-G): internal crate dims 80 x 15 x 32.5in, 18 pieces packed as 6 single-piece
-rows (79 x 25.5 x 3CM) plus 6 two-piece rows (49 x 25.5 x 3CM paired with
-19 x 25.5 x 3CM). This is a reproducible test fixture built from the
-drawing's own numbers, not a hardcoded packing rule — any pieces with these
-relative lengths should pack the same way."""
+G): internal crate dims 80 x 15.2 x 27.5in, 18 pieces packed as 6
+single-piece rows (79 x 25.5 x 3CM) plus 6 two-piece rows (49 x 25.5 x 3CM
+paired with 19 x 25.5 x 3CM). This is a reproducible test fixture built from
+the drawing's own numbers, not a hardcoded packing rule — any pieces with
+these relative lengths should pack the same way.
+
+Clearance convention (matches the fabricator's own reference packing
+sheets): Internal Crate Size = Stone Size + 1"/1"/2" flat clearance, with
++1" headroom per present splash layer added to height — see
+_KV_LENGTH_CLEARANCE_IN / _KV_WIDTH_CLEARANCE_IN / _KV_HEIGHT_CLEARANCE_IN /
+_KV_HEADROOM_PER_SPLASH_LAYER_IN in dimensions.py."""
 from app.services.planner_v3.dimensions import group_main_pieces_into_rows, horizontal_crate_dimensions
 
 
@@ -72,16 +78,15 @@ def test_internal_width_reflects_row_count_not_raw_piece_count():
     dims = horizontal_crate_dimensions(pieces, [], "3CM", wood_thickness=1.25)
     # Width must be sized for 12 thickness-slots (rows), not 18 — pairing
     # the short pieces is the whole point of the fix.
-    import math
-    from app.services.planner_v3.dimensions import _ROW_SEPARATOR_IN, _SIDE_FRAME
+    from app.services.planner_v3.dimensions import _KV_WIDTH_CLEARANCE_IN
     from app.services.planning_engine import thickness_inches
 
-    expected_width = round(12 * thickness_inches("3CM") + 11 * _ROW_SEPARATOR_IN + _SIDE_FRAME, 1)
+    expected_width = round(12 * thickness_inches("3CM") + _KV_WIDTH_CLEARANCE_IN, 1)
     assert dims["internal_width"] == expected_width
 
     # Sanity: strictly narrower than the old one-row-per-piece formula would
     # have given for these same 18 pieces (18 slots instead of 12).
-    old_one_row_per_piece_width = round(18 * thickness_inches("3CM") + 17 * _ROW_SEPARATOR_IN + _SIDE_FRAME, 1)
+    old_one_row_per_piece_width = round(18 * thickness_inches("3CM") + _KV_WIDTH_CLEARANCE_IN, 1)
     assert dims["internal_width"] < old_one_row_per_piece_width
 
 
@@ -107,8 +112,8 @@ def test_three_identical_leftover_pieces_consolidate_past_the_original_cap():
     assert sorted(p["id"] for p in by_length[1]) == ["a", "b", "c"]
 
     # Crate length grew to fit the 3x25 row (25*3 + 2 gaps of 1" = 77") plus
-    # the standard 6" end clearance — not capped at the original 67" piece.
-    assert dims["internal_length"] == 83.0
+    # the standard 1" end clearance — not capped at the original 67" piece.
+    assert dims["internal_length"] == 78.0
 
 
 def test_identical_pieces_that_never_paired_up_at_all_stay_separate():
@@ -122,7 +127,7 @@ def test_identical_pieces_that_never_paired_up_at_all_stay_separate():
     rows = group_main_pieces_into_rows(pieces, usable_length=dims["internal_length"])
     assert len(rows) == 6
     assert all(len(row) == 1 for row in rows)
-    assert dims["internal_length"] == 85.0  # unchanged: 79 + 6, no consolidation applies
+    assert dims["internal_length"] == 80.0  # unchanged: 79 + 1, no consolidation applies
 
 
 def test_dissimilar_leftover_pieces_never_merge_with_each_other():
@@ -156,7 +161,7 @@ def test_no_standout_floor_does_not_apply_when_a_distinct_longer_piece_exists():
     by_len = sorted(rows, key=len)
     assert len(by_len[0]) == 1 and by_len[0][0]["id"] == "big"
     assert len(by_len[1]) == 3
-    assert dims["internal_length"] == 83.0  # unchanged from the dedicated consolidation test
+    assert dims["internal_length"] == 78.0  # unchanged from the dedicated consolidation test
 
 
 def test_no_standout_floor_does_not_apply_to_the_reference_18_piece_drawing():
@@ -168,7 +173,7 @@ def test_no_standout_floor_does_not_apply_to_the_reference_18_piece_drawing():
     dims = horizontal_crate_dimensions(pieces, [], "3CM", wood_thickness=1.25)
     rows = group_main_pieces_into_rows(pieces, usable_length=dims["internal_length"])
     assert len(rows) == 12
-    assert dims["internal_length"] == 85.0
+    assert dims["internal_length"] == 80.0
 
 
 def test_no_standout_floor_still_respects_a_single_piece_longer_than_120():

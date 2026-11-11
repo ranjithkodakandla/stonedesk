@@ -14,6 +14,19 @@ _SIDE_FRAME = 4.0           # framing on the width/row-stack axis
 _ROW_PIECE_GAP_IN = 1.0     # clearance between two pieces sharing one row, laid end to end
 _NO_STANDOUT_ROW_CAP_IN = 120.0  # see _row_grouping_cap()
 
+# Flat clearance convention matching the fabricator's own reference packing
+# sheets (Stone Size -> Internal Crate Size = +1"/+1"/+2", with +1" height
+# headroom per present splash layer on top of that). This replaces the
+# previous per-row-foam + side-frame + forklift-clearance model for
+# horizontal_crate_dimensions ONLY — the island/cassette functions below
+# keep their own existing constants (_BASE_SUPPORT_IN, _HEADROOM,
+# _FOAM_LAYER, _HONEYCOMB_SEP_IN, _SIDE_FRAME, _ROW_SEPARATOR_IN), which are
+# untouched and still used there.
+_KV_LENGTH_CLEARANCE_IN = 1.0
+_KV_WIDTH_CLEARANCE_IN = 1.0
+_KV_HEIGHT_CLEARANCE_IN = 2.0
+_KV_HEADROOM_PER_SPLASH_LAYER_IN = 1.0
+
 
 def _max_piece_length(pieces: List[Dict[str, Any]]) -> float:
     if not pieces:
@@ -175,22 +188,22 @@ def horizontal_crate_dimensions(
     phase_a_cap = _row_grouping_cap(main_pieces) if main_pieces else _max_piece_length(all_p) + 6.0
     rows_for_length = group_main_pieces_into_rows(main_pieces, usable_length=phase_a_cap) if main_pieces else []
     longest_row_raw = max((_row_raw_length(row) for row in rows_for_length), default=0.0)
-    internal_length = max(_max_piece_length(all_p), longest_row_raw) + 6.0
+    internal_length = max(_max_piece_length(all_p), longest_row_raw) + _KV_LENGTH_CLEARANCE_IN
 
-    # Height: main tops stand upright on their short edge, pallet + headroom below/above,
-    # then splash layers stack on top (each layer already foam-separated).
+    # Height: main tops stand upright on their short edge; splash layers
+    # stack on top, each contributing its own physical stacking height (a
+    # splash piece's "width" field — e.g. a 4"-tall back splash — not its
+    # material thickness), plus 1" headroom per present layer.
     height_ref = main_pieces if main_pieces else all_p
     main_h = max(_piece_short_edge(p) for p in height_ref)
 
     splash_h = 0.0
     active_layers = [layer for layer in splash_layers if layer]
-    for li, layer in enumerate(active_layers):
-        layer_t = max(thickness_inches(str(p.get("thickness") or default_thickness)) for p in layer)
-        splash_h += layer_t + _FOAM_LAYER
-        if li + 1 < len(active_layers):
-            splash_h += _HONEYCOMB_SEP_IN
+    for layer in active_layers:
+        layer_h = max(parse_float(p.get("width")) for p in layer)
+        splash_h += layer_h + _KV_HEADROOM_PER_SPLASH_LAYER_IN
 
-    internal_height = main_h + _BASE_SUPPORT_IN + _HEADROOM + splash_h
+    internal_height = main_h + splash_h + _KV_HEIGHT_CLEARANCE_IN
 
     # Width: thickness-stack of main-top "rows". A row is a thickness-slot,
     # not necessarily one piece — two or more pieces short enough to lie end
@@ -204,9 +217,9 @@ def horizontal_crate_dimensions(
             max(thickness_inches(str(p.get("thickness") or default_thickness)) for p in row)
             for row in rows
         ]
-        internal_width = sum(row_thicknesses) + max(0, len(rows) - 1) * _ROW_SEPARATOR_IN + _SIDE_FRAME
+        internal_width = sum(row_thicknesses) + _KV_WIDTH_CLEARANCE_IN
     else:
-        internal_width = thickness_inches(default_thickness) + _SIDE_FRAME
+        internal_width = thickness_inches(default_thickness) + _KV_WIDTH_CLEARANCE_IN
 
     return {
         "internal_length": round(internal_length, 1),

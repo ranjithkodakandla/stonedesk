@@ -3,7 +3,7 @@ import axios from 'axios';
 import { API_BASE } from '../utils/plannerUtils';
 import { weightBatchParts } from '../utils/crateEstimator';
 import { thicknessInchesFromLabel } from '../utils/thicknessConstants';
-import { groupPiecesIntoRows, rowRawLength, rowGroupingCap, ROW_SEPARATOR_IN } from '../utils/rowPacking';
+import { groupPiecesIntoRows, rowRawLength, rowGroupingCap } from '../utils/rowPacking';
 import MultiSelectDropdown from './MultiSelectDropdown';
 import TargetWeightControl from './TargetWeightControl';
 
@@ -206,8 +206,11 @@ export function computeCrateDimensions(parts, dimConfig) {
         return L > 0 && W > 0 ? Math.min(L, W) : Math.max(L, W);
       }))
     : 0;
-  const backH = backSplash.length ? Math.max(...backSplash.map((p) => thicknessInches(p.thickness))) : 0;
-  const sideH = sideSplash.length ? Math.max(...sideSplash.map((p) => thicknessInches(p.thickness))) : 0;
+  // Splash height contribution is the splash piece's own physical stacking
+  // height (its "width" field — e.g. a 4"-tall back splash), not its
+  // material thickness — matches the fabricator's reference packing sheets.
+  const backH = backSplash.length ? Math.max(...backSplash.map((p) => p.width || 0)) : 0;
+  const sideH = sideSplash.length ? Math.max(...sideSplash.map((p) => p.width || 0)) : 0;
 
   let stackedHeight = standingHeight;
   if (backH > 0) stackedHeight += LAYER_SEPARATOR_IN + backH;
@@ -216,8 +219,11 @@ export function computeCrateDimensions(parts, dimConfig) {
   const rowThicknessSum = rows.reduce((s, row) => s + Math.max(...row.map((p) => thicknessInches(p.thickness))), 0);
 
   const internal_length = Math.max(maxSingleLong, longestRowRaw) + cfg.lengthMargin * 2;
+  // Flat clearance, no per-row foam separator — matches the fabricator's
+  // reference packing sheets (Stone Width + 1" clearance), not a per-row
+  // foam-gap model.
   const internal_width = rows.length
-    ? rowThicknessSum + Math.max(0, rows.length - 1) * ROW_SEPARATOR_IN + cfg.widthMargin * 2
+    ? rowThicknessSum + cfg.widthMargin * 2
     : cfg.widthMargin * 2;
   const internal_height = stackedHeight + cfg.heightMargin;
 

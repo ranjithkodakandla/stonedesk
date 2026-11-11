@@ -17,10 +17,9 @@ describe('computeCrateDimensions (the actual "Filter parts and build crates" scr
     // this is the exact bug: the old code used Math.max() of thicknesses,
     // as if only one piece's worth of material existed regardless of count.
     const perRowThickness = 1.18; // 3CM
-    const rowSeparator = 0.75;
-    const expectedWidth = 12 * perRowThickness + 11 * rowSeparator + DEFAULT_DIM_CONFIG.kv.widthMargin * 2;
+    const expectedWidth = 12 * perRowThickness + DEFAULT_DIM_CONFIG.kv.widthMargin * 2;
     expect(dims.internal_width).toBeCloseTo(expectedWidth, 1);
-    expect(dims.internal_width).toBeLessThan(18 * perRowThickness + 17 * rowSeparator);
+    expect(dims.internal_width).toBeLessThan(18 * perRowThickness + DEFAULT_DIM_CONFIG.kv.widthMargin * 2);
   });
 
   it('consolidates three identical leftover pieces past the original cap (67 + 3x25)', () => {
@@ -60,8 +59,7 @@ describe('computeCrateDimensions (the actual "Filter parts and build crates" scr
     const parts = Array.from({ length: 5 }, (_, i) => rangeTop(`p${i}`, 15));
     const dims = computeCrateDimensions(parts, DEFAULT_DIM_CONFIG);
     const perRowThickness = 1.18;
-    const rowSeparator = 0.75;
-    const oneRowPerPieceWidth = 5 * perRowThickness + 4 * rowSeparator + DEFAULT_DIM_CONFIG.kv.widthMargin * 2;
+    const oneRowPerPieceWidth = 5 * perRowThickness + DEFAULT_DIM_CONFIG.kv.widthMargin * 2;
     expect(dims.internal_width).toBeLessThan(oneRowPerPieceWidth);
   });
 });
