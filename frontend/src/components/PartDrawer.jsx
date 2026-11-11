@@ -140,6 +140,69 @@ const Section = ({ id, title, children, defaultOpen = true }) => {
   );
 };
 
+// These three are hoisted to module scope on purpose — defining a component
+// function inside another component's body gives it a new identity every
+// render, so React remounts its DOM on every keystroke (losing focus after
+// one character typed). Keeping them here, taking state via props instead of
+// closing over `local`, is what keeps the corner-radius/edge-polish/groove
+// inputs stable while typing.
+const EdgeBtn = ({ side, label, value, onCycle }) => (
+  <button type="button" onClick={() => onCycle(side)}
+    className={`text-[11px] font-medium border rounded-md px-3 py-2 transition-all select-none text-center ${EDGE_COLORS[value]}`}>
+    <div className="text-[9px] font-normal opacity-70">{label}</div>
+    <div className="font-bold">{EDGE_LABELS[value]}</div>
+  </button>
+);
+
+const CornerChk = ({ corner, label, checked, radiusValue, placeholderRadius, onToggle, onRadiusChange }) => (
+  <div className={`rounded-lg border transition-all px-3 py-2.5 ${checked ? 'bg-violet-50 border-violet-300' : 'bg-white border-slate-200'}`}>
+    <label className="flex items-center gap-2 text-xs font-medium cursor-pointer select-none">
+      <input type="checkbox" checked={checked} onChange={e => onToggle(corner, e.target.checked)}
+        className="accent-violet-600 w-3.5 h-3.5" />
+      <span className={checked ? 'text-violet-700' : 'text-slate-500'}>{label}</span>
+    </label>
+    {checked && (
+      <div className="flex items-center gap-1.5 mt-1.5 pl-5">
+        <input type="number" step="0.0625" min="0"
+          value={radiusValue ?? ''}
+          onChange={e => onRadiusChange(corner, e.target.value)}
+          placeholder={placeholderRadius}
+          className="w-16 text-[11px] border border-slate-200 rounded px-1.5 py-1" />
+        <span className="text-[10px] text-slate-400">in{!radiusValue ? ' (default)' : ''}</span>
+      </div>
+    )}
+  </div>
+);
+
+const GrooveSinkDiagram = ({
+  svgWidth, svgHeight, outerX, outerY, outerW, outerH, rectX, rectY, rectW, rectH,
+  cx, cy, scale, sinkLenIn, sinkWidIn, positions, onDiagramClick, onRemovePoint,
+}) => (
+  <svg
+    viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+    className="w-full border border-slate-200 rounded-lg bg-slate-50 cursor-crosshair"
+    style={{ height: svgHeight }}
+    onClick={onDiagramClick}
+  >
+    <rect x={outerX} y={outerY} width={outerW} height={outerH}
+      fill="none" stroke="#7c3aed" strokeWidth="1.25" strokeDasharray="4 3" />
+    <rect x={rectX} y={rectY} width={rectW} height={rectH}
+      fill="#fff" stroke="#94a3b8" strokeWidth="1.5" rx="3" />
+    <text x={cx} y={cy + 3} textAnchor="middle" fontSize="9" fill="#cbd5e1">
+      Sink ({sinkLenIn.toFixed(1)}" × {sinkWidIn.toFixed(1)}")
+    </text>
+    {positions.map((pos, i) => (
+      <circle key={i}
+        cx={cx + Number(pos.x || 0) * scale}
+        cy={cy + Number(pos.y || 0) * scale}
+        r="4.5" fill="#7c3aed" stroke="#fff" strokeWidth="1"
+        onClick={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => { e.stopPropagation(); onRemovePoint(i); }}
+      />
+    ))}
+  </svg>
+);
+
 const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo, defaultCornerRadiusIn }) => {
   const bodyRef = useRef(null);
   const defaultRadius = defaultCornerRadiusIn ?? FALLBACK_DEFAULT_CORNER_RADIUS_IN;
@@ -188,6 +251,10 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo, defaultCor
     const newEdgeMap = { ...local.edge_map, [side]: v };
     const newRadiusCorners = deriveCornersFromEdgeMap(newEdgeMap, local.radius_corners, local.radius_corner_explicit);
     push({ ...local, edge_map: newEdgeMap, edge_area: edgeAreaFromMap(newEdgeMap), radius_corners: newRadiusCorners });
+  };
+  const cycleEdge = (side) => {
+    const current = (local.edge_map || DEFAULT_EDGE_MAP)[side] || 'none';
+    setEdge(side, EDGE_OPTIONS[(EDGE_OPTIONS.indexOf(current) + 1) % EDGE_OPTIONS.length]);
   };
   // User-driven corner selection always marks the corner explicit, so a
   // later edge change never overrides what was deliberately chosen here —
@@ -264,48 +331,20 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo, defaultCor
   const rc = local.radius_corners || DEFAULT_RADIUS_CORNERS;
   const activeSides = Object.values(em).filter(v => v !== 'none').length;
   const activeCorners = Object.values(rc).filter(Boolean).length;
+  const cornerProps = (corner) => ({
+    corner,
+    checked: rc[corner] || false,
+    radiusValue: local.radius_corner_values?.[corner] ?? '',
+    placeholderRadius: effectiveCornerRadius(corner, local.radius_corner_values, local.radius_value, defaultRadius).toFixed(3),
+    onToggle: setCorner,
+    onRadiusChange: setCornerRadius,
+  });
   const L = Number(local.length) || 0;
   const W = Number(local.width) || 0;
   const hasSink = local.sink_type && local.sink_type !== 'No Sink';
   const tapHoleCount = countFromOption(local.tap_holes);
   const sinkLenIn = Number(local.sink_length) || Math.max(L * 0.3, 1);
   const sinkWidIn = Number(local.sink_width) || Math.max(W * 0.5, 1);
-
-  const EdgeBtn = ({ side, label }) => {
-    const val = em[side] || 'none';
-    const cycle = () => setEdge(side, EDGE_OPTIONS[(EDGE_OPTIONS.indexOf(val) + 1) % EDGE_OPTIONS.length]);
-    return (
-      <button type="button" onClick={cycle}
-        className={`text-[11px] font-medium border rounded-md px-3 py-2 transition-all select-none text-center ${EDGE_COLORS[val]}`}>
-        <div className="text-[9px] font-normal opacity-70">{label}</div>
-        <div className="font-bold">{EDGE_LABELS[val]}</div>
-      </button>
-    );
-  };
-
-  const CornerChk = ({ corner, label }) => {
-    const checked = rc[corner] || false;
-    const radius = effectiveCornerRadius(corner, local.radius_corner_values, local.radius_value, defaultRadius);
-    return (
-      <div className={`rounded-lg border transition-all px-3 py-2.5 ${checked ? 'bg-violet-50 border-violet-300' : 'bg-white border-slate-200'}`}>
-        <label className="flex items-center gap-2 text-xs font-medium cursor-pointer select-none">
-          <input type="checkbox" checked={checked} onChange={e => setCorner(corner, e.target.checked)}
-            className="accent-violet-600 w-3.5 h-3.5" />
-          <span className={checked ? 'text-violet-700' : 'text-slate-500'}>{label}</span>
-        </label>
-        {checked && (
-          <div className="flex items-center gap-1.5 mt-1.5 pl-5">
-            <input type="number" step="0.0625" min="0"
-              value={local.radius_corner_values?.[corner] ?? ''}
-              onChange={e => setCornerRadius(corner, e.target.value)}
-              placeholder={radius.toFixed(3)}
-              className="w-16 text-[11px] border border-slate-200 rounded px-1.5 py-1" />
-            <span className="text-[10px] text-slate-400">in{!local.radius_corner_values?.[corner] ? ' (default)' : ''}</span>
-          </div>
-        )}
-      </div>
-    );
-  };
 
   const GROOVE_SVG_W = 260;
   const GROOVE_SVG_H = 160;
@@ -354,32 +393,6 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo, defaultCor
       addGroovePosition(edge, Number(along.toFixed(3)));
     }
   };
-
-  const GrooveSinkDiagram = () => (
-    <svg
-      viewBox={`0 0 ${GROOVE_SVG_W} ${GROOVE_SVG_H}`}
-      className="w-full border border-slate-200 rounded-lg bg-slate-50 cursor-crosshair"
-      style={{ height: GROOVE_SVG_H }}
-      onClick={handleGrooveDiagramClick}
-    >
-      <rect x={grooveOuterX} y={grooveOuterY} width={grooveOuterW} height={grooveOuterH}
-        fill="none" stroke="#7c3aed" strokeWidth="1.25" strokeDasharray="4 3" />
-      <rect x={grooveRectX} y={grooveRectY} width={grooveRectW} height={grooveRectH}
-        fill="#fff" stroke="#94a3b8" strokeWidth="1.5" rx="3" />
-      <text x={grooveCx} y={grooveCy + 3} textAnchor="middle" fontSize="9" fill="#cbd5e1">
-        Sink ({sinkLenIn.toFixed(1)}" × {sinkWidIn.toFixed(1)}")
-      </text>
-      {local.groove_positions.map((pos, i) => (
-        <circle key={i}
-          cx={grooveCx + Number(pos.x || 0) * grooveScale}
-          cy={grooveCy + Number(pos.y || 0) * grooveScale}
-          r="4.5" fill="#7c3aed" stroke="#fff" strokeWidth="1"
-          onClick={(e) => e.stopPropagation()}
-          onDoubleClick={(e) => { e.stopPropagation(); removeGroovePosition(i); }}
-        />
-      ))}
-    </svg>
-  );
 
   const validDests = (destinations || []).filter(d => d.building || d.floor || d.flat);
   const handleSave = () => {
@@ -545,7 +558,16 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo, defaultCor
                   Double-click a point to remove it. Changing the distance above moves the line (and every groove on it).
                   {local.groove_positions.length > 0 && ` ${local.groove_positions.length} placed.`}
                 </p>
-                <GrooveSinkDiagram />
+                <GrooveSinkDiagram
+                  svgWidth={GROOVE_SVG_W} svgHeight={GROOVE_SVG_H}
+                  outerX={grooveOuterX} outerY={grooveOuterY} outerW={grooveOuterW} outerH={grooveOuterH}
+                  rectX={grooveRectX} rectY={grooveRectY} rectW={grooveRectW} rectH={grooveRectH}
+                  cx={grooveCx} cy={grooveCy} scale={grooveScale}
+                  sinkLenIn={sinkLenIn} sinkWidIn={sinkWidIn}
+                  positions={local.groove_positions}
+                  onDiagramClick={handleGrooveDiagramClick}
+                  onRemovePoint={removeGroovePosition}
+                />
               </div>
             )}
           </Section>
@@ -601,15 +623,15 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo, defaultCor
           <Section id="section-edge-dims" title="Edge Dimensions">
             <p className="text-[11px] text-slate-500 mb-4">Click a side to cycle: — → Pencil Round → Flat Chamfer 1mm → Cut → Manual → —<br />Top/Bottom = Length side. Left/Right = Width side.</p>
             <div className="flex flex-col items-center gap-2">
-              <EdgeBtn side="top" label={`Top  (L${L > 0 ? ` = ${L.toFixed(1)}"` : ''})`} />
+              <EdgeBtn side="top" label={`Top  (L${L > 0 ? ` = ${L.toFixed(1)}"` : ''})`} value={em.top || 'none'} onCycle={cycleEdge} />
               <div className="flex items-stretch gap-2 w-full">
-                <EdgeBtn side="left" label={`Left  (W${W > 0 ? ` = ${W.toFixed(1)}"` : ''})`} />
+                <EdgeBtn side="left" label={`Left  (W${W > 0 ? ` = ${W.toFixed(1)}"` : ''})`} value={em.left || 'none'} onCycle={cycleEdge} />
                 <div className="flex-1 min-h-[64px] rounded-lg border-2 border-dashed border-slate-200 bg-slate-50 flex items-center justify-center text-xs text-slate-400 font-mono">
                   {L > 0 && W > 0 ? `${L.toFixed(1)}" × ${W.toFixed(1)}"` : 'PIECE'}
                 </div>
-                <EdgeBtn side="right" label={`Right  (W${W > 0 ? ` = ${W.toFixed(1)}"` : ''})`} />
+                <EdgeBtn side="right" label={`Right  (W${W > 0 ? ` = ${W.toFixed(1)}"` : ''})`} value={em.right || 'none'} onCycle={cycleEdge} />
               </div>
-              <EdgeBtn side="bottom" label={`Bottom  (L${L > 0 ? ` = ${L.toFixed(1)}"` : ''})`} />
+              <EdgeBtn side="bottom" label={`Bottom  (L${L > 0 ? ` = ${L.toFixed(1)}"` : ''})`} value={em.bottom || 'none'} onCycle={cycleEdge} />
             </div>
             {activeSides > 0 && (
               <p className="mt-3 text-xs text-blue-600 font-medium">{activeSides} side{activeSides !== 1 ? 's' : ''} configured</p>
@@ -628,10 +650,10 @@ const PartDrawer = ({ row, destinations, onUpdate, onClose, scrollTo, defaultCor
               <div>
                 <label className="label-text block mb-2">Corners{activeCorners > 0 ? ` (${activeCorners} selected)` : ''}</label>
                 <div className="grid grid-cols-2 gap-2">
-                  <CornerChk corner="top_left"     label="↖ Top Left" />
-                  <CornerChk corner="top_right"    label="↗ Top Right" />
-                  <CornerChk corner="bottom_left"  label="↙ Bottom Left" />
-                  <CornerChk corner="bottom_right" label="↘ Bottom Right" />
+                  <CornerChk {...cornerProps('top_left')}     label="↖ Top Left" />
+                  <CornerChk {...cornerProps('top_right')}    label="↗ Top Right" />
+                  <CornerChk {...cornerProps('bottom_left')}  label="↙ Bottom Left" />
+                  <CornerChk {...cornerProps('bottom_right')} label="↘ Bottom Right" />
                 </div>
               </div>
             </div>
