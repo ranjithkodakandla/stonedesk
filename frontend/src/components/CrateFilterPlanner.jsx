@@ -702,6 +702,12 @@ const CrateFilterPlanner = ({ projectId }) => {
     });
     setSelectedPartIds(new Set());
     setManualCrateNo('');
+    // The active filters often match exactly the parts just allocated into
+    // this crate — leaving them in place would show an empty table even
+    // though other, unallocated parts remain in the pool. Clear them so the
+    // user immediately sees what's left to build next.
+    setFilters(EMPTY_FILTERS);
+    setSelectCount('');
   }, [filteredParts, selectedPartIds, manualCrateNo, crates, dimConfig, filters, logCrateAction]);
 
   const handleAutoBucket = useCallback(() => {
@@ -713,6 +719,10 @@ const CrateFilterPlanner = ({ projectId }) => {
       const added = batches.map((parts) => crateFromParts(nextNo++, parts, dimConfig));
       return [...prev, ...added];
     });
+    // Same reasoning as handleCreateManualCrate: everything the filter was
+    // showing just got allocated, so reset it to reveal the remaining pool.
+    setFilters(EMPTY_FILTERS);
+    setSelectCount('');
   }, [filteredParts, targetWeightKg, dimConfig]);
 
   const handleMovePart = useCallback((partId, fromCrateNo, toCrateNoRaw) => {
