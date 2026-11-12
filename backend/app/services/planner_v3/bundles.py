@@ -5,19 +5,29 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from ..planning_engine import piece_weight
+from ..planning_engine import piece_weight, parse_float
 from .classify import flat_key
+from .dimensions import group_splash_pieces_side_by_side
 
-_SPLASHES_PER_LAYER = 4
+_SPLASH_ROW_LENGTH_FLOOR_IN = 30.0  # fallback row budget when there are no mains to size against
 
 
-def _chunk_splashes(splashes: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+def _chunk_splashes(
+    splashes: List[Dict[str, Any]],
+    mains: List[Dict[str, Any]] = None,
+    default_thickness: str = "3CM",
+) -> List[List[Dict[str, Any]]]:
+    """Packs splashes side by side (sharing a layer) when their thickness
+    matches and they fit the row's length budget, instead of always
+    stacking them into fixed-size groups."""
     if not splashes:
         return []
-    layers: List[List[Dict[str, Any]]] = []
-    for i in range(0, len(splashes), _SPLASHES_PER_LAYER):
-        layers.append(splashes[i : i + _SPLASHES_PER_LAYER])
-    return layers
+    ref = mains or splashes
+    usable_length = max(
+        (parse_float(p.get("length")) for p in ref),
+        default=_SPLASH_ROW_LENGTH_FLOOR_IN,
+    ) + 6.0
+    return group_splash_pieces_side_by_side(splashes, usable_length, default_thickness)
 
 
 def _material_batch_key(parent: Dict[str, Any], project_color: str) -> str:
@@ -154,7 +164,7 @@ def horizontal_bundle_whole_units(
     """
     mains = list(bundle.get("main_pieces") or [])
     splashes = list(bundle.get("splash_pieces") or [])
-    splash_layers = _chunk_splashes(splashes)
+    splash_layers = _chunk_splashes(splashes, mains, thickness)
     return [
         {
             "mains": mains,
@@ -180,7 +190,7 @@ def horizontal_bundle_to_units(
 
     mains = list(bundle.get("main_pieces") or [])
     splashes = list(bundle.get("splash_pieces") or [])
-    splash_layers = _chunk_splashes(splashes)
+    splash_layers = _chunk_splashes(splashes, mains, thickness)
     wt = sum(piece_weight(p, material, thickness, color) for p in mains + splashes)
 
     units: List[Dict[str, Any]] = []

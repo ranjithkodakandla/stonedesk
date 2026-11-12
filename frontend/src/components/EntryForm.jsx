@@ -416,7 +416,7 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
   const [destMode, setDestMode] = useState('single'); // 'single' | 'matrix'
   const [matrixData, setMatrixData] = useState({ buildings: '', floors: '', cells: {} });
   // ── House destination rows (project_type === 'house') ──
-  const [houseRows, setHouseRows] = useState([{ building: '', qty: 1 }]);
+  const [houseRows, setHouseRows] = useState([{ building: '', pod: '', qty: 1 }]);
 
   // ── Clipboard state ──
   const [copiedParts, setCopiedParts] = useState(null);
@@ -722,12 +722,13 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
       const dests = [];
       houseRows.forEach(row => {
         const bldg = (row.building || '').trim();
+        const pod = (row.pod || '').trim();
         const qty = Number(row.qty) || 1;
         if (bldg) {
-          for (let i = 0; i < qty; i++) dests.push({ building: bldg, floor: '', flat: '', matrixQty: null });
+          for (let i = 0; i < qty; i++) dests.push({ building: bldg, pod, floor: '', flat: '', matrixQty: null });
         }
       });
-      return dests.length ? dests : [{ building: '', floor: '', flat: '', matrixQty: null }];
+      return dests.length ? dests : [{ building: '', pod: '', floor: '', flat: '', matrixQty: null }];
     }
     if (destMode === 'single') {
       const buildings = parseCommaList(drawingCtx.building).filter(Boolean);
@@ -859,6 +860,7 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
             notes: row.notes || '',
             qty: 1,
             building: dest.building,
+            pod: dest.pod || '',
             floor: dest.floor,
             flat: dest.flat,
           });
@@ -929,7 +931,7 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
     thicknessAutoLockRef.current = false;
     setPieceRows([newRow(drawingCtx.thickness || project.thickness || '3CM')]);
     setMatrixData({ buildings: '', floors: '', cells: {} });
-    setHouseRows([{ building: '', qty: 1 }]);
+    setHouseRows([{ building: '', pod: '', qty: 1 }]);
     setMirrorMessage('');
     setEditBanner('');
     loadedPieceIdsRef.current = [];
@@ -1172,6 +1174,7 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
               <div className="space-y-2">
                 <div className="flex items-center gap-2 text-[10px] font-semibold text-[#64748b] uppercase tracking-wide px-1">
                   <span className="w-48">Building / House Name</span>
+                  <span className="w-32">POD (group)</span>
                   <span className="w-20">Qty</span>
                 </div>
                 {houseRows.map((row, idx) => (
@@ -1181,6 +1184,12 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
                       value={row.building}
                       onChange={e => setHouseRows(prev => prev.map((r, i) => i === idx ? { ...r, building: e.target.value } : r))}
                       placeholder="e.g., HH or Block A"
+                    />
+                    <input
+                      className="input-field w-32"
+                      value={row.pod || ''}
+                      onChange={e => setHouseRows(prev => prev.map((r, i) => i === idx ? { ...r, pod: e.target.value } : r))}
+                      placeholder="e.g., POD 1"
                     />
                     <input
                       type="number"
@@ -1201,13 +1210,13 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
                 ))}
                 <button
                   type="button"
-                  onClick={() => setHouseRows(prev => [...prev, { building: '', qty: 1 }])}
+                  onClick={() => setHouseRows(prev => [...prev, { building: '', pod: '', qty: 1 }])}
                   className="text-xs text-[#1d4ed8] hover:text-[#1e40af] font-medium flex items-center gap-1 mt-1"
                 >
                   + Add building
                 </button>
                 <div className="text-[10px] text-[#94a3b8] mt-1">
-                  Each row creates <em>Qty</em> pieces for that building. Floor and flat are left blank for individual houses.
+                  Each row creates <em>Qty</em> pieces for that building. POD is an optional grouping label (e.g. to cluster several houses together for crate planning). Floor and flat are left blank for individual houses.
                 </div>
               </div>
             )}

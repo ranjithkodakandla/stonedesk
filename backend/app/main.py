@@ -412,6 +412,7 @@ def piece_response(doc: Dict[str, Any]) -> Dict[str, Any]:
         "weight_override": doc.get("weight_override", 0.0),
         "notes": doc.get("notes", ""),
         "building": doc.get("building", ""),
+        "pod": doc.get("pod", ""),
         "floor": doc.get("floor", ""),
         "flat": doc.get("flat", ""),
         "input_source": doc.get("input_source", "manual_entry"),
@@ -763,6 +764,7 @@ class PieceCreate(BaseModel):
     qty: int = 1
     unit: str = ""
     building: str = ""
+    pod: str = ""
     floor: str = ""
     flat: str = ""
     sink_type: str = "No Sink"
@@ -823,6 +825,7 @@ class PieceUpdate(BaseModel):
     qty: int = 1
     unit: str = ""
     building: str = ""
+    pod: str = ""
     floor: str = ""
     flat: str = ""
     sink_type: str = "No Sink"
@@ -1290,6 +1293,7 @@ def _build_piece_doc(project_id: int, piece: PieceCreate, piece_id: int, extra: 
         "qty": piece.qty,
         "unit": piece.unit,
         "building": piece.building,
+        "pod": piece.pod,
         "floor": piece.floor,
         "flat": piece.flat,
         "sink_type": piece.sink_type,
@@ -1373,6 +1377,7 @@ class DrawingPdfRequest(DrawingGenerateRequest):
     thickness: str = "2CM"
     qty: int = 1
     building: str = ""
+    pod: str = ""
     floor: str = ""
     flat: str = ""
     sink_info: str = ""
@@ -1397,7 +1402,7 @@ def export_drawing_pdf(req: DrawingPdfRequest):
         "part": req.part, "template_name": template["name"],
         "material": req.material, "stone_color": req.stone_color, "thickness": req.thickness,
         "qty": req.qty or (len(req.destinations) or 1), "sink_info": req.sink_info, "project": req.project,
-        "building": req.building, "floor": req.floor, "flat": req.flat,
+        "building": req.building, "pod": req.pod, "floor": req.floor, "flat": req.flat,
         "date": req.date, "drawn_by": req.drawn_by, "scale": req.scale,
         "destinations": req.destinations,
     })
@@ -1416,6 +1421,7 @@ class DrawingToPieceRequest(BaseModel):
     part_no: str = ""
     qty: int = 1
     building: str = ""
+    pod: str = ""
     floor: str = ""
     flat: str = ""
     unit: str = ""
@@ -1441,7 +1447,7 @@ def _assembly_role_docs(project_id: int, req: "DrawingToPieceRequest", assembly:
     role so re-saving a drawing updates its pieces in place instead of
     duplicating them, and removes accessory pieces the user has unchecked."""
     common = {
-        "part_no": req.part_no, "qty": req.qty, "building": req.building, "floor": req.floor,
+        "part_no": req.part_no, "qty": req.qty, "building": req.building, "pod": req.pod, "floor": req.floor,
         "flat": req.flat, "unit": req.unit, "material": req.material, "stone_color": req.stone_color,
         "thickness": req.thickness, "drawing": req.part or req.part_no,
     }
@@ -1606,13 +1612,13 @@ def create_piece_from_drawing(project_id: int, req: DrawingToPieceRequest):
                 role: int(pid) for role, pid in (dest.get("piece_ids") or {}).items()
             }
             dest_req = req.model_copy(update={
-                "building": dest.get("building", ""), "floor": dest.get("floor", ""),
+                "building": dest.get("building", ""), "pod": dest.get("pod", ""), "floor": dest.get("floor", ""),
                 "flat": dest.get("flat", ""), "piece_ids": dest_piece_ids,
             })
             dest_docs = _assembly_role_docs(project_id, dest_req, assembly)
             docs.extend(dest_docs)
             dest_results.append({
-                "building": dest_req.building, "floor": dest_req.floor, "flat": dest_req.flat,
+                "building": dest_req.building, "pod": dest_req.pod, "floor": dest_req.floor, "flat": dest_req.flat,
                 "piece_ids": {d["assembly_role"]: d["id"] for d in dest_docs},
             })
     else:
@@ -1722,6 +1728,7 @@ def create_pieces_batch(project_id: int, pieces_data: List[PieceCreate]):
                 "qty": piece.qty,
                 "unit": piece.unit,
                 "building": piece.building,
+                "pod": piece.pod,
                 "floor": piece.floor,
                 "flat": piece.flat,
                 "sink_type": piece.sink_type,
@@ -1902,6 +1909,7 @@ def update_piece(piece_id: int, piece: PieceUpdate):
         "qty": piece.qty,
         "unit": piece.unit,
         "building": piece.building,
+        "pod": piece.pod,
         "floor": piece.floor,
         "flat": piece.flat,
         "sink_type": piece.sink_type,
@@ -2378,6 +2386,7 @@ def get_dispatch_parts(project_id: int):
             "drawing": str(p.get("drawing", "") or ""),
             "unit": str(p.get("unit", "") or ""),
             "building": str(p.get("building", "") or ""),
+            "pod": str(p.get("pod", "") or ""),
             "floor": str(p.get("floor", "") or ""),
             "flat": str(p.get("flat", "") or ""),
             "length": parse_float(p.get("length")),
@@ -2596,6 +2605,7 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
         floor_str = str(ref.get("floor", "") or "").strip() or "Unassigned"
         flat_str = str(ref.get("flat", "") or "").strip() or "Unassigned"
         building_str = str(ref.get("building", "") or "").strip()
+        pod_str = str(ref.get("pod", "") or "").strip()
         cat = str(unit.get("category") or "misc")
         family_id = str(unit.get("canonical_family_id") or unit.get("family_id") or "")
         unit_id = str(unit.get("unit_id") or "")
@@ -2655,6 +2665,7 @@ def get_dispatch_inventory(project_id: int, body: Dict[str, Any] = Body(default_
                 "splash_part_nos": [str(p.get("part_no", "") or "") for p in splash_p],
                 "flat": flat_str,
                 "building": building_str,
+                "pod": pod_str,
                 "floor": floor_str,
                 "pieces": pieces_detail,
             }
@@ -2976,7 +2987,7 @@ def export_manual_crate_plan_xlsx(project_id: int, body: Dict):
     ws2 = wb.create_sheet("Crate Detail")
     ws2.append([
         "Crate #", "Part #", "Part Type", "Category", "Drawing", "Unit",
-        "Building", "Floor", "Flat", "Length (in)", "Width (in)", "Thickness", "Qty",
+        "Building", "POD", "Floor", "Flat", "Length (in)", "Width (in)", "Thickness", "Qty",
         "Sq Ft", "Weight (kg)", "Label",
     ])
     _bold_header(ws2, 1)
@@ -3015,6 +3026,7 @@ def export_manual_crate_plan_xlsx(project_id: int, body: Dict):
                 str(p.get("drawing", "") or ""),
                 unit,
                 str(p.get("building", "") or ""),
+                str(p.get("pod", "") or ""),
                 floor_v,
                 flat_v,
                 length_v,
@@ -4174,6 +4186,7 @@ def get_packing_families(project_id: int):
         # Extract location from first piece (all pieces in a unit share flat/floor/building)
         ref = all_pieces[0] if all_pieces else {}
         building = str(ref.get("building", "") or "").strip()
+        pod = str(ref.get("pod", "") or "").strip()
         floor = str(ref.get("floor", "") or "").strip()
         flat = str(ref.get("flat", "") or "").strip()
 
@@ -4186,6 +4199,7 @@ def get_packing_families(project_id: int):
             "family_ui_key": uid or f"{fam.get('family_id')}@@{fam['flat_key']}@@{fam['category']}",
             "flat_key": fam["flat_key"],
             "building": building,
+            "pod": pod,
             "floor": floor,
             "flat": flat,
             "category": fam["category"],
@@ -4992,7 +5006,7 @@ def export_source_data(project_id: int):
             # Identity
             "Part #", "Part Type", "Category", "Drawing", "Unit",
             # Location
-            "Building", "Floor", "Flat",
+            "Building", "POD", "Floor", "Flat",
             # Dimensions
             "Length (in)", "Width (in)", "Thickness", "Qty", "Sq Ft", "Weight (kg)",
             # Sink
@@ -5030,7 +5044,7 @@ def export_source_data(project_id: int):
             piece_thick = str(p.get("thickness") or thick)
             ws2.append([
                 part_no, p.get("part", ""), p.get("category", ""), p.get("drawing", ""), unit,
-                p.get("building", ""), p.get("floor", ""), p.get("flat", ""),
+                p.get("building", ""), p.get("pod", ""), p.get("floor", ""), p.get("flat", ""),
                 p.get("length", 0), p.get("width", 0), piece_thick, qty, sqft, wt,
                 p.get("sink_type", "No Sink"), _fmt_sink_numbers(p.get("sink_numbers")), _xls_val(p.get("sink_cut")),
                 _xls_val(p.get("tap_holes")), p.get("tap_hole_diameter", "") or "", _fmt_positions(p.get("tap_hole_positions")),
@@ -5198,7 +5212,7 @@ def export_excel(project_id: int):
             # Identity
             "Piece ID", "Part #", "Part Type", "Category", "Drawing", "Unit",
             # Location
-            "Building", "Floor", "Flat",
+            "Building", "POD", "Floor", "Flat",
             # Dimensions
             "Length (in)", "Width (in)", "Thickness", "Qty", "Stone Wt (kg)",
             # Sink
@@ -5229,7 +5243,7 @@ def export_excel(project_id: int):
                     crate.get("crate_id", ""), crate.get("name", ""),
                     piece.get("id", ""), p_part_no, piece.get("part", ""),
                     piece.get("category", ""), piece.get("drawing", ""), p_unit,
-                    piece.get("building", ""), piece.get("floor", ""), piece.get("flat", ""),
+                    piece.get("building", ""), piece.get("pod", ""), piece.get("floor", ""), piece.get("flat", ""),
                     piece.get("length", 0), piece.get("width", 0), p_thick, piece.get("qty", 1),
                     round(
                         planning_piece_weight(

@@ -70,6 +70,26 @@ const consolidateSameLengthLeftovers = (rowsIn) => {
   return rows;
 };
 
+// Crate internal width must stay within the fabricator's standard crate
+// stock — mirrors CRATE_INTERNAL_WIDTH_MIN_IN / CRATE_INTERNAL_WIDTH_MAX_IN
+// in backend/app/services/planner_v3/dimensions.py.
+export const CRATE_INTERNAL_WIDTH_MIN_IN = 10.0;
+export const CRATE_INTERNAL_WIDTH_MAX_IN = 26.0;
+
+// Candidate row-length budgets beyond the single-longest-piece cap, built
+// from this crate's own distinct piece lengths — never an arbitrary
+// multiplier. Mirrors _row_length_growth_candidates() in dimensions.py.
+export const rowLengthGrowthCandidates = (pieces) => {
+  const lengths = [...new Set(pieces.map((p) => roundLen(pieceLength(p))))].sort((a, b) => b - a);
+  const candidates = [];
+  let running = 0;
+  lengths.forEach((length, i) => {
+    running += (i > 0 ? ROW_PIECE_GAP_IN : 0) + length;
+    candidates.push(running);
+  });
+  return candidates;
+};
+
 // Greedy largest-first (Phase A), then same-length-leftover consolidation
 // (Phase B). See the backend docstring for the full reasoning.
 export const groupPiecesIntoRows = (pieces, usableLength) => {

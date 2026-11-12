@@ -568,6 +568,9 @@ _BASE_PADDING        = 2.0      # base pad under first piece
 _TOP_CLEARANCE       = 2.0      # clearance above top piece
 _FORKLIFT_SKID       = 4.5      # forklift skid added to external height
 
+_CRATE_INTERNAL_WIDTH_MIN = 10.0   # minimum internal crate width (inches)
+_CRATE_INTERNAL_WIDTH_MAX = 26.0   # maximum internal crate width (inches)
+
 
 def _slab_thick(piece: Dict[str, Any], default_thickness: str) -> float:
     t = str(piece.get("thickness") or default_thickness).strip()
@@ -585,6 +588,43 @@ def _layer_height(pieces: List[Dict[str, Any]], default_thickness: str) -> float
         h += thick * qty
         if qty > 1:
             h += _FOAM_BETWEEN_PIECES * (qty - 1)
+        if i < len(pieces) - 1:
+            h += _FOAM_BETWEEN_PIECES
+    return h
+
+
+def _splash_layer_height(
+    pieces: List[Dict[str, Any]],
+    default_thickness: str,
+    available_width: float,
+) -> float:
+    """
+    Height (inches) occupied by the splash layer.
+
+    Splashes of the same piece are placed side by side across the crate's
+    available width when thickness/space allows, instead of always being
+    stacked on top of each other. Only the rows that don't fit side by side
+    add stacked height.
+    """
+    if not pieces:
+        return 0.0
+    h = _BASE_PADDING
+    for i, piece in enumerate(pieces):
+        qty = _parse_int(piece.get("qty"))
+        thick = _slab_thick(piece, default_thickness)
+        piece_width = _parse_float(piece.get("width"))
+
+        if piece_width > 0 and available_width > 0:
+            per_row = int((available_width + _FOAM_BETWEEN_PIECES) //
+                          (piece_width + _FOAM_BETWEEN_PIECES))
+            per_row = max(1, min(per_row, qty))
+        else:
+            per_row = 1
+
+        rows = -(-qty // per_row)  # ceil division
+        h += thick * rows
+        if rows > 1:
+            h += _FOAM_BETWEEN_PIECES * (rows - 1)
         if i < len(pieces) - 1:
             h += _FOAM_BETWEEN_PIECES
     return h
@@ -610,13 +650,18 @@ def compute_crate_dimensions(
     max_length = max((_parse_float(p.get("length")) for p in all_pieces), default=0.0)
     max_width  = max((_parse_float(p.get("width"))  for p in all_pieces), default=0.0)
 
+    internal_width = max_width + 2 * _SIDE_MARGIN
+    internal_width = max(_CRATE_INTERNAL_WIDTH_MIN,
+                          min(internal_width, _CRATE_INTERNAL_WIDTH_MAX))
+    available_splash_width = internal_width - 2 * _SIDE_MARGIN
+
     main_h   = _layer_height(main_pieces,   project_thickness)
-    splash_h = _layer_height(splash_pieces, project_thickness) if splash_pieces else 0.0
+    splash_h = (_splash_layer_height(splash_pieces, project_thickness, available_splash_width)
+                if splash_pieces else 0.0)
     sep_h    = _MAIN_SPLASH_SEP if (main_pieces and splash_pieces) else 0.0
 
     internal_height = main_h + sep_h + splash_h + _TOP_CLEARANCE
     internal_length = max_length + 2 * _SIDE_MARGIN
-    internal_width  = max_width  + 2 * _SIDE_MARGIN
     external_length = internal_length + 2 * wood_thickness
     external_width  = internal_width  + 2 * wood_thickness
     external_height = internal_height + 2 * wood_thickness + _FORKLIFT_SKID

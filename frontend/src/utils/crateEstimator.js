@@ -348,6 +348,54 @@ function rowStackDepth(rows) {
   return rows.reduce((s, row) => s + Math.max(...row.pieces.map((p) => parseThicknessIn(p.thickness))), 0);
 }
 
+// Candidate row-length budgets beyond the single-longest-piece row, built
+// from this crate's own distinct piece lengths — never an arbitrary
+// multiplier. Mirrors _row_length_growth_candidates() in
+// services/planner_v3/dimensions.py.
+function rowLengthGrowthCandidates(pieces, gap) {
+  const lengths = [...new Set(pieces.map((p) => round2(pieceLongShort(p).long)))].sort((a, b) => b - a);
+  const candidates = [];
+  let running = 0;
+  lengths.forEach((length, i) => {
+    running += (i > 0 ? gap : 0) + length;
+    candidates.push(running);
+  });
+  return candidates;
+}
+
+// Packs main pieces into rows, growing the row-length budget beyond the
+// longest single piece when needed to merge more pieces per row — trading
+// crate length for crate width — stopping once width lands at or under the
+// 26" structural maximum, or once growing the budget stops reducing the row
+// count. If width still exceeds the maximum after exhausting every merge
+// opportunity, a warning is returned instead of silently clamping the
+// number. Mirrors _pack_main_rows_within_width_band() in dimensions.py.
+function packMainRowsWithinWidthBand(pieces, baseRowLengthBudget, gap) {
+  let budget = baseRowLengthBudget;
+  let rows = packPiecesIntoRows(pieces, budget);
+  let depth = rowStackDepth(rows) + Math.max(0, rows.length - 1) * gap;
+
+  for (const candidate of rowLengthGrowthCandidates(pieces, gap)) {
+    if (depth <= CRATE_INTERNAL_WIDTH_MAX_IN) break;
+    if (candidate <= budget) continue;
+    const candidateRows = packPiecesIntoRows(pieces, candidate);
+    const candidateDepth = rowStackDepth(candidateRows) + Math.max(0, candidateRows.length - 1) * gap;
+    if (candidateRows.length >= rows.length) break; // no further merging achievable
+    budget = candidate;
+    rows = candidateRows;
+    depth = candidateDepth;
+  }
+
+  const warnings = [];
+  if (depth > CRATE_INTERNAL_WIDTH_MAX_IN) {
+    warnings.push(
+      `Crate width ${round2(depth)}" exceeds the ${CRATE_INTERNAL_WIDTH_MAX_IN}" maximum even after ` +
+      'merging rows by length — needs manual review.'
+    );
+  }
+  return { rows, depth, warnings };
+}
+
 export function estimateLeanedCassetteDimensions(pieces) {
   if (!pieces || pieces.length === 0) {
     return {
@@ -404,6 +452,11 @@ const HORIZ_END_FRAME     = 4.0;   // end boards (2" each end)
 const HORIZ_LENGTH_CLEAR  = 6.0;   // internal end clearance (3" each end)
 const HORIZ_WIDTH_PAD     = 6.0;   // internal side clearance (3" each side)
 const HORIZ_LAYER_SEP     = 1.0;   // foam separator between layers
+
+// Crate internal width bounds — mirrors CRATE_INTERNAL_WIDTH_MIN_IN /
+// CRATE_INTERNAL_WIDTH_MAX_IN in services/planner_v3/dimensions.py.
+export const CRATE_INTERNAL_WIDTH_MIN_IN = 10.0;
+export const CRATE_INTERNAL_WIDTH_MAX_IN = 26.0;
 
 function isBackSplashPiece(piece) {
   return /back.?splash/i.test(piece.part || '');
@@ -468,14 +521,24 @@ export function estimateLeaningFamilyBundleDimensions(pieces, layerGapIn = HORIZ
 
   // D — depth/width: main tops pack side by side into the longest top's row
   // before a new row is started (same reasoning as the island cassette),
-  // then rows stack in depth. Splashes don't contribute here (see above).
+  // then rows stack in depth. When that still leaves depth outside the
+  // 10-26" structural band, packMainRowsWithinWidthBand grows the row-length
+  // budget to merge more pieces per row (trading length for width) using
+  // this crate's own piece lengths. Splashes don't contribute here (see
+  // above).
   let depth = DEPTH_FRAME;
+  let warnings = [];
   if (mainTops.length > 0) {
-    const rows = packPiecesIntoRows(mainTops, maxLong);
-    depth += rowStackDepth(rows) + Math.max(0, rows.length - 1) * gap;
+    const packed = packMainRowsWithinWidthBand(mainTops, maxLong, gap);
+    depth += packed.depth;
+    warnings = packed.warnings;
   }
 
-  const intW = depth;
+  // Floor only — padding a too-narrow result up to 10" is always safe.
+  // There is no ceiling clamp: if packMainRowsWithinWidthBand couldn't bring
+  // depth at or under 26" by merging rows, silently reporting 26" would
+  // understate the crate's true physical size instead of flagging it.
+  const intW = Math.max(CRATE_INTERNAL_WIDTH_MIN_IN, depth);
 
   return {
     internal_length: round2(intL),
@@ -484,6 +547,7 @@ export function estimateLeaningFamilyBundleDimensions(pieces, layerGapIn = HORIZ
     external_length: round2(intL + HORIZ_END_FRAME),
     external_width: round2(intW + HORIZ_WALL * 2),
     external_height: round2(intH + HEIGHT_CAP_TBR + FORKLIFT_TINE),
+    warnings,
   };
 }
 
