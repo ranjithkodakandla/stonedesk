@@ -17,6 +17,9 @@ const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
 // Fixed column widths so the (non-virtualized) header and the virtualized
 // rows below it line up pixel-for-pixel.
+// `align` is the single source of truth for this column's alignment — both
+// the header and the body cell below read it, so they can never drift apart
+// the way separately-hardcoded classes on each did before.
 const COLUMNS = [
   { key: 'select', width: 40 },
   { key: 'part_no', label: 'Part #', width: 130 },
@@ -24,26 +27,28 @@ const COLUMNS = [
   { key: 'category', label: 'Category', width: 90 },
   { key: 'drawing', label: 'Drawing', width: 90 },
   { key: 'unit', label: 'Unit', width: 100 },
-  { key: 'length', label: 'Length"', width: 70 },
-  { key: 'width', label: 'Depth"', width: 70 },
-  { key: 'qty', label: 'Qty', width: 55 },
+  { key: 'length', label: 'Length"', width: 70, align: 'right' },
+  { key: 'width', label: 'Depth"', width: 70, align: 'right' },
+  { key: 'qty', label: 'Qty', width: 55, align: 'center' },
   { key: 'sink_type', label: 'Sink', width: 100 },
-  { key: 'sink_cut', label: 'Cuts', width: 55 },
-  { key: 'tap_holes', label: 'Tap', width: 55 },
+  { key: 'sink_cut', label: 'Cuts', width: 55, align: 'center' },
+  { key: 'tap_holes', label: 'Tap', width: 55, align: 'center' },
   { key: 'edge', label: 'Edge Finish', width: 90 },
   { key: 'edge_area', label: 'Edge Polish area', width: 130 },
-  { key: 'sqft', label: 'SqFt ea', width: 70 },
-  { key: 'weight', label: 'kg ea', width: 70 },
+  { key: 'sqft', label: 'SqFt ea', width: 70, align: 'right' },
+  { key: 'weight', label: 'kg ea', width: 70, align: 'right' },
   { key: 'building', label: 'Building', width: 90 },
   { key: 'pod', label: 'POD', width: 80 },
   { key: 'floor', label: 'Floor', width: 70 },
   { key: 'flat', label: 'Flat', width: 70 },
   { key: 'planner', label: 'Planner', width: 150 },
   { key: 'thickness', label: 'Thickness', width: 80 },
-  { key: 'actions', label: 'Actions', width: 150 },
+  { key: 'actions', label: 'Actions', width: 150, align: 'center' },
 ];
 const TOTAL_WIDTH = COLUMNS.reduce((sum, c) => sum + c.width, 0);
 const HOUSE_TOTAL_WIDTH = COLUMNS.filter(c => c.key !== 'floor' && c.key !== 'flat').reduce((sum, c) => sum + c.width, 0);
+const JUSTIFY_CLASS = { left: 'justify-start', center: 'justify-center', right: 'justify-end' };
+const columnJustifyClass = (col) => JUSTIFY_CLASS[col.align || 'left'];
 const ROW_HEIGHT = 58;
 const LIST_HEIGHT = 460;
 
@@ -618,7 +623,7 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing })
             </div>
             <div className="p-3 flex items-center sticky z-20 bg-[#f1f5f9] whitespace-nowrap border-r border-[#e2e8f0]" style={{ width: COLUMNS[1].width, left: COLUMNS[0].width }}>Part #</div>
             {visibleCols.slice(2).map((col) => (
-              <div key={col.key} className="p-3 flex items-center gap-1" style={{ width: col.width }}>
+              <div key={col.key} className={`p-3 flex items-center gap-1 ${columnJustifyClass(col)}`} style={{ width: col.width }}>
                 <span className="truncate">{col.label}</span>
                 {FILTERABLE_COLUMN_KEYS.includes(col.key) && (
                   <MultiSelectDropdown
