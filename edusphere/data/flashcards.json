@@ -1,0 +1,48 @@
+{
+  "decks": [
+    {
+      "id": "fc_sci10_chem",
+      "class": "class10",
+      "subject": "Science",
+      "chapter": "Chemical Reactions and Equations",
+      "title": "Chemistry Key Terms – Class 10",
+      "cards": [
+        { "id": "fc1", "question": "What is a chemical reaction?", "answer": "A process in which one or more substances (reactants) are transformed into new substances (products) with different properties." },
+        { "id": "fc2", "question": "What is an exothermic reaction?", "answer": "A reaction that releases energy (heat) to the surroundings. Example: burning of coal." },
+        { "id": "fc3", "question": "What is an endothermic reaction?", "answer": "A reaction that absorbs energy from the surroundings. Example: decomposition of calcium carbonate." },
+        { "id": "fc4", "question": "Define oxidation.", "answer": "The process in which a substance gains oxygen or loses electrons." },
+        { "id": "fc5", "question": "Define reduction.", "answer": "The process in which a substance loses oxygen or gains electrons." },
+        { "id": "fc6", "question": "What is a displacement reaction?", "answer": "A reaction where a more reactive element displaces a less reactive element from its salt solution." },
+        { "id": "fc7", "question": "What is rancidity?", "answer": "The oxidation of fats and oils in food, leading to bad smell and taste. Prevented by antioxidants and inert gas packaging." }
+      ]
+    },
+    {
+      "id": "fc_math9_num",
+      "class": "class9",
+      "subject": "Mathematics",
+      "chapter": "Number Systems",
+      "title": "Number Systems – Class 9",
+      "cards": [
+        { "id": "fc1", "question": "What is an irrational number?", "answer": "A real number that cannot be expressed as p/q where p and q are integers and q ≠ 0. Example: √2, π." },
+        { "id": "fc2", "question": "What is the decimal expansion of a rational number?", "answer": "Either terminating (e.g. 1/4 = 0.25) or non-terminating repeating (e.g. 1/3 = 0.333...)." },
+        { "id": "fc3", "question": "State the law: √a × √b = ?", "answer": "√(a × b), where a and b are positive real numbers." },
+        { "id": "fc4", "question": "What is the rationalising factor of 1/√2?", "answer": "√2. Multiplying numerator and denominator by √2 gives √2/2." },
+        { "id": "fc5", "question": "Define a real number.", "answer": "Any number that can be found on the number line, including both rational and irrational numbers." }
+      ]
+    },
+    {
+      "id": "fc_hist10",
+      "class": "class10",
+      "subject": "Social Science",
+      "chapter": "Nationalism in India",
+      "title": "Indian Nationalism – Key Facts",
+      "cards": [
+        { "id": "fc1", "question": "When was the Non-Cooperation Movement launched?", "answer": "1920, by Mahatma Gandhi and the Indian National Congress." },
+        { "id": "fc2", "question": "What was the significance of the Jallianwala Bagh massacre?", "answer": "British troops opened fire on unarmed civilians on 13 April 1919, intensifying the freedom movement." },
+        { "id": "fc3", "question": "When did Gandhi launch the Civil Disobedience Movement?", "answer": "1930, beginning with the famous Dandi March to protest the salt tax." },
+        { "id": "fc4", "question": "Who wrote 'Vande Mataram'?", "answer": "Bankim Chandra Chattopadhyay. It became a song of inspiration for the nationalists." },
+        { "id": "fc5", "question": "What was the Rowlatt Act (1919)?", "answer": "A law that allowed the British to imprison anyone suspected of terrorism without trial." }
+      ]
+    }
+  ]
+}

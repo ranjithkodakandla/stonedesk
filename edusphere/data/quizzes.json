@@ -1,0 +1,204 @@
+{
+  "quizzes": [
+    {
+      "id": "q_m9_motion",
+      "class": "class9",
+      "subject": "Science",
+      "chapter": "Motion",
+      "chapterId": "s9c7",
+      "title": "Motion – Class 9 Science",
+      "questions": [
+        {
+          "id": "q1",
+          "text": "An object moves 10 m in 2 seconds. Its speed is:",
+          "options": ["2 m/s", "5 m/s", "20 m/s", "12 m/s"],
+          "answer": 1,
+          "explanation": "Speed = Distance / Time = 10 / 2 = 5 m/s."
+        },
+        {
+          "id": "q2",
+          "text": "Which of the following is a scalar quantity?",
+          "options": ["Velocity", "Force", "Speed", "Displacement"],
+          "answer": 2,
+          "explanation": "Speed has magnitude only; it has no direction. Velocity and displacement are vectors."
+        },
+        {
+          "id": "q3",
+          "text": "A car travelling at 60 km/h comes to rest in 5 seconds. Its retardation is:",
+          "options": ["12 km/h·s", "12 m/s²", "3.33 m/s²", "0 m/s²"],
+          "answer": 2,
+          "explanation": "60 km/h = 16.67 m/s. Retardation = 16.67/5 ≈ 3.33 m/s²."
+        },
+        {
+          "id": "q4",
+          "text": "The area under a velocity-time graph gives:",
+          "options": ["Acceleration", "Speed", "Distance", "Force"],
+          "answer": 2,
+          "explanation": "The area under a v-t graph represents the distance (displacement) covered."
+        },
+        {
+          "id": "q5",
+          "text": "An object is said to be in uniform motion when:",
+          "options": [
+            "Its speed changes at regular intervals",
+            "It covers equal distances in equal intervals of time",
+            "Its direction changes but speed remains constant",
+            "It accelerates uniformly"
+          ],
+          "answer": 1,
+          "explanation": "Uniform motion means covering equal distances in equal time intervals."
+        }
+      ]
+    },
+    {
+      "id": "q_m10_polynomials",
+      "class": "class10",
+      "subject": "Mathematics",
+      "chapter": "Polynomials",
+      "chapterId": "m10c2",
+      "title": "Polynomials – Class 10 Maths",
+      "questions": [
+        {
+          "id": "q1",
+          "text": "The number of zeroes of a quadratic polynomial is at most:",
+          "options": ["1", "2", "3", "4"],
+          "answer": 1,
+          "explanation": "A quadratic polynomial has degree 2, so it can have at most 2 zeroes."
+        },
+        {
+          "id": "q2",
+          "text": "If α and β are zeroes of p(x) = x² – 5x + 6, then α + β =",
+          "options": ["5", "6", "-5", "-6"],
+          "answer": 0,
+          "explanation": "For p(x) = x² – 5x + 6, sum of zeroes = –(coefficient of x)/(coefficient of x²) = 5."
+        },
+        {
+          "id": "q3",
+          "text": "The product of zeroes of x² – 5x + 6 is:",
+          "options": ["5", "-5", "6", "-6"],
+          "answer": 2,
+          "explanation": "Product of zeroes = constant term / leading coefficient = 6/1 = 6."
+        },
+        {
+          "id": "q4",
+          "text": "Which of the following is NOT a polynomial?",
+          "options": ["x² + 2x + 1", "x + 1/x", "3x³ – 2x + 7", "5"],
+          "answer": 1,
+          "explanation": "x + 1/x = x + x⁻¹ has a negative exponent, so it is not a polynomial."
+        },
+        {
+          "id": "q5",
+          "text": "A cubic polynomial can have at most how many zeroes?",
+          "options": ["1", "2", "3", "4"],
+          "answer": 2,
+          "explanation": "The number of zeroes of a polynomial equals its degree. A cubic has degree 3."
+        }
+      ]
+    },
+    {
+      "id": "q_s10_chem",
+      "class": "class10",
+      "subject": "Science",
+      "chapter": "Chemical Reactions and Equations",
+      "chapterId": "s10c1",
+      "title": "Chemical Reactions – Class 10 Science",
+      "questions": [
+        {
+          "id": "q1",
+          "text": "Which of the following is an example of a combination reaction?",
+          "options": [
+            "CaCO₃ → CaO + CO₂",
+            "2H₂ + O₂ → 2H₂O",
+            "Fe + CuSO₄ → FeSO₄ + Cu",
+            "Zn + H₂SO₄ → ZnSO₄ + H₂"
+          ],
+          "answer": 1,
+          "explanation": "2H₂ + O₂ → 2H₂O combines two substances to form one product."
+        },
+        {
+          "id": "q2",
+          "text": "The decomposition of CaCO₃ on heating is an example of:",
+          "options": ["Combination reaction", "Displacement reaction", "Decomposition reaction", "Double displacement"],
+          "answer": 2,
+          "explanation": "CaCO₃ → CaO + CO₂ breaks one compound into two, so it is a decomposition reaction."
+        },
+        {
+          "id": "q3",
+          "text": "Which indicator is used to test for carbon dioxide?",
+          "options": ["Litmus paper", "Lime water", "Phenolphthalein", "Universal indicator"],
+          "answer": 1,
+          "explanation": "CO₂ turns lime water (Ca(OH)₂) milky, forming CaCO₃ precipitate."
+        },
+        {
+          "id": "q4",
+          "text": "In the reaction Fe + CuSO₄ → FeSO₄ + Cu, which element is oxidized?",
+          "options": ["Iron (Fe)", "Copper (Cu)", "Sulphur (S)", "Oxygen (O)"],
+          "answer": 0,
+          "explanation": "Iron loses electrons (is oxidized) and displaces copper from copper sulphate."
+        },
+        {
+          "id": "q5",
+          "text": "What is the balanced form of H₂ + O₂ → H₂O?",
+          "options": [
+            "H₂ + O₂ → H₂O",
+            "2H₂ + O₂ → 2H₂O",
+            "H₂ + 2O₂ → 2H₂O",
+            "2H₂ + 2O₂ → 2H₂O"
+          ],
+          "answer": 1,
+          "explanation": "2H₂ + O₂ → 2H₂O is balanced: 4H and 2O on each side."
+        }
+      ]
+    },
+    {
+      "id": "q_m8_rational",
+      "class": "class8",
+      "subject": "Mathematics",
+      "chapter": "Rational Numbers",
+      "chapterId": "m8p1c1",
+      "title": "Rational Numbers – Class 8 Maths",
+      "questions": [
+        {
+          "id": "q1",
+          "text": "Which of the following is a rational number?",
+          "options": ["√2", "π", "3/4", "√3"],
+          "answer": 2,
+          "explanation": "3/4 can be expressed as a ratio of two integers, so it is rational."
+        },
+        {
+          "id": "q2",
+          "text": "The additive identity for rational numbers is:",
+          "options": ["1", "0", "-1", "1/2"],
+          "answer": 1,
+          "explanation": "Adding 0 to any rational number gives the same number. So 0 is the additive identity."
+        },
+        {
+          "id": "q3",
+          "text": "What is the multiplicative inverse of 3/5?",
+          "options": ["5/3", "-3/5", "3/5", "-5/3"],
+          "answer": 0,
+          "explanation": "The multiplicative inverse (reciprocal) of 3/5 is 5/3 because (3/5) × (5/3) = 1."
+        },
+        {
+          "id": "q4",
+          "text": "Rational numbers are closed under which operations?",
+          "options": [
+            "Addition only",
+            "Multiplication only",
+            "Addition, subtraction and multiplication",
+            "Division"
+          ],
+          "answer": 2,
+          "explanation": "Rational numbers are closed under addition, subtraction and multiplication. Division by zero is excluded."
+        },
+        {
+          "id": "q5",
+          "text": "Between any two rational numbers, how many rational numbers exist?",
+          "options": ["None", "One", "Two", "Infinitely many"],
+          "answer": 3,
+          "explanation": "Between any two rational numbers, there are infinitely many rational numbers."
+        }
+      ]
+    }
+  ]
+}

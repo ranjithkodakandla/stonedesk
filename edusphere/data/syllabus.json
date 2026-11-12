@@ -1,0 +1,471 @@
+{
+  "classes": [
+    {
+      "id": "class8",
+      "label": "Class 8",
+      "subjects": [
+        {
+          "id": "math8",
+          "name": "Mathematics",
+          "book": "Ganita Prakash",
+          "parts": [
+            {
+              "part": 1,
+              "chapters": [
+                { "id": "m8p1c1", "num": 1, "title": "Rational Numbers", "desc": "Understanding rational numbers, their properties and operations." },
+                { "id": "m8p1c2", "num": 2, "title": "Linear Equations in One Variable", "desc": "Solving linear equations and their applications." },
+                { "id": "m8p1c3", "num": 3, "title": "Understanding Quadrilaterals", "desc": "Properties of quadrilaterals and their types." },
+                { "id": "m8p1c4", "num": 4, "title": "Data Handling", "desc": "Collecting, organizing and interpreting data." },
+                { "id": "m8p1c5", "num": 5, "title": "Squares and Square Roots", "desc": "Finding squares and square roots of numbers." }
+              ]
+            },
+            {
+              "part": 2,
+              "chapters": [
+                { "id": "m8p2c6", "num": 6, "title": "Cubes and Cube Roots", "desc": "Understanding cubes and cube roots." },
+                { "id": "m8p2c7", "num": 7, "title": "Comparing Quantities", "desc": "Percentages, profit, loss, simple and compound interest." },
+                { "id": "m8p2c8", "num": 8, "title": "Algebraic Expressions and Identities", "desc": "Working with algebraic expressions and standard identities." },
+                { "id": "m8p2c9", "num": 9, "title": "Mensuration", "desc": "Area and volume of plane figures and solid shapes." },
+                { "id": "m8p2c10", "num": 10, "title": "Exponents and Powers", "desc": "Laws of exponents and very large/small numbers." },
+                { "id": "m8p2c11", "num": 11, "title": "Direct and Inverse Proportions", "desc": "Understanding proportional relationships." },
+                { "id": "m8p2c12", "num": 12, "title": "Factorization", "desc": "Methods of factorizing algebraic expressions." },
+                { "id": "m8p2c13", "num": 13, "title": "Introduction to Graphs", "desc": "Plotting and reading graphs." }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "sci8",
+          "name": "Science",
+          "book": "Curiosity",
+          "parts": [
+            {
+              "part": 1,
+              "chapters": [
+                { "id": "s8c1", "num": 1, "title": "Crop Production and Management", "desc": "Agricultural practices and their scientific basis." },
+                { "id": "s8c2", "num": 2, "title": "Microorganisms: Friend and Foe", "desc": "Types of microorganisms and their roles." },
+                { "id": "s8c3", "num": 3, "title": "Synthetic Fibres and Plastics", "desc": "Properties and uses of synthetic materials." },
+                { "id": "s8c4", "num": 4, "title": "Materials: Metals and Non-Metals", "desc": "Properties and uses of metals and non-metals." },
+                { "id": "s8c5", "num": 5, "title": "Coal and Petroleum", "desc": "Fossil fuels and their conservation." },
+                { "id": "s8c6", "num": 6, "title": "Combustion and Flame", "desc": "Conditions for combustion and types of flames." },
+                { "id": "s8c7", "num": 7, "title": "Conservation of Plants and Animals", "desc": "Biodiversity and conservation efforts." },
+                { "id": "s8c8", "num": 8, "title": "Reproduction in Animals", "desc": "Modes of reproduction in animals." },
+                { "id": "s8c9", "num": 9, "title": "Reaching the Age of Adolescence", "desc": "Changes during adolescence." },
+                { "id": "s8c10", "num": 10, "title": "Motion and Measurement of Distances", "desc": "Concepts of motion, speed and measurement." },
+                { "id": "s8c11", "num": 11, "title": "Light", "desc": "Reflection, refraction and the human eye." },
+                { "id": "s8c12", "num": 12, "title": "Sound", "desc": "Properties of sound and human hearing." },
+                { "id": "s8c13", "num": 13, "title": "Chemical Effects of Electric Current", "desc": "Electrolysis and applications." },
+                { "id": "s8c14", "num": 14, "title": "Some Natural Phenomena", "desc": "Lightning, earthquakes and their causes." },
+                { "id": "s8c15", "num": 15, "title": "Stars and the Solar System", "desc": "Celestial bodies and the universe." },
+                { "id": "s8c16", "num": 16, "title": "Pollution of Air and Water", "desc": "Causes and effects of environmental pollution." }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "ss8",
+          "name": "Social Science",
+          "book": "Exploring Society: India and Beyond",
+          "parts": [
+            {
+              "part": 1,
+              "chapters": [
+                { "id": "ss8p1c1", "num": 1, "title": "How, When and Where", "desc": "Introduction to history and sources." },
+                { "id": "ss8p1c2", "num": 2, "title": "From Trade to Territory", "desc": "The British East India Company." },
+                { "id": "ss8p1c3", "num": 3, "title": "Ruling the Countryside", "desc": "Colonial rule and agrarian policies." },
+                { "id": "ss8p1c4", "num": 4, "title": "Tribals, Dikus and the Vision of a Golden Age", "desc": "Tribal societies under colonial rule." },
+                { "id": "ss8p1c5", "num": 5, "title": "When People Rebel", "desc": "The 1857 uprising." }
+              ]
+            },
+            {
+              "part": 2,
+              "chapters": [
+                { "id": "ss8p2c1", "num": 1, "title": "Resources", "desc": "Types and distribution of natural resources." },
+                { "id": "ss8p2c2", "num": 2, "title": "Land, Soil, Water, Natural Vegetation and Wildlife Resources", "desc": "India's natural resource base." },
+                { "id": "ss8p2c3", "num": 3, "title": "Agriculture", "desc": "Types of farming and major crops." },
+                { "id": "ss8p2c4", "num": 4, "title": "Industries", "desc": "Classification and location of industries." },
+                { "id": "ss8p2c5", "num": 5, "title": "The Indian Constitution", "desc": "Features and importance of the Indian Constitution." }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "eng8",
+          "name": "English",
+          "book": "Poorvi",
+          "parts": [
+            {
+              "part": 1,
+              "chapters": [
+                { "id": "e8c1", "num": 1, "title": "The Giving Tree", "desc": "A prose about selfless giving." },
+                { "id": "e8c2", "num": 2, "title": "The Summit Within", "desc": "An account of climbing Mount Everest." },
+                { "id": "e8c3", "num": 3, "title": "Glimpses of the Past", "desc": "India's freedom struggle." },
+                { "id": "e8c4", "num": 4, "title": "Bepin Choudhury's Lapse of Memory", "desc": "A humorous story about memory." },
+                { "id": "e8c5", "num": 5, "title": "The Great Stone Face", "desc": "A story about character and virtue." },
+                { "id": "e8c6", "num": 6, "title": "This is Jody's Fawn", "desc": "A boy's bond with a fawn." },
+                { "id": "e8c7", "num": 7, "title": "A Visit to Cambridge", "desc": "Meeting Stephen Hawking." },
+                { "id": "e8c8", "num": 8, "title": "A Short Monsoon Diary", "desc": "A diary of the monsoon season." }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "hin8",
+          "name": "Hindi",
+          "book": "Malhar",
+          "parts": [
+            {
+              "part": 1,
+              "chapters": [
+                { "id": "h8c1", "num": 1, "title": "ध्वनि", "desc": "सुमित्रानंदन पंत की कविता।" },
+                { "id": "h8c2", "num": 2, "title": "लाख की चूड़ियाँ", "desc": "लाख शिल्पकारी पर आधारित कहानी।" },
+                { "id": "h8c3", "num": 3, "title": "बस की यात्रा", "desc": "एक हास्य यात्रा वृत्तांत।" },
+                { "id": "h8c4", "num": 4, "title": "दीवानों की हस्ती", "desc": "भगवतीचरण वर्मा की कविता।" },
+                { "id": "h8c5", "num": 5, "title": "चिट्ठियों की अनूठी दुनिया", "desc": "पत्र-लेखन का महत्व।" },
+                { "id": "h8c6", "num": 6, "title": "भगवान के डाकिये", "desc": "रामधारी सिंह दिनकर की कविता।" },
+                { "id": "h8c7", "num": 7, "title": "क्या निराश हुआ जाए", "desc": "समाज में आशावाद पर निबंध।" },
+                { "id": "h8c8", "num": 8, "title": "यह सबसे कठिन समय नहीं", "desc": "जया जादवानी की कविता।" }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "class9",
+      "label": "Class 9",
+      "subjects": [
+        {
+          "id": "math9",
+          "name": "Mathematics",
+          "book": "Ganita Manjari",
+          "parts": [
+            {
+              "part": 1,
+              "chapters": [
+                { "id": "m9p1c1", "num": 1, "title": "Number Systems", "desc": "Real numbers, irrational numbers and their representation." },
+                { "id": "m9p1c2", "num": 2, "title": "Polynomials", "desc": "Types of polynomials and algebraic operations." },
+                { "id": "m9p1c3", "num": 3, "title": "Coordinate Geometry", "desc": "Cartesian plane and plotting points." },
+                { "id": "m9p1c4", "num": 4, "title": "Linear Equations in Two Variables", "desc": "Solutions and graphs of linear equations." },
+                { "id": "m9p1c5", "num": 5, "title": "Introduction to Euclid's Geometry", "desc": "Euclid's axioms and postulates." },
+                { "id": "m9p1c6", "num": 6, "title": "Lines and Angles", "desc": "Properties of lines and angles." },
+                { "id": "m9p1c7", "num": 7, "title": "Triangles", "desc": "Congruence criteria and properties of triangles." }
+              ]
+            },
+            {
+              "part": 2,
+              "chapters": [
+                { "id": "m9p2c8", "num": 8, "title": "Quadrilaterals", "desc": "Properties of different types of quadrilaterals." },
+                { "id": "m9p2c9", "num": 9, "title": "Circles", "desc": "Properties and theorems related to circles." },
+                { "id": "m9p2c10", "num": 10, "title": "Heron's Formula", "desc": "Finding area of triangles using Heron's formula." },
+                { "id": "m9p2c11", "num": 11, "title": "Surface Areas and Volumes", "desc": "Surface area and volume of 3D shapes." },
+                { "id": "m9p2c12", "num": 12, "title": "Statistics", "desc": "Collection, presentation and analysis of data." },
+                { "id": "m9p2c13", "num": 13, "title": "Probability", "desc": "Basic concepts of probability." }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "sci9",
+          "name": "Science",
+          "book": "Exploration (Anveshan in Hindi)",
+          "parts": [
+            {
+              "part": 1,
+              "chapters": [
+                { "id": "s9c1", "num": 1, "title": "Matter in Our Surroundings", "desc": "States of matter and their properties." },
+                { "id": "s9c2", "num": 2, "title": "Is Matter Around Us Pure?", "desc": "Mixtures, compounds and elements." },
+                { "id": "s9c3", "num": 3, "title": "Atoms and Molecules", "desc": "Atomic theory and chemical formulae." },
+                { "id": "s9c4", "num": 4, "title": "Structure of the Atom", "desc": "Models of atomic structure." },
+                { "id": "s9c5", "num": 5, "title": "The Fundamental Unit of Life", "desc": "Cell structure and functions." },
+                { "id": "s9c6", "num": 6, "title": "Tissues", "desc": "Plant and animal tissues." },
+                { "id": "s9c7", "num": 7, "title": "Motion", "desc": "Describing motion, speed, velocity and acceleration." },
+                { "id": "s9c8", "num": 8, "title": "Force and Laws of Motion", "desc": "Newton's three laws of motion." },
+                { "id": "s9c9", "num": 9, "title": "Gravitation", "desc": "Universal law of gravitation." },
+                { "id": "s9c10", "num": 10, "title": "Work and Energy", "desc": "Concepts of work, power and energy." },
+                { "id": "s9c11", "num": 11, "title": "Sound", "desc": "Nature of sound and its propagation." },
+                { "id": "s9c12", "num": 12, "title": "Improvement in Food Resources", "desc": "Crop improvement and animal husbandry." }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "ss9",
+          "name": "Social Science",
+          "book": "Understanding Society: India and Beyond",
+          "parts": [
+            {
+              "part": 1,
+              "chapters": [
+                { "id": "ss9p1c1", "num": 1, "title": "The French Revolution", "desc": "Causes and consequences of the French Revolution." },
+                { "id": "ss9p1c2", "num": 2, "title": "Socialism in Europe and the Russian Revolution", "desc": "Rise of socialism and the Russian Revolution." },
+                { "id": "ss9p1c3", "num": 3, "title": "Nazism and the Rise of Hitler", "desc": "Rise of Nazism in Germany." },
+                { "id": "ss9p1c4", "num": 4, "title": "Forest Society and Colonialism", "desc": "Impact of colonialism on forest societies." },
+                { "id": "ss9p1c5", "num": 5, "title": "Pastoralists in the Modern World", "desc": "Lives of pastoral communities." }
+              ]
+            },
+            {
+              "part": 2,
+              "chapters": [
+                { "id": "ss9p2c1", "num": 1, "title": "India – Size and Location", "desc": "India's geographic position and boundaries." },
+                { "id": "ss9p2c2", "num": 2, "title": "Physical Features of India", "desc": "Major physical divisions of India." },
+                { "id": "ss9p2c3", "num": 3, "title": "Drainage", "desc": "River systems of India." },
+                { "id": "ss9p2c4", "num": 4, "title": "Climate", "desc": "India's climate and monsoon system." },
+                { "id": "ss9p2c5", "num": 5, "title": "Natural Vegetation and Wildlife", "desc": "Types of vegetation and wildlife in India." },
+                { "id": "ss9p2c6", "num": 6, "title": "Population", "desc": "Population distribution and growth in India." },
+                { "id": "ss9p2c7", "num": 7, "title": "What is Democracy? Why Democracy?", "desc": "Meaning and importance of democracy." },
+                { "id": "ss9p2c8", "num": 8, "title": "Constitutional Design", "desc": "Making of the Indian Constitution." },
+                { "id": "ss9p2c9", "num": 9, "title": "Electoral Politics", "desc": "Elections and democracy." },
+                { "id": "ss9p2c10", "num": 10, "title": "Working of Institutions", "desc": "Legislature, executive and judiciary." }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "eng9",
+          "name": "English",
+          "book": "Kaveri",
+          "parts": [
+            {
+              "part": 1,
+              "chapters": [
+                { "id": "e9c1", "num": 1, "title": "The Fun They Had", "desc": "A science fiction story about futuristic schools." },
+                { "id": "e9c2", "num": 2, "title": "The Sound of Music", "desc": "Stories of two musicians." },
+                { "id": "e9c3", "num": 3, "title": "The Little Girl", "desc": "A girl's changing relationship with her father." },
+                { "id": "e9c4", "num": 4, "title": "A Truly Beautiful Mind", "desc": "Life of Albert Einstein." },
+                { "id": "e9c5", "num": 5, "title": "The Snake and the Mirror", "desc": "A humorous horror story." },
+                { "id": "e9c6", "num": 6, "title": "My Childhood", "desc": "APJ Abdul Kalam's childhood memories." },
+                { "id": "e9c7", "num": 7, "title": "Packing", "desc": "A humorous excerpt from Jerome K. Jerome." },
+                { "id": "e9c8", "num": 8, "title": "Reach for the Top", "desc": "Stories of two women achievers." }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "hin9",
+          "name": "Hindi",
+          "book": "Ganga",
+          "parts": [
+            {
+              "part": 1,
+              "chapters": [
+                { "id": "h9c1", "num": 1, "title": "दो बैलों की कथा", "desc": "प्रेमचंद की प्रसिद्ध कहानी।" },
+                { "id": "h9c2", "num": 2, "title": "ल्हासा की ओर", "desc": "राहुल सांकृत्यायन की तिब्बत यात्रा।" },
+                { "id": "h9c3", "num": 3, "title": "उपभोक्तावाद की संस्कृति", "desc": "उपभोक्तावाद पर श्यामाचरण दुबे का लेख।" },
+                { "id": "h9c4", "num": 4, "title": "साँवले सपनों की याद", "desc": "जाबिर हुसैन का प्रकृति-प्रेम।" },
+                { "id": "h9c5", "num": 5, "title": "नाना साहब की पुत्री देवी मैना को भस्म कर दिया गया", "desc": "1857 के विद्रोह पर आधारित।" },
+                { "id": "h9c6", "num": 6, "title": "प्रेमचंद के फटे जूते", "desc": "हरिशंकर परसाई का व्यंग्य।" },
+                { "id": "h9c7", "num": 7, "title": "मेरे बचपन के दिन", "desc": "महादेवी वर्मा के बचपन की स्मृतियाँ।" },
+                { "id": "h9c8", "num": 8, "title": "एक कुत्ता और एक मैना", "desc": "हजारीप्रसाद द्विवेदी का संस्मरण।" }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "class10",
+      "label": "Class 10",
+      "subjects": [
+        {
+          "id": "math10",
+          "name": "Mathematics",
+          "book": "Mathematics",
+          "parts": [
+            {
+              "part": 1,
+              "chapters": [
+                { "id": "m10c1", "num": 1, "title": "Real Numbers", "desc": "Euclid's division lemma and fundamental theorem of arithmetic." },
+                { "id": "m10c2", "num": 2, "title": "Polynomials", "desc": "Zeroes of polynomials and division algorithm." },
+                { "id": "m10c3", "num": 3, "title": "Pair of Linear Equations in Two Variables", "desc": "Methods of solving linear equation pairs." },
+                { "id": "m10c4", "num": 4, "title": "Quadratic Equations", "desc": "Solutions of quadratic equations." },
+                { "id": "m10c5", "num": 5, "title": "Arithmetic Progressions", "desc": "AP, nth term and sum of n terms." },
+                { "id": "m10c6", "num": 6, "title": "Triangles", "desc": "Similar triangles and Pythagoras theorem." },
+                { "id": "m10c7", "num": 7, "title": "Coordinate Geometry", "desc": "Distance formula, section formula and area of triangle." },
+                { "id": "m10c8", "num": 8, "title": "Introduction to Trigonometry", "desc": "Trigonometric ratios and identities." },
+                { "id": "m10c9", "num": 9, "title": "Some Applications of Trigonometry", "desc": "Heights and distances using trigonometry." },
+                { "id": "m10c10", "num": 10, "title": "Circles", "desc": "Tangent to a circle and properties." },
+                { "id": "m10c11", "num": 11, "title": "Areas Related to Circles", "desc": "Area of sectors and segments." },
+                { "id": "m10c12", "num": 12, "title": "Surface Areas and Volumes", "desc": "Surface area and volume of combined solids." },
+                { "id": "m10c13", "num": 13, "title": "Statistics", "desc": "Mean, median and mode of grouped data." },
+                { "id": "m10c14", "num": 14, "title": "Probability", "desc": "Classical probability and applications." }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "sci10",
+          "name": "Science",
+          "book": "Science",
+          "parts": [
+            {
+              "part": 1,
+              "chapters": [
+                { "id": "s10c1", "num": 1, "title": "Chemical Reactions and Equations", "desc": "Types of chemical reactions and balancing equations." },
+                { "id": "s10c2", "num": 2, "title": "Acids, Bases and Salts", "desc": "Properties and reactions of acids, bases and salts." },
+                { "id": "s10c3", "num": 3, "title": "Metals and Non-Metals", "desc": "Properties and uses of metals and non-metals." },
+                { "id": "s10c4", "num": 4, "title": "Carbon and Its Compounds", "desc": "Organic chemistry basics and functional groups." },
+                { "id": "s10c5", "num": 5, "title": "Life Processes", "desc": "Nutrition, respiration, transportation and excretion." },
+                { "id": "s10c6", "num": 6, "title": "Control and Coordination", "desc": "Nervous and endocrine systems." },
+                { "id": "s10c7", "num": 7, "title": "How do Organisms Reproduce?", "desc": "Sexual and asexual reproduction." },
+                { "id": "s10c8", "num": 8, "title": "Heredity", "desc": "Inheritance of traits and Mendel's laws." },
+                { "id": "s10c9", "num": 9, "title": "Light – Reflection and Refraction", "desc": "Laws of reflection and refraction; mirrors and lenses." },
+                { "id": "s10c10", "num": 10, "title": "Human Eye and the Colourful World", "desc": "Structure of the eye and optical phenomena." },
+                { "id": "s10c11", "num": 11, "title": "Electricity", "desc": "Electric circuits, Ohm's law and resistances." },
+                { "id": "s10c12", "num": 12, "title": "Magnetic Effects of Electric Current", "desc": "Electromagnets, motors and generators." },
+                { "id": "s10c13", "num": 13, "title": "Our Environment", "desc": "Ecosystems, food chains and environmental impact." }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "ss10",
+          "name": "Social Science",
+          "books": [
+            {
+              "id": "hist10",
+              "title": "India and the Contemporary World – II",
+              "subject": "History",
+              "chapters": [
+                { "id": "h10c1", "num": 1, "title": "The Rise of Nationalism in Europe", "desc": "Nationalism and the making of nation-states in Europe." },
+                { "id": "h10c2", "num": 2, "title": "Nationalism in India", "desc": "Indian national movement under Gandhi." },
+                { "id": "h10c3", "num": 3, "title": "The Making of a Global World", "desc": "Globalisation and its historical roots." },
+                { "id": "h10c4", "num": 4, "title": "The Age of Industrialisation", "desc": "Industrial revolution and its global impact." },
+                { "id": "h10c5", "num": 5, "title": "Print Culture and the Modern World", "desc": "History of print and its social effects." }
+              ]
+            },
+            {
+              "id": "geo10",
+              "title": "Contemporary India – II",
+              "subject": "Geography",
+              "chapters": [
+                { "id": "g10c1", "num": 1, "title": "Resources and Development", "desc": "Types of resources and their sustainable use." },
+                { "id": "g10c2", "num": 2, "title": "Forest and Wildlife Resources", "desc": "India's forests and wildlife conservation." },
+                { "id": "g10c3", "num": 3, "title": "Water Resources", "desc": "Water scarcity and water harvesting." },
+                { "id": "g10c4", "num": 4, "title": "Agriculture", "desc": "Types of farming and agricultural development." },
+                { "id": "g10c5", "num": 5, "title": "Minerals and Energy Resources", "desc": "Types of minerals and energy sources in India." },
+                { "id": "g10c6", "num": 6, "title": "Manufacturing Industries", "desc": "Classification and location of industries." },
+                { "id": "g10c7", "num": 7, "title": "Life Lines of National Economy", "desc": "Transport, communication and trade." }
+              ]
+            },
+            {
+              "id": "pol10",
+              "title": "Democratic Politics – II",
+              "subject": "Political Science",
+              "chapters": [
+                { "id": "p10c1", "num": 1, "title": "Power Sharing", "desc": "Need for and forms of power sharing." },
+                { "id": "p10c2", "num": 2, "title": "Federalism", "desc": "Federal features of India." },
+                { "id": "p10c3", "num": 3, "title": "Gender, Religion and Caste", "desc": "Social divisions in Indian democracy." },
+                { "id": "p10c4", "num": 4, "title": "Political Parties", "desc": "Role and functions of political parties." },
+                { "id": "p10c5", "num": 5, "title": "Outcomes of Democracy", "desc": "Evaluating democracy as a form of government." }
+              ]
+            },
+            {
+              "id": "eco10",
+              "title": "Understanding Economic Development",
+              "subject": "Economics",
+              "chapters": [
+                { "id": "ec10c1", "num": 1, "title": "Development", "desc": "Concept of development and national income." },
+                { "id": "ec10c2", "num": 2, "title": "Sectors of the Indian Economy", "desc": "Primary, secondary and tertiary sectors." },
+                { "id": "ec10c3", "num": 3, "title": "Money and Credit", "desc": "Role of money and banking system." },
+                { "id": "ec10c4", "num": 4, "title": "Globalisation and the Indian Economy", "desc": "Impact of globalisation on India." },
+                { "id": "ec10c5", "num": 5, "title": "Consumer Rights", "desc": "Consumer protection and rights." }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "eng10",
+          "name": "English",
+          "books": [
+            {
+              "id": "ff10",
+              "title": "First Flight",
+              "chapters": [
+                { "id": "ef10c1", "num": 1, "title": "A Letter to God", "desc": "A farmer's unshakeable faith in God." },
+                { "id": "ef10c2", "num": 2, "title": "Nelson Mandela: Long Walk to Freedom", "desc": "Mandela's autobiography excerpt." },
+                { "id": "ef10c3", "num": 3, "title": "Two Stories about Flying", "desc": "Stories of a seagull and a black aeroplane." },
+                { "id": "ef10c4", "num": 4, "title": "From the Diary of Anne Frank", "desc": "Excerpts from Anne Frank's diary." },
+                { "id": "ef10c5", "num": 5, "title": "The Hundred Dresses", "desc": "A two-part story about discrimination." },
+                { "id": "ef10c6", "num": 6, "title": "Amanda!", "desc": "A poem about a girl's freedom." },
+                { "id": "ef10c7", "num": 7, "title": "Animals", "desc": "Walt Whitman's poem on nature." },
+                { "id": "ef10c8", "num": 8, "title": "The Sermon at Benares", "desc": "Buddha's first sermon." },
+                { "id": "ef10c9", "num": 9, "title": "The Proposal", "desc": "A comedy by Anton Chekhov." },
+                { "id": "ef10c10", "num": 10, "title": "Fire and Ice", "desc": "Robert Frost's poem." }
+              ]
+            },
+            {
+              "id": "fwf10",
+              "title": "Footprints Without Feet",
+              "chapters": [
+                { "id": "fw10c1", "num": 1, "title": "A Triumph of Surgery", "desc": "A story about overindulgence." },
+                { "id": "fw10c2", "num": 2, "title": "The Thief's Story", "desc": "Ruskin Bond's story of a young thief." },
+                { "id": "fw10c3", "num": 3, "title": "The Midnight Visitor", "desc": "A spy thriller." },
+                { "id": "fw10c4", "num": 4, "title": "A Question of Trust", "desc": "An unusual burglary story." },
+                { "id": "fw10c5", "num": 5, "title": "Footprints Without Feet", "desc": "H.G. Wells' story of an invisible man." },
+                { "id": "fw10c6", "num": 6, "title": "The Making of a Scientist", "desc": "Richard Feynman's scientific curiosity." },
+                { "id": "fw10c7", "num": 7, "title": "The Necklace", "desc": "Guy de Maupassant's story of vanity." },
+                { "id": "fw10c8", "num": 8, "title": "Bholi", "desc": "A story about education and empowerment." },
+                { "id": "fw10c9", "num": 9, "title": "The Book That Saved the Earth", "desc": "A science fiction comedy." }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "hin10a",
+          "name": "Hindi – Course A",
+          "books": [
+            {
+              "id": "kshitij10",
+              "title": "Kshitij Bhag 2",
+              "chapters": [
+                { "id": "kh10c1", "num": 1, "title": "सूरदास के पद", "desc": "सूरदास की भक्ति कविताएँ।" },
+                { "id": "kh10c2", "num": 2, "title": "राम-लक्ष्मण-परशुराम संवाद", "desc": "तुलसीदास के रामचरितमानस से।" },
+                { "id": "kh10c3", "num": 3, "title": "देव के सवैये", "desc": "देव की काव्य रचनाएँ।" },
+                { "id": "kh10c4", "num": 4, "title": "जयशंकर प्रसाद – आत्मकथ्य", "desc": "प्रसाद की आत्मकथा।" },
+                { "id": "kh10c5", "num": 5, "title": "सूर्यकांत त्रिपाठी 'निराला' – उत्साह और अट नहीं रही", "desc": "निराला की कविताएँ।" }
+              ]
+            },
+            {
+              "id": "kritika10",
+              "title": "Kritika Bhag 2",
+              "chapters": [
+                { "id": "kr10c1", "num": 1, "title": "माता का आँचल", "desc": "शिवपूजन सहाय की कहानी।" },
+                { "id": "kr10c2", "num": 2, "title": "जॉर्ज पंचम की नाक", "desc": "कमलेश्वर का व्यंग्य।" },
+                { "id": "kr10c3", "num": 3, "title": "साना-साना हाथ जोड़ि", "desc": "मधु कांकरिया की सिक्किम यात्रा।" },
+                { "id": "kr10c4", "num": 4, "title": "एही ठैयाँ झुलनी हेरानी हो रामा!", "desc": "शिवप्रसाद मिश्र की कहानी।" },
+                { "id": "kr10c5", "num": 5, "title": "मैं क्यों लिखता हूँ?", "desc": "अज्ञेय का लेखन पर विचार।" }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "hin10b",
+          "name": "Hindi – Course B",
+          "books": [
+            {
+              "id": "sparsh10",
+              "title": "Sparsh Bhag 2",
+              "chapters": [
+                { "id": "sp10c1", "num": 1, "title": "साखी", "desc": "कबीर के दोहे।" },
+                { "id": "sp10c2", "num": 2, "title": "मीरा के पद", "desc": "मीराबाई की भक्ति कविताएँ।" },
+                { "id": "sp10c3", "num": 3, "title": "बिहारी के दोहे", "desc": "बिहारी के श्रृंगारिक दोहे।" },
+                { "id": "sp10c4", "num": 4, "title": "मनुष्यता", "desc": "मैथिलीशरण गुप्त की कविता।" },
+                { "id": "sp10c5", "num": 5, "title": "पर्वत प्रदेश में पावस", "desc": "सुमित्रानंदन पंत की कविता।" }
+              ]
+            },
+            {
+              "id": "sanchayan10",
+              "title": "Sanchayan Bhag 2",
+              "chapters": [
+                { "id": "sa10c1", "num": 1, "title": "हरिहर काका", "desc": "मिथिलेश्वर की कहानी।" },
+                { "id": "sa10c2", "num": 2, "title": "सपनों के से दिन", "desc": "गुरदयाल सिंह की कहानी।" },
+                { "id": "sa10c3", "num": 3, "title": "टोपी शुक्ला", "desc": "राही मासूम रज़ा की कहानी।" }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
