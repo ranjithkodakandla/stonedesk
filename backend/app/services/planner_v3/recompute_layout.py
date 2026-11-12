@@ -97,6 +97,7 @@ def _compute_v3_crate_patch(
         mains, splash_layers = _partition_mains_splashes(pieces)
         splash_layers = _merge_splash_tiers_for_two_layer_cap(splash_layers, cat, warnings)
         dims = horizontal_crate_dimensions(mains, splash_layers, thickness, wood)
+        warnings.extend(dims.get("warnings") or [])
         splash_ids_layers = [[p["id"] for p in lay] for lay in splash_layers]
         main_ids = [p["id"] for p in mains]
         splash_flat = [p["id"] for lay in splash_layers for p in lay]

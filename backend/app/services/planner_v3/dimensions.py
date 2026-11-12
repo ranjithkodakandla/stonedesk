@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from ..planning_engine import parse_float, thickness_inches
 
@@ -185,6 +185,68 @@ def group_splash_pieces_side_by_side(
     return layers
 
 
+def _rows_width(rows: List[List[Dict[str, Any]]], default_thickness: str) -> float:
+    row_thicknesses = [
+        max(thickness_inches(str(p.get("thickness") or default_thickness)) for p in row)
+        for row in rows
+    ]
+    return sum(row_thicknesses) + _KV_WIDTH_CLEARANCE_IN
+
+
+def _row_length_growth_candidates(main_pieces: List[Dict[str, Any]]) -> List[float]:
+    """Candidate row-length budgets beyond the single-longest-piece cap, built
+    from the crate's own distinct piece lengths — never an arbitrary
+    multiplier. Each step adds the next-largest remaining length (plus its
+    gap) to the running total, so a candidate always represents a real
+    combination of this crate's own pieces lying end to end (e.g. 3-4 of the
+    smaller pieces sharing one longer row)."""
+    lengths = sorted({round(parse_float(p.get("length")), 3) for p in main_pieces}, reverse=True)
+    candidates = []
+    running = 0.0
+    for i, length in enumerate(lengths):
+        running += (_ROW_PIECE_GAP_IN if i > 0 else 0.0) + length
+        candidates.append(running + 6.0)
+    return candidates
+
+
+def _pack_main_rows_within_width_band(
+    main_pieces: List[Dict[str, Any]],
+    default_thickness: str,
+) -> Tuple[List[List[Dict[str, Any]]], List[str]]:
+    """Packs main pieces into rows, growing the row-length budget beyond the
+    single-longest-piece cap when needed to merge more pieces into fewer rows
+    — trading crate length for crate width — stopping as soon as width lands
+    at or under the 26" structural maximum, or as soon as growing the budget
+    further stops reducing the row count (nothing left to merge). Never grows
+    length past what's needed: each step is tried only while it still helps.
+
+    If width still exceeds the maximum after exhausting every merge
+    opportunity, the caller is warned rather than having the number silently
+    clamped to a value that wouldn't actually hold the pieces."""
+    cap = _row_grouping_cap(main_pieces)
+    rows = group_main_pieces_into_rows(main_pieces, usable_length=cap)
+    width = _rows_width(rows, default_thickness)
+
+    for candidate_cap in _row_length_growth_candidates(main_pieces):
+        if width <= CRATE_INTERNAL_WIDTH_MAX_IN:
+            break
+        if candidate_cap <= cap:
+            continue
+        candidate_rows = group_main_pieces_into_rows(main_pieces, usable_length=candidate_cap)
+        candidate_width = _rows_width(candidate_rows, default_thickness)
+        if len(candidate_rows) >= len(rows):
+            break  # no further merging achievable — growing length won't help
+        cap, rows, width = candidate_cap, candidate_rows, candidate_width
+
+    warnings: List[str] = []
+    if width > CRATE_INTERNAL_WIDTH_MAX_IN:
+        warnings.append(
+            f"Crate width {round(width, 1)}\" exceeds the {CRATE_INTERNAL_WIDTH_MAX_IN}\" "
+            "maximum even after merging rows by length — needs manual review."
+        )
+    return rows, warnings
+
+
 def horizontal_crate_dimensions(
     main_pieces: List[Dict[str, Any]],
     splash_layers: List[List[Dict[str, Any]]],
@@ -208,15 +270,22 @@ def horizontal_crate_dimensions(
             "external_length": 0.0,
             "external_width": 0.0,
             "external_height": 0.0,
+            "warnings": [],
         }
 
     # Phase A uses the longest single piece (+ clearance) as the row-grouping
     # cap. Phase B (inside group_main_pieces_into_rows) can then consolidate
-    # leftover same-length singletons into an existing row past that cap —
-    # so the crate's actual internal_length must be derived from whatever
-    # the longest row ends up being, not frozen at the pre-grouping cap.
-    phase_a_cap = _row_grouping_cap(main_pieces) if main_pieces else _max_piece_length(all_p) + 6.0
-    rows_for_length = group_main_pieces_into_rows(main_pieces, usable_length=phase_a_cap) if main_pieces else []
+    # leftover same-length singletons into an existing row past that cap.
+    # If that still leaves the crate wider than the 10-26" structural band
+    # allows, _pack_main_rows_within_width_band grows the row-length budget
+    # further — trading length for width — using this crate's own piece
+    # lengths (e.g. combining 3-4 shorter pieces into one longer row) rather
+    # than stacking every distinct length into its own thickness slot. The
+    # crate's actual internal_length must be derived from whatever the
+    # longest row ends up being, not frozen at the pre-grouping cap.
+    rows_for_length, width_warnings = (
+        _pack_main_rows_within_width_band(main_pieces, default_thickness) if main_pieces else ([], [])
+    )
     longest_row_raw = max((_row_raw_length(row) for row in rows_for_length), default=0.0)
     internal_length = max(_max_piece_length(all_p), longest_row_raw) + _KV_LENGTH_CLEARANCE_IN
 
@@ -251,7 +320,12 @@ def horizontal_crate_dimensions(
     else:
         internal_width = thickness_inches(default_thickness) + _KV_WIDTH_CLEARANCE_IN
 
-    internal_width = max(CRATE_INTERNAL_WIDTH_MIN_IN, min(internal_width, CRATE_INTERNAL_WIDTH_MAX_IN))
+    # Floor only — padding a too-narrow result up to 10" is always safe.
+    # There is no ceiling clamp here: if _pack_main_rows_within_width_band
+    # couldn't bring width at or under 26" by merging rows, silently
+    # reporting 26" would understate the crate's true physical size instead
+    # of flagging it (see width_warnings).
+    internal_width = max(CRATE_INTERNAL_WIDTH_MIN_IN, internal_width)
 
     return {
         "internal_length": round(internal_length, 1),
@@ -261,6 +335,7 @@ def horizontal_crate_dimensions(
         "external_width": round(internal_width + _WALL, 1),
         "external_height": round(internal_height + _HEIGHT_TOP, 1),
         "wood_thickness": wood_thickness,
+        "warnings": width_warnings,
     }
 
 

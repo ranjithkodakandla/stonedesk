@@ -13,6 +13,8 @@
 from app.services.planner_v3.dimensions import (
     CRATE_INTERNAL_WIDTH_MAX_IN,
     CRATE_INTERNAL_WIDTH_MIN_IN,
+    _pack_main_rows_within_width_band,
+    group_main_pieces_into_rows,
     group_splash_pieces_side_by_side,
     horizontal_crate_dimensions,
 )
@@ -74,12 +76,58 @@ def test_internal_width_is_clamped_to_the_minimum_when_pieces_are_very_thin():
     assert dims["internal_width"] == CRATE_INTERNAL_WIDTH_MIN_IN
 
 
-def test_internal_width_is_clamped_to_the_maximum_when_many_thick_rows_stack_up():
-    # Many pieces too long to share rows, each thick, driving the raw
-    # row-thickness sum well past 26".
+def test_identical_pieces_that_cannot_merge_report_true_width_with_a_warning_instead_of_a_silent_clamp():
+    # 20 identical 90"-long pieces never share a row (no distinct shorter
+    # length exists to combine them into), so growing the row-length budget
+    # can't reduce the row count — the true width (well past 26") must be
+    # reported with a warning, never silently clamped to a number that
+    # wouldn't actually hold the pieces.
     pieces = [
         {"id": f"p{i}", "length": 90, "width": 30, "thickness": "4CM"}
         for i in range(20)
     ]
     dims = horizontal_crate_dimensions(pieces, [], "4CM", wood_thickness=1.25)
-    assert dims["internal_width"] == CRATE_INTERNAL_WIDTH_MAX_IN
+    assert dims["internal_width"] > CRATE_INTERNAL_WIDTH_MAX_IN
+    assert any("26" in w for w in dims["warnings"])
+
+
+def test_growing_the_row_length_budget_merges_more_pieces_per_row_and_pulls_width_back_into_band():
+    # 20 pieces of 29" plus one 30" piece. At the base row-length cap
+    # (30+6=36"), two 29s don't fit a row together (29+1+29=59 > 36), so
+    # every 29" piece would get its own row -> 21 rows -> width way past
+    # 26". Growing the cap to the sum of the two distinct lengths
+    # (30+1+29+6=66") lets pairs of 29s share a row (29+1+29=59 <= 66),
+    # roughly halving the row count and pulling width back under 26"
+    # without the caller ever being warned.
+    main = {"id": "main-30", "length": 30, "width": 25, "thickness": "4CM"}
+    shorts = [{"id": f"s{i}", "length": 29, "width": 25, "thickness": "4CM"} for i in range(20)]
+    pieces = [main] + shorts
+
+    base_cap_rows = group_main_pieces_into_rows(pieces, usable_length=36.0)
+    assert len(base_cap_rows) == 21  # confirms the naive base-cap packing really would be this wide
+
+    rows, warnings = _pack_main_rows_within_width_band(pieces, "4CM")
+    assert len(rows) < len(base_cap_rows)
+    assert warnings == []
+
+    dims = horizontal_crate_dimensions(pieces, [], "4CM", wood_thickness=1.25)
+    assert dims["internal_width"] <= CRATE_INTERNAL_WIDTH_MAX_IN
+    assert dims["warnings"] == []
+
+
+def test_three_or_four_shorter_pieces_merge_into_one_longer_row_to_pull_width_back_into_band():
+    # One 68" main piece plus four 25" pieces. Two 25s alone (25+1+25=51")
+    # already fit the 68-based row budget (68+6=74"), but packing only two
+    # per row still leaves 3 rows total (68-row, and two 25-pairs) -> width
+    # would be 3 row-thicknesses. Growing the row-length budget to merge
+    # three 25s together (25+1+25+1+25=77" > 74") lets all four 25s share
+    # just two rows (or even one, if budget grows enough), pulling the
+    # total row count — and so the width — down further.
+    main = {"id": "main-68", "length": 68, "width": 25, "thickness": "3CM"}
+    shorts = [{"id": f"s{i}", "length": 25, "width": 25, "thickness": "3CM"} for i in range(4)]
+    dims = horizontal_crate_dimensions([main] + shorts, [], "3CM", wood_thickness=1.25)
+    # Row-merging (helped by growing the length budget where needed) must
+    # bring width comfortably inside the 10-26" structural band, not leave
+    # it high from treating every distinct length as its own row/thickness
+    # slot with no further consolidation.
+    assert CRATE_INTERNAL_WIDTH_MIN_IN <= dims["internal_width"] <= CRATE_INTERNAL_WIDTH_MAX_IN

@@ -134,6 +134,7 @@ def _emit_one_horizontal_crate(
         warnings.append(f"Crate {letter}-{serial} exceeds target max {spec['max_kg']} kg ({round(wt)} kg).")
 
     dims = horizontal_crate_dimensions(main_pieces, splash_layers, thickness, wood_thickness)
+    warnings.extend(dims.get("warnings") or [])
 
     splash_ids_by_layer = [[p["id"] for p in layer] for layer in splash_layers]
     layers_model: List[Dict[str, Any]] = [
