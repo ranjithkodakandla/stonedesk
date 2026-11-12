@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeCrateDimensions, DEFAULT_DIM_CONFIG } from './CrateFilterPlanner';
+import { computeCrateDimensions, DEFAULT_DIM_CONFIG, relaxFiltersUntilNonEmpty, EMPTY_FILTERS } from './CrateFilterPlanner';
 
 const rangeTop = (id, length, width = 25.5, thickness = '3CM') => ({
   id, part: 'Kitchen - Range Tops', category: 'range', length, width, thickness,
@@ -87,5 +87,46 @@ describe('computeCrateDimensions (the actual "Filter parts and build crates" scr
     const dims = computeCrateDimensions(parts, DEFAULT_DIM_CONFIG);
     const noGrowthWidth = withoutGrowthRows * 1.57 + DEFAULT_DIM_CONFIG.kv.widthMargin * 2;
     expect(dims.internal_width).toBeLessThan(noGrowthWidth);
+  });
+});
+
+describe('relaxFiltersUntilNonEmpty (pool stays filtered, but never shows "nothing" after a crate is built)', () => {
+  const pool = [
+    { building: 'HH-1', pod: 'POD 1', part: 'Vanity Top', length: 40 },
+    { building: 'HH-2', pod: 'POD 2', part: 'Kitchen Top', length: 60 },
+  ];
+
+  it('leaves filters untouched when the pool already matches them', () => {
+    const filters = { ...EMPTY_FILTERS, buildings: ['HH-1'] };
+    const result = relaxFiltersUntilNonEmpty(filters, ['buildings'], pool);
+    expect(result).toEqual(filters);
+  });
+
+  it('drops the most recently touched filter first, and stops as soon as something matches', () => {
+    // Building=HH-1 AND POD=POD 2 matches nothing in this pool (no piece has
+    // both). POD was touched most recently, so it should be dropped first —
+    // leaving Building=HH-1, which does match a real piece.
+    const filters = { ...EMPTY_FILTERS, buildings: ['HH-1'], pods: ['POD 2'] };
+    const result = relaxFiltersUntilNonEmpty(filters, ['buildings', 'pods'], pool);
+    expect(result.buildings).toEqual(['HH-1']);
+    expect(result.pods).toEqual([]);
+  });
+
+  it('keeps dropping filters (oldest-touched next) until something matches', () => {
+    // Neither Building=HH-1 alone nor combined with POD=POD-2 matches —
+    // only dropping both filters reveals anything.
+    const filters = { ...EMPTY_FILTERS, buildings: ['HH-1'], pods: ['POD 2'] };
+    const onlyOnePieceEverywhere = [{ building: 'HH-3', pod: 'POD 3', part: 'Vanity Top', length: 10 }];
+    const result = relaxFiltersUntilNonEmpty(filters, ['buildings', 'pods'], onlyOnePieceEverywhere);
+    expect(result.buildings).toEqual([]);
+    expect(result.pods).toEqual([]);
+  });
+
+  it('never touches an inactive filter that was never set', () => {
+    const filters = { ...EMPTY_FILTERS, buildings: ['nope'] };
+    const result = relaxFiltersUntilNonEmpty(filters, ['buildings'], []);
+    // Pool is empty outright — nothing can ever match, so every active
+    // filter gets cleared (same as the old full-reset behavior).
+    expect(result.buildings).toEqual([]);
   });
 });

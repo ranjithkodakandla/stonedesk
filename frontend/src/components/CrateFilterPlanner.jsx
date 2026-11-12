@@ -29,7 +29,7 @@ const FILTER_DIMS = [
   { key: 'units', field: 'unit', label: 'Unit' },
 ];
 
-const EMPTY_FILTERS = FILTER_DIMS.reduce((acc, d) => ({ ...acc, [d.key]: [] }), {});
+export const EMPTY_FILTERS = FILTER_DIMS.reduce((acc, d) => ({ ...acc, [d.key]: [] }), {});
 const FILTER_DIMS_BY_KEY = Object.fromEntries(FILTER_DIMS.map((d) => [d.key, d]));
 
 // Pool table columns, left to right — Excel-style: filterable columns carry a
@@ -58,6 +58,37 @@ function partMatchesFilters(part, filters, exceptKey) {
     if (!sel.length) return true;
     return sel.includes(String(part[d.field]));
   });
+}
+
+// After parts get allocated into a crate, the filters that just matched them
+// can leave the pool showing nothing — not because the user wants an empty
+// view, but because every part that combination matched is now gone. Instead
+// of wiping all filters back to empty, drop them one at a time (most
+// recently touched first, per filterOrder) until the remaining pool has
+// something to show, stopping at the very first filter removal that works.
+export function relaxFiltersUntilNonEmpty(currentFilters, filterOrder, pool) {
+  const hasMatch = (f) => pool.some((p) => partMatchesFilters(p, f, null));
+  if (hasMatch(currentFilters)) return currentFilters;
+
+  let next = currentFilters;
+  const seen = new Set();
+  for (let i = filterOrder.length - 1; i >= 0; i -= 1) {
+    const key = filterOrder[i];
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (!next[key] || !next[key].length) continue; // already inactive
+    next = { ...next, [key]: [] };
+    if (hasMatch(next)) return next;
+  }
+  // Order didn't cover every active filter (e.g. set via some other path) —
+  // fall back to clearing whatever's left, one dimension at a time.
+  for (const d of FILTER_DIMS) {
+    if (seen.has(d.key)) continue;
+    if (!next[d.key] || !next[d.key].length) continue;
+    next = { ...next, [d.key]: [] };
+    if (hasMatch(next)) return next;
+  }
+  return next;
 }
 
 // Cascading facet options: for a given dimension, compute distinct values (with
@@ -340,7 +371,7 @@ function CrateSummaryTable({ crates, onViewDetails, onDeleteCrate }) {
           <thead className="sticky top-0 z-10">
             <tr className="bg-[#f8fafc] text-[#64748b] uppercase tracking-wide text-[10px]">
               {CRATE_SUMMARY_COLUMNS.map((c) => (
-                <th key={c.key} className={`px-3 py-2 text-left whitespace-nowrap ${c.numeric ? 'text-right' : ''}`}>
+                <th key={c.key} className={`px-3 py-2 whitespace-nowrap ${c.numeric ? 'text-right' : 'text-left'}`}>
                   {c.label}
                 </th>
               ))}
@@ -530,7 +561,7 @@ function CrateDetailModal({ crate, crateOptions, onMovePart, onClose }) {
                   return (
                     <th
                       key={c.key}
-                      className={`px-3 py-2 text-left whitespace-nowrap ${c.numeric ? 'text-right' : ''} ${isFiltered ? 'bg-[#dbeafe] text-[#1d4ed8]' : ''}`}
+                      className={`px-3 py-2 whitespace-nowrap ${c.numeric ? 'text-right' : 'text-left'} ${isFiltered ? 'bg-[#dbeafe] text-[#1d4ed8]' : ''}`}
                       title={isFiltered ? 'Filter active on this column' : undefined}
                     >
                       {c.label}
@@ -690,7 +721,15 @@ const CrateFilterPlanner = ({ projectId }) => {
     return filteredPartsAll.slice(0, n);
   }, [filteredPartsAll, selectCount]);
 
-  const setFilter = (key, values) => setFilters((f) => ({ ...f, [key]: values }));
+  // Tracks which filter dimensions were touched, oldest first, so a later
+  // auto-relax (see relaxFiltersUntilNonEmpty) knows which one to drop first
+  // — the one the user most recently set is the most likely reason the pool
+  // just went empty.
+  const filterOrderRef = useRef([]);
+  const setFilter = (key, values) => {
+    filterOrderRef.current = [...filterOrderRef.current.filter((k) => k !== key), key];
+    setFilters((f) => ({ ...f, [key]: values }));
+  };
 
   useEffect(() => {
     // Reset selection whenever the pool changes so stale checkbox state
@@ -762,8 +801,15 @@ const CrateFilterPlanner = ({ projectId }) => {
     setManualCrateNo('');
     // Keep the active filters as-is — the user picked them on purpose and
     // may want to keep building more crates from the same filtered view.
+    // But if every part they just matched is now allocated, the pool would
+    // show nothing at all under that same combination — relax filters one
+    // at a time (most recently touched first) until something reappears,
+    // instead of wiping them all back to empty.
+    const chosenIds = new Set(chosen.map((p) => p.id));
+    const remainingPool = availableParts.filter((p) => !chosenIds.has(p.id));
+    setFilters((f) => relaxFiltersUntilNonEmpty(f, filterOrderRef.current, remainingPool));
     setSelectCount('');
-  }, [filteredParts, selectedPartIds, manualCrateNo, crates, dimConfig, filters, logCrateAction]);
+  }, [filteredParts, selectedPartIds, manualCrateNo, crates, dimConfig, filters, logCrateAction, availableParts]);
 
   const handleAutoBucket = useCallback(() => {
     if (!filteredParts.length) return;
@@ -774,9 +820,13 @@ const CrateFilterPlanner = ({ projectId }) => {
       const added = batches.map((parts) => crateFromParts(nextNo++, parts, dimConfig));
       return [...prev, ...added];
     });
-    // Keep the active filters as-is — see handleCreateManualCrate.
+    // Keep the active filters as-is, but relax them if the pool they just
+    // emptied out would otherwise show nothing — see handleCreateManualCrate.
+    const chosenIds = new Set(filteredParts.map((p) => p.id));
+    const remainingPool = availableParts.filter((p) => !chosenIds.has(p.id));
+    setFilters((f) => relaxFiltersUntilNonEmpty(f, filterOrderRef.current, remainingPool));
     setSelectCount('');
-  }, [filteredParts, targetWeightKg, dimConfig]);
+  }, [filteredParts, targetWeightKg, dimConfig, availableParts]);
 
   const handleMovePart = useCallback((partId, fromCrateNo, toCrateNoRaw) => {
     setCrates((prev) => {
