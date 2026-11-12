@@ -1171,7 +1171,7 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
             {project.project_type === 'house' && (
               <div className="space-y-2">
                 <div className="flex items-center gap-2 text-[10px] font-semibold text-[#64748b] uppercase tracking-wide px-1">
-                  <span className="w-48">Building / House Name</span>
+                  <span className="w-48">POD (Building / House Name)</span>
                   <span className="w-20">Qty</span>
                 </div>
                 {houseRows.map((row, idx) => (
@@ -1204,10 +1204,10 @@ const EntryForm = ({ project, setProject, onDataChange, loadedDrawing, onLoadedD
                   onClick={() => setHouseRows(prev => [...prev, { building: '', qty: 1 }])}
                   className="text-xs text-[#1d4ed8] hover:text-[#1e40af] font-medium flex items-center gap-1 mt-1"
                 >
-                  + Add building
+                  + Add POD
                 </button>
                 <div className="text-[10px] text-[#94a3b8] mt-1">
-                  Each row creates <em>Qty</em> pieces for that building. Floor and flat are left blank for individual houses.
+                  Each row creates <em>Qty</em> pieces for that POD (individual home group). Floor and flat are left blank for individual houses.
                 </div>
               </div>
             )}

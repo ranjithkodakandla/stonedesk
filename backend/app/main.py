@@ -2941,6 +2941,8 @@ def export_manual_crate_plan_xlsx(project_id: int, body: Dict):
     project_full = projects_col.find_one({"id": project_id}, {"_id": 0}) or {}
     material = project_full.get("material", "Granite")
     stone_color = str(project_full.get("stone_color", "") or "")
+    is_house = project_full.get("project_type") == "house"
+    building_label = "POD" if is_house else "Building"
 
     def piece_sqft(p):
         return piece_area_sqft(p)
@@ -2976,7 +2978,7 @@ def export_manual_crate_plan_xlsx(project_id: int, body: Dict):
     ws2 = wb.create_sheet("Crate Detail")
     ws2.append([
         "Crate #", "Part #", "Part Type", "Category", "Drawing", "Unit",
-        "Building", "Floor", "Flat", "Length (in)", "Width (in)", "Thickness", "Qty",
+        building_label, "Floor", "Flat", "Length (in)", "Width (in)", "Thickness", "Qty",
         "Sq Ft", "Weight (kg)", "Label",
     ])
     _bold_header(ws2, 1)
@@ -4952,6 +4954,7 @@ def export_source_data(project_id: int):
     project = projects_col.find_one({"id": project_id}, {"_id": 0})
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+    building_label = "POD" if project.get("project_type") == "house" else "Building"
 
     pieces = sorted(pieces_col.find({"project_id": project_id}, {"_id": 0}), key=lambda doc: doc["id"])
     if not pieces:
@@ -4992,7 +4995,7 @@ def export_source_data(project_id: int):
             # Identity
             "Part #", "Part Type", "Category", "Drawing", "Unit",
             # Location
-            "Building", "Floor", "Flat",
+            building_label, "Floor", "Flat",
             # Dimensions
             "Length (in)", "Width (in)", "Thickness", "Qty", "Sq Ft", "Weight (kg)",
             # Sink
@@ -5069,6 +5072,7 @@ def export_excel(project_id: int):
     project = projects_col.find_one({"id": project_id}, {"_id": 0})
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+    building_label = "POD" if project.get("project_type") == "house" else "Building"
 
     pieces = sorted(pieces_col.find({"project_id": project_id}, {"_id": 0}), key=lambda doc: doc["id"])
     if not pieces:
@@ -5198,7 +5202,7 @@ def export_excel(project_id: int):
             # Identity
             "Piece ID", "Part #", "Part Type", "Category", "Drawing", "Unit",
             # Location
-            "Building", "Floor", "Flat",
+            building_label, "Floor", "Flat",
             # Dimensions
             "Length (in)", "Width (in)", "Thickness", "Qty", "Stone Wt (kg)",
             # Sink
