@@ -2,6 +2,16 @@ import React, { useMemo, useState } from 'react';
 import { FixedSizeList as List } from 'react-window';
 import axios from 'axios';
 import { formatNumber } from '../utils/plannerUtils';
+import MultiSelectDropdown from './MultiSelectDropdown';
+
+// Columns with an Excel-style AutoFilter dropdown in the header — same
+// convention as the Crate Plan "Filter parts and build crates" screen
+// (CrateFilterPlanner.jsx's POOL_COLUMNS/FILTER_DIMS).
+const FILTERABLE_COLUMN_KEYS = [
+  'part', 'category', 'drawing', 'unit', 'building', 'pod', 'floor', 'flat',
+  'length', 'width', 'qty', 'thickness',
+];
+const EMPTY_PIECE_FILTERS = Object.fromEntries(FILTERABLE_COLUMN_KEYS.map((k) => [k, []]));
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
@@ -122,6 +132,7 @@ const PieceRow = React.memo(({ index, style, data }) => {
 
 const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing }) => {
   const [partSearch, setPartSearch] = useState('');
+  const [columnFilters, setColumnFilters] = useState(EMPTY_PIECE_FILTERS);
   const [selectedIds, setSelectedIds] = useState([]);
   const [editMode, setEditMode] = useState(null);
   const [editDraft, setEditDraft] = useState(null);
@@ -384,14 +395,49 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing })
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
   };
 
+  const matchesColumnFilters = (p, exceptKey) => FILTERABLE_COLUMN_KEYS.every((key) => {
+    if (key === exceptKey) return true;
+    const sel = columnFilters[key] || [];
+    if (!sel.length) return true;
+    return sel.includes(String(p[key] ?? ''));
+  });
+
+  // Cascading facet options: for a given column, compute distinct values (with
+  // how many pieces each matches) from pieces that match every OTHER active
+  // filter (classic Excel AutoFilter behavior) — same convention as
+  // CrateFilterPlanner.jsx's facetOptions().
+  const columnFilterOptions = useMemo(() => {
+    const out = {};
+    for (const key of FILTERABLE_COLUMN_KEYS) {
+      const counts = new Map();
+      for (const p of pieces) {
+        if (!matchesColumnFilters(p, key)) continue;
+        const v = String(p[key] ?? '');
+        counts.set(v, (counts.get(v) || 0) + 1);
+      }
+      out[key] = [...counts.keys()]
+        .sort((a, b) => {
+          const na = parseFloat(a), nb = parseFloat(b);
+          return !isNaN(na) && !isNaN(nb) ? na - nb : a.localeCompare(b);
+        })
+        .map((value) => ({ value, count: counts.get(value) }));
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pieces, columnFilters]);
+
   const filteredPieces = useMemo(() => {
     const q = partSearch.trim().toLowerCase();
-    if (!q) return pieces;
-    return pieces.filter(p =>
-      String(p.part_no || '').toLowerCase().includes(q) ||
-      String(p.drawing || '').toLowerCase().includes(q)
-    );
-  }, [pieces, partSearch]);
+    return pieces.filter((p) => {
+      if (!matchesColumnFilters(p, null)) return false;
+      if (!q) return true;
+      return (
+        String(p.part_no || '').toLowerCase().includes(q) ||
+        String(p.drawing || '').toLowerCase().includes(q)
+      );
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pieces, partSearch, columnFilters]);
 
   const toggleAllSelection = () => {
     const visibleIds = filteredPieces.map(p => p.id);
@@ -507,8 +553,17 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing })
           className="rounded border border-[#e2e8f0] px-2 py-1 text-xs w-40 outline-none focus:border-[#94a3b8]"
           placeholder="1051…"
         />
-        {partSearch && (
+        {(partSearch || Object.values(columnFilters).some((v) => v.length > 0)) && (
           <span className="text-xs text-[#94a3b8]">{filteredPieces.length} of {pieces.length}</span>
+        )}
+        {Object.values(columnFilters).some((v) => v.length > 0) && (
+          <button
+            type="button"
+            onClick={() => setColumnFilters(EMPTY_PIECE_FILTERS)}
+            className="text-xs text-[#1d4ed8] hover:underline"
+          >
+            Clear column filters
+          </button>
         )}
       </div>
       <div className="flex items-center justify-between mb-3">
@@ -563,15 +618,28 @@ const PiecesTable = ({ pieces, project, onDelete, onDataChange, onLoadDrawing })
             </div>
             <div className="p-3 flex items-center sticky z-20 bg-[#f1f5f9] whitespace-nowrap border-r border-[#e2e8f0]" style={{ width: COLUMNS[1].width, left: COLUMNS[0].width }}>Part #</div>
             {visibleCols.slice(2).map((col) => (
-              <div key={col.key} className="p-3 flex items-center" style={{ width: col.width }}>
-                {col.label}
+              <div key={col.key} className="p-3 flex items-center gap-1" style={{ width: col.width }}>
+                <span className="truncate">{col.label}</span>
+                {FILTERABLE_COLUMN_KEYS.includes(col.key) && (
+                  <MultiSelectDropdown
+                    compact
+                    label={col.label}
+                    options={columnFilterOptions[col.key] || []}
+                    selected={columnFilters[col.key] || []}
+                    onChange={(vals) => setColumnFilters((f) => ({ ...f, [col.key]: vals }))}
+                  />
+                )}
               </div>
             ))}
           </div>
 
           {filteredPieces.length === 0 ? (
             <div className="p-8 text-center text-[#64748b] italic" style={{ width: totalWidth }}>
-              {pieces.length === 0 ? 'No pieces added to this project yet.' : `No pieces match “${partSearch}”`}
+              {pieces.length === 0
+                ? 'No pieces added to this project yet.'
+                : partSearch
+                  ? `No pieces match “${partSearch}”`
+                  : 'No pieces match the active filters.'}
             </div>
           ) : (
             <List
