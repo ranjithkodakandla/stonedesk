@@ -17,6 +17,7 @@ function fmt(n) {
 
 const FILTER_DIMS = [
   { key: 'buildings', field: 'building', label: 'Building' },
+  { key: 'pods', field: 'pod', label: 'POD' },
   { key: 'floors', field: 'floor', label: 'Floor' },
   { key: 'lengths', field: 'length', label: 'Length (in)' },
   { key: 'widths', field: 'width', label: 'Width / Depth (in)' },
@@ -40,6 +41,7 @@ const POOL_COLUMNS = [
   { field: 'category', label: 'Category', filterKey: 'categories' },
   { field: 'part_no', label: 'Part #' },
   { field: 'building', label: 'Building', filterKey: 'buildings' },
+  { field: 'pod', label: 'POD', filterKey: 'pods' },
   { field: 'floor', label: 'Floor', filterKey: 'floors' },
   { field: 'length', label: 'Length (in)', filterKey: 'lengths', numeric: true },
   { field: 'width', label: 'Width (in)', filterKey: 'widths', numeric: true },
@@ -294,6 +296,7 @@ const TABLE_COLUMNS = [
   { key: 'category', label: 'Category' },
   { key: 'part_no', label: 'Part #' },
   { key: 'building', label: 'Building' },
+  { key: 'pod', label: 'POD' },
   { key: 'floor', label: 'Floor' },
   { key: 'flat', label: 'Flat' },
   { key: 'length', label: 'Length (in)', numeric: true },
