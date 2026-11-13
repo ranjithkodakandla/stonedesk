@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-const WEIGHT_PRESETS = [1800, 1900, 2000];
+const WEIGHT_PRESETS = [2400, 2600, 2800];
 
 export default function TargetWeightControl({ value, onChange }) {
   const [custom, setCustom] = useState(false);

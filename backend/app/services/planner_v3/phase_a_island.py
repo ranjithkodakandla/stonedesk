@@ -1,5 +1,5 @@
 """
-Phase A — operational island cassette packing (bundles, ideal ~1900 kg, dynamic dims).
+Phase A — operational island cassette packing (bundles, ideal ~2600 kg, dynamic dims).
 Gated by PLANNER_V3_OPERATIONAL=1 — legacy path remains default.
 """
 from __future__ import annotations
@@ -15,12 +15,14 @@ from .dispatch import dispatch_group_label
 from .container_layout import CONTAINER_20FT
 from .scored_packing import greedy_ideal_batches
 
-# kg targets — acceptable band 1400–2200; ideal 1800–2000 (spec §8–9)
+# kg targets — matches the fabrication floor's actual island crate practice:
+# 2,600 kg is a hard cap (no padding/overage on top of it), ideal band sits
+# just under that cap rather than well below it.
 _ISLAND_ACCEPTABLE_LO = 1400.0
-_ISLAND_ACCEPTABLE_HI = 2200.0
-_ISLAND_IDEAL_CENTER = 1900.0
-_ISLAND_IDEAL_LO = 1800.0
-_ISLAND_IDEAL_HI = 2000.0
+_ISLAND_ACCEPTABLE_HI = 2600.0
+_ISLAND_IDEAL_CENTER = 2600.0
+_ISLAND_IDEAL_LO = 2400.0
+_ISLAND_IDEAL_HI = 2600.0
 
 
 def operational_planner_enabled() -> bool:

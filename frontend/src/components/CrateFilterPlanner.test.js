@@ -1,8 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { computeCrateDimensions, DEFAULT_DIM_CONFIG, relaxFiltersUntilNonEmpty, EMPTY_FILTERS } from './CrateFilterPlanner';
+import {
+  computeCrateDimensions, DEFAULT_DIM_CONFIG, relaxFiltersUntilNonEmpty, EMPTY_FILTERS,
+  partitionPartsByClassAndBuilding, islandBatchParts,
+} from './CrateFilterPlanner';
+import { CRATE_INTERNAL_WIDTH_MAX_IN } from '../utils/rowPacking';
 
 const rangeTop = (id, length, width = 25.5, thickness = '3CM') => ({
   id, part: 'Kitchen - Range Tops', category: 'range', length, width, thickness,
+});
+
+const islandTop = (id, building, weightKg, thickness = '3CM', length = 113.5, width = 13) => ({
+  id, part: 'Kitchen - Island Tops', category: 'island', building, length, width, thickness,
+  weight_kg: weightKg, qty: 1,
 });
 
 describe('computeCrateDimensions (the actual "Filter parts and build crates" screen)', () => {
@@ -128,5 +137,57 @@ describe('relaxFiltersUntilNonEmpty (pool stays filtered, but never shows "nothi
     // Pool is empty outright — nothing can ever match, so every active
     // filter gets cleared (same as the old full-reset behavior).
     expect(result.buildings).toEqual([]);
+  });
+});
+
+describe('partitionPartsByClassAndBuilding (auto-bucket never spans class/building)', () => {
+  it('splits a mixed-class, mixed-building pool into one partition per (class, building)', () => {
+    const parts = [
+      islandTop('i1', '10', 2500),
+      islandTop('i2', '14', 2500),
+      { ...rangeTop('r1', 71), building: '10', weight_kg: 1500, qty: 1 },
+    ];
+    const partitions = partitionPartsByClassAndBuilding(parts);
+    // Islands in building 10, islands in building 14, and range tops in
+    // building 10 must never land in the same partition.
+    expect(partitions.length).toBe(3);
+    for (const p of partitions) {
+      const buildings = new Set(p.parts.map((x) => x.building));
+      expect(buildings.size).toBe(1);
+    }
+  });
+});
+
+describe('islandBatchParts (regression: the 252.92" / 7-building crate bug)', () => {
+  it('reproduces the manual plan for a single building: ~2 islands per ~2,577kg crate, never over width cap', () => {
+    // Mirrors the Excel "Internal Crate Size" table for building 17:
+    // 2 crates of 2 islands each, 2,577 kg, 13" internal width.
+    const parts = [
+      islandTop('a', '17', 1288.5), islandTop('b', '17', 1288.5),
+      islandTop('c', '17', 1288.5), islandTop('d', '17', 1288.5),
+    ];
+    const widthMarginTotal = 1; // DEFAULT_DIM_CONFIG.island.widthMargin * 2
+    const batches = islandBatchParts(parts, 2600, widthMarginTotal);
+    expect(batches.length).toBe(2);
+    for (const batch of batches) {
+      const stackDepth = batch.reduce((s, p) => s + 1.18 /* 3CM */ * p.qty, 0); // approx, thickness 3CM ≈ 1.18in
+      expect(stackDepth + widthMarginTotal).toBeLessThanOrEqual(CRATE_INTERNAL_WIDTH_MAX_IN);
+      const weight = batch.reduce((s, p) => s + p.weight_kg, 0);
+      expect(weight).toBeLessThanOrEqual(2600);
+    }
+  });
+
+  it('never lets stack depth (thickness sum) exceed the 26" width cap, splitting into more crates instead', () => {
+    // 40 island pieces at 3CM (~1.18") each would stack to ~47" if left in
+    // one batch — well past the 26" structural max. Low weight-per-piece
+    // means the old weight-only batcher would have kept them in one crate.
+    const parts = Array.from({ length: 40 }, (_, i) => islandTop(`p${i}`, '17', 50));
+    const widthMarginTotal = 1;
+    const batches = islandBatchParts(parts, 2600, widthMarginTotal);
+    expect(batches.length).toBeGreaterThan(1);
+    for (const batch of batches) {
+      const stackDepth = batch.reduce((s, p) => s + 1.18 * p.qty, 0);
+      expect(stackDepth + widthMarginTotal).toBeLessThanOrEqual(CRATE_INTERNAL_WIDTH_MAX_IN);
+    }
   });
 });
