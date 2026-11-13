@@ -130,6 +130,12 @@ const PART_TYPE_TO_BUCKET_ORDER = {
 const CATEGORY_TO_BUCKET_ORDER = { island: 0, perimeter: 1, range: 1, vanity: 2, misc: 3 };
 
 function bucketOrderForPart(part) {
+  // A non-primary island companion piece (see findNonPrimaryIslandPartIds)
+  // carries this override so every downstream consumer of bucket order —
+  // partitioning, batching, and computeCrateDimensions' own isIsland check —
+  // sees it as a kitchen piece, not an island one, without needing to know
+  // about the override separately.
+  if (part._crateBucketOverride != null) return part._crateBucketOverride;
   const byType = PART_TYPE_TO_BUCKET_ORDER[String(part.part || '').trim()];
   if (byType != null) return byType;
   return CATEGORY_TO_BUCKET_ORDER[String(part.category || '').toLowerCase()] ?? 3;
@@ -140,11 +146,58 @@ function bucketOrderForPart(part) {
 // crate classes (an island crate is only island tops). weightBatchParts() on
 // its own only enforces the weight cap — fed a flat list it can still bridge
 // across a class or building boundary right where the cap happens to land.
+// A "Kitchen - Island Tops" drawing can carry more than one piece for the
+// same flat — the full-size slab plus one or more small companion pieces
+// (e.g. a short return) that share the exact same part type tag. The
+// fabrication floor only treats the slab as an island; the companion pieces
+// travel with that flat's other kitchen pieces (perimeter/splash) instead.
+// There's no universal size cutoff that identifies "small" across every
+// project, so this isn't a fixed-inch threshold — within each (drawing,
+// building, floor, flat) family of Island-Tops-tagged pieces, only the piece
+// with the largest footprint stays classified as the island; every other
+// same-tagged piece in that family is demoted to the kitchen bucket. A
+// family with only one Island-Tops piece is never affected.
+function islandFamilyKey(part) {
+  return `${part.drawing ?? ''}||${part.building ?? ''}||${part.floor ?? ''}||${part.flat ?? ''}`;
+}
+
+// Returns a new array: every part is passed through unchanged except
+// non-primary island companion pieces, which get a shallow clone carrying
+// `_crateBucketOverride: 1` (kitchen bucket). The clone keeps its real
+// `part`/`category` fields as-is — only how it's bucketed for crating
+// changes, not what it displays as. Clones mean this never mutates the
+// pool arrays the rest of the screen (filters, the pieces table) reads from.
+export function withIslandFamilyOverrides(parts) {
+  const families = new Map();
+  for (const part of parts) {
+    if (bucketOrderForPart(part) !== 0) continue; // only Island-Tops-tagged pieces
+    const key = islandFamilyKey(part);
+    if (!families.has(key)) families.set(key, []);
+    families.get(key).push(part);
+  }
+  const demoted = new Set();
+  for (const family of families.values()) {
+    if (family.length < 2) continue;
+    let primary = family[0];
+    let primaryArea = (primary.length || 0) * (primary.width || 0);
+    for (const part of family) {
+      const area = (part.length || 0) * (part.width || 0);
+      if (area > primaryArea) { primary = part; primaryArea = area; }
+    }
+    for (const part of family) {
+      if (part !== primary) demoted.add(part.id);
+    }
+  }
+  if (!demoted.size) return parts;
+  return parts.map((part) => (demoted.has(part.id) ? { ...part, _crateBucketOverride: 1 } : part));
+}
+
 // Partition by (class, building) first, batch within each partition, so every
 // resulting crate is single-class and single-building like the manual plan.
 export function partitionPartsByClassAndBuilding(parts) {
+  const annotated = withIslandFamilyOverrides(parts);
   const byClass = new Map();
-  for (const part of parts) {
+  for (const part of annotated) {
     const cls = bucketOrderForPart(part);
     if (!byClass.has(cls)) byClass.set(cls, []);
     byClass.get(cls).push(part);

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   computeCrateDimensions, DEFAULT_DIM_CONFIG, relaxFiltersUntilNonEmpty, EMPTY_FILTERS,
-  partitionPartsByClassAndBuilding, islandBatchParts,
+  partitionPartsByClassAndBuilding, islandBatchParts, withIslandFamilyOverrides,
 } from './CrateFilterPlanner';
 import { CRATE_INTERNAL_WIDTH_MAX_IN } from '../utils/rowPacking';
 
@@ -189,5 +189,72 @@ describe('islandBatchParts (regression: the 252.92" / 7-building crate bug)', ()
       const stackDepth = batch.reduce((s, p) => s + 1.18 * p.qty, 0);
       expect(stackDepth + widthMarginTotal).toBeLessThanOrEqual(CRATE_INTERNAL_WIDTH_MAX_IN);
     }
+  });
+});
+
+describe('withIslandFamilyOverrides (regression: small island companion pieces lumped with big slabs)', () => {
+  // Mirrors the real Concord Crossing data exactly: drawing 1051-03, building
+  // 10, floor 2, flat 203 — one 112"x44" slab plus two 18.5"x25.5" companion
+  // pieces, all three tagged "Kitchen - Island Tops". The manual packing
+  // list bundles the two small ones with that flat's splash pieces instead.
+  const family = (id, length, width) => ({
+    id, part: 'Kitchen - Island Tops', category: 'island',
+    drawing: '1051-03', building: '10', floor: '2', flat: '203',
+    length, width, thickness: '3CM', weight_kg: length * width > 1000 ? 258 : 25, qty: 1,
+  });
+
+  it('demotes every companion piece except the single largest in the family', () => {
+    const parts = [family('slab', 112, 44), family('a', 18.5, 25.5), family('b', 18.5, 25.5)];
+    const annotated = withIslandFamilyOverrides(parts);
+    const slab = annotated.find((p) => p.id === 'slab');
+    const a = annotated.find((p) => p.id === 'a');
+    const b = annotated.find((p) => p.id === 'b');
+    expect(slab._crateBucketOverride).toBeUndefined(); // stays an island piece
+    expect(a._crateBucketOverride).toBe(1); // demoted to kitchen bucket
+    expect(b._crateBucketOverride).toBe(1);
+  });
+
+  it('leaves a single-piece island family untouched', () => {
+    const parts = [family('only', 112, 44)];
+    const annotated = withIslandFamilyOverrides(parts);
+    expect(annotated[0]._crateBucketOverride).toBeUndefined();
+    expect(annotated[0]).toBe(parts[0]); // no clone when nothing changes
+  });
+
+  it('never mutates the original pool array parts came from', () => {
+    const parts = [family('slab', 112, 44), family('a', 18.5, 25.5), family('b', 18.5, 25.5)];
+    withIslandFamilyOverrides(parts);
+    expect(parts.every((p) => p._crateBucketOverride === undefined)).toBe(true);
+  });
+
+  it('partitionPartsByClassAndBuilding routes demoted companions into the kitchen partition, not the island one', () => {
+    const parts = [
+      family('slab', 112, 44),
+      family('a', 18.5, 25.5),
+      family('b', 18.5, 25.5),
+    ];
+    const partitions = partitionPartsByClassAndBuilding(parts);
+    const islandPartition = partitions.find((p) => p.crateClassOrder === 0);
+    const kitchenPartition = partitions.find((p) => p.crateClassOrder === 1);
+    expect(islandPartition.parts.map((p) => p.id)).toEqual(['slab']);
+    expect(kitchenPartition.parts.map((p) => p.id).sort()).toEqual(['a', 'b']);
+  });
+
+  it('computeCrateDimensions no longer applies island (stack-depth) math to a crate containing only a demoted companion piece', () => {
+    // A demoted companion piece landing in an otherwise-kitchen crate must
+    // not flip that crate into island dimensioning — only a crate that still
+    // has a real (non-demoted) island piece should use the island formula.
+    const [, a, b] = withIslandFamilyOverrides([
+      family('slab', 112, 44), family('a', 18.5, 25.5), family('b', 18.5, 25.5),
+    ]);
+    const dims = computeCrateDimensions([a, b], DEFAULT_DIM_CONFIG);
+    // Island formula would set internal_height from the short edge (~18.5);
+    // kitchen/vanity formula uses the "standing height" row model instead —
+    // whichever it is, it must not equal the raw island stack-depth result.
+    const islandDims = computeCrateDimensions(
+      [{ ...a, _crateBucketOverride: undefined }, { ...b, _crateBucketOverride: undefined }],
+      DEFAULT_DIM_CONFIG,
+    );
+    expect(dims.internal_width).not.toBeCloseTo(islandDims.internal_width, 1);
   });
 });
