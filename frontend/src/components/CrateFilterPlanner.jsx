@@ -729,7 +729,7 @@ const CrateFilterPlanner = ({ projectId }) => {
   const [error, setError] = useState(null);
 
   const [filters, setFilters] = useState(EMPTY_FILTERS);
-  const [targetWeightKg, setTargetWeightKg] = useState(2600);
+  const [targetWeightKg, setTargetWeightKg] = useState(1900);
   const [dimConfig, setDimConfig] = useState(DEFAULT_DIM_CONFIG);
   const [selectCount, setSelectCount] = useState(''); // "# pieces to select" cap on the filtered pool
   const [selectedPartIds, setSelectedPartIds] = useState(() => new Set());

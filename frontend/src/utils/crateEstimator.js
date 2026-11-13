@@ -122,7 +122,7 @@ function weightBatchBundles(bundles, targetWeightKg, overageTolerance = DEFAULT_
 
 // Same greedy-fill idea as weightBatchBundles, but at raw-part granularity
 // (no crate-class splitting — this view is filter-driven, not geometry-driven).
-export function weightBatchParts(parts, targetWeightKg = 2600, overageTolerance = DEFAULT_OVERAGE_TOLERANCE) {
+export function weightBatchParts(parts, targetWeightKg = 1900, overageTolerance = DEFAULT_OVERAGE_TOLERANCE) {
   if (!parts?.length) return [];
   const cap = targetWeightKg * (1 + overageTolerance);
   const batches = [];
@@ -245,7 +245,7 @@ function topUpAcrossFloors(floorGroupBatches, targetWeightKg, overageTolerance) 
 //          from the next floor's leftovers within the same building.
 // Returns array of bundle groups — caller assigns IDs and calls buildDraftCrate().
 
-export function batchBundlesIntoCrates(selectedBundles, targetWeightKg = 2600, options = {}) {
+export function batchBundlesIntoCrates(selectedBundles, targetWeightKg = 1900, options = {}) {
   if (!selectedBundles?.length) return [];
   const overageTolerance = options.overageTolerance ?? DEFAULT_OVERAGE_TOLERANCE;
 
