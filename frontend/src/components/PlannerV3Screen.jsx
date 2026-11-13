@@ -58,7 +58,7 @@ const PlannerV3Screen = ({
 
   // ── Draft crate state (Step 3A) ──────────────────────────────────────────
   const [draftCrates, setDraftCrates] = useState([]);
-  const [targetWeightKg, setTargetWeightKg] = useState(1900);
+  const [targetWeightKg, setTargetWeightKg] = useState(2600);
   const [savedAt, setSavedAt] = useState(null);
   // When a saved plan is found on mount, hold it here until the user decides
   const [savedPlanCandidate, setSavedPlanCandidate] = useState(null);

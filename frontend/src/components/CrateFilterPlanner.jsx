@@ -135,8 +135,67 @@ function bucketOrderForPart(part) {
   return CATEGORY_TO_BUCKET_ORDER[String(part.category || '').toLowerCase()] ?? 3;
 }
 
-function sortByBucketOrder(parts) {
-  return [...parts].sort((a, b) => bucketOrderForPart(a) - bucketOrderForPart(b));
+// ─── Location-aware, class-isolated weight batching ───────────────────────────
+// The factory floor never lets one crate span two buildings, and never mixes
+// crate classes (an island crate is only island tops). weightBatchParts() on
+// its own only enforces the weight cap — fed a flat list it can still bridge
+// across a class or building boundary right where the cap happens to land.
+// Partition by (class, building) first, batch within each partition, so every
+// resulting crate is single-class and single-building like the manual plan.
+export function partitionPartsByClassAndBuilding(parts) {
+  const byClass = new Map();
+  for (const part of parts) {
+    const cls = bucketOrderForPart(part);
+    if (!byClass.has(cls)) byClass.set(cls, []);
+    byClass.get(cls).push(part);
+  }
+  const partitions = []; // { crateClassOrder, building, parts }
+  for (const [cls, clsParts] of byClass) {
+    const byBuilding = new Map();
+    for (const part of clsParts) {
+      const b = String(part.building ?? '').trim() || '(no building)';
+      if (!byBuilding.has(b)) byBuilding.set(b, []);
+      byBuilding.get(b).push(part);
+    }
+    for (const [building, buildingParts] of byBuilding) {
+      partitions.push({ crateClassOrder: cls, building, parts: buildingParts });
+    }
+  }
+  return partitions;
+}
+
+// Islands stack thickness directly into crate WIDTH with no row-packing (see
+// computeCrateDimensions' isIsland branch) — weightBatchParts alone can still
+// hand it a batch whose summed thickness blows past the 26" structural
+// maximum. Cap on stack depth (thickness × qty) as well as weight so an
+// island batch never needs to be re-split after the fact.
+export function islandBatchParts(parts, targetWeightKg, widthMarginTotal, overageTolerance = 0) {
+  if (!parts.length) return [];
+  const weightCap = targetWeightKg * (1 + overageTolerance);
+  const widthCap = Math.max(0, CRATE_INTERNAL_WIDTH_MAX_IN - widthMarginTotal);
+  const batches = [];
+  let current = [];
+  let currentWeight = 0;
+  let currentStackDepth = 0;
+
+  for (const part of parts) {
+    const w = part.weight_kg || 0;
+    const td = thicknessInches(part.thickness) * (part.qty || 1);
+    const nextWeight = currentWeight + w;
+    const nextStack = currentStackDepth + td;
+    if (current.length > 0 && (nextWeight > weightCap || nextStack > widthCap)) {
+      batches.push(current);
+      current = [part];
+      currentWeight = w;
+      currentStackDepth = td;
+    } else {
+      current.push(part);
+      currentWeight = nextWeight;
+      currentStackDepth = nextStack;
+    }
+  }
+  if (current.length) batches.push(current);
+  return batches;
 }
 
 // ─── Crate dimension configuration ────────────────────────────────────────────
@@ -617,7 +676,7 @@ const CrateFilterPlanner = ({ projectId }) => {
   const [error, setError] = useState(null);
 
   const [filters, setFilters] = useState(EMPTY_FILTERS);
-  const [targetWeightKg, setTargetWeightKg] = useState(1900);
+  const [targetWeightKg, setTargetWeightKg] = useState(2600);
   const [dimConfig, setDimConfig] = useState(DEFAULT_DIM_CONFIG);
   const [selectCount, setSelectCount] = useState(''); // "# pieces to select" cap on the filtered pool
   const [selectedPartIds, setSelectedPartIds] = useState(() => new Set());
@@ -813,8 +872,17 @@ const CrateFilterPlanner = ({ projectId }) => {
 
   const handleAutoBucket = useCallback(() => {
     if (!filteredParts.length) return;
-    const ordered = sortByBucketOrder(filteredParts);
-    const batches = weightBatchParts(ordered, targetWeightKg);
+    // Never let one crate straddle a crate class or a building — batch each
+    // (class, building) partition on its own, then run class/building groups
+    // through in bucket order (islands, then kitchen, then vanity, then misc)
+    // so crate numbering still reads in the familiar order.
+    const partitions = partitionPartsByClassAndBuilding(filteredParts)
+      .sort((a, b) => a.crateClassOrder - b.crateClassOrder);
+    const batches = partitions.flatMap(({ crateClassOrder, parts }) => (
+      crateClassOrder === 0
+        ? islandBatchParts(parts, targetWeightKg, dimConfig.island.widthMargin * 2)
+        : weightBatchParts(parts, targetWeightKg)
+    ));
     setCrates((prev) => {
       let nextNo = prev.length ? Math.max(...prev.map((c) => c.crate_no)) + 1 : 1;
       const added = batches.map((parts) => crateFromParts(nextNo++, parts, dimConfig));

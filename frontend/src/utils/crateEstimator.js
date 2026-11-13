@@ -91,12 +91,12 @@ function stripSplashFromBundle(bundle) {
 }
 
 // ─── Weight batching ──────────────────────────────────────────────────────────
-// Greedy: accumulate bundles until the next one would breach the tolerance-padded
-// target, then start a new batch. The tolerance keeps a small overage (e.g. 9
-// pieces at 1800 kg against a 1600 kg target) in one crate instead of spinning
-// up a second, near-empty one.
+// Greedy: accumulate bundles until the next one would breach the target, then
+// start a new batch. Target weight is a hard cap, not a soft midpoint — the
+// factory floor sets it to the real per-crate max (e.g. 2,600 kg) and does not
+// want crates padded past it, so there is no overage tolerance by default.
 
-const DEFAULT_OVERAGE_TOLERANCE = 0.12; // allow up to 12% over target before splitting
+const DEFAULT_OVERAGE_TOLERANCE = 0; // target weight is a hard cap — no automatic padding
 
 function weightBatchBundles(bundles, targetWeightKg, overageTolerance = DEFAULT_OVERAGE_TOLERANCE) {
   if (!bundles.length) return [];
@@ -122,7 +122,7 @@ function weightBatchBundles(bundles, targetWeightKg, overageTolerance = DEFAULT_
 
 // Same greedy-fill idea as weightBatchBundles, but at raw-part granularity
 // (no crate-class splitting — this view is filter-driven, not geometry-driven).
-export function weightBatchParts(parts, targetWeightKg = 1900, overageTolerance = DEFAULT_OVERAGE_TOLERANCE) {
+export function weightBatchParts(parts, targetWeightKg = 2600, overageTolerance = DEFAULT_OVERAGE_TOLERANCE) {
   if (!parts?.length) return [];
   const cap = targetWeightKg * (1 + overageTolerance);
   const batches = [];
@@ -245,7 +245,7 @@ function topUpAcrossFloors(floorGroupBatches, targetWeightKg, overageTolerance) 
 //          from the next floor's leftovers within the same building.
 // Returns array of bundle groups — caller assigns IDs and calls buildDraftCrate().
 
-export function batchBundlesIntoCrates(selectedBundles, targetWeightKg = 1900, options = {}) {
+export function batchBundlesIntoCrates(selectedBundles, targetWeightKg = 2600, options = {}) {
   if (!selectedBundles?.length) return [];
   const overageTolerance = options.overageTolerance ?? DEFAULT_OVERAGE_TOLERANCE;
 
