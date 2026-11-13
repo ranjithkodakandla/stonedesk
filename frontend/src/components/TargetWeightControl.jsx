@@ -1,6 +1,11 @@
 import React, { useState } from 'react';
 
-const WEIGHT_PRESETS = [2400, 2600, 2800];
+// Crate weight target is a logistics constraint (forklift/crane capacity,
+// shipping limits) set per project — it is not derivable from the stone
+// data and is not the same across every project, so these presets must not
+// encode any one project's number. "Custom" (below) is how each project
+// sets its own real target; these three are just convenient starting points.
+const WEIGHT_PRESETS = [1800, 1900, 2000];
 
 export default function TargetWeightControl({ value, onChange }) {
   const [custom, setCustom] = useState(false);
