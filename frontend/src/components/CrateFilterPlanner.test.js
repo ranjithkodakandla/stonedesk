@@ -22,20 +22,26 @@ describe('computeCrateDimensions (the actual "Filter parts and build crates" scr
       ...Array.from({ length: 6 }, (_, i) => rangeTop(`sh${i}`, 19)),
     ];
     const dims = computeCrateDimensions(parts, DEFAULT_DIM_CONFIG);
-    // Width must reflect 12 thickness-slots (rows), not 18 raw pieces —
-    // this is the exact bug: the old code used Math.max() of thicknesses,
-    // as if only one piece's worth of material existed regardless of count.
+    // Pieces pair with their own exact length only (confirmed against the
+    // real packing list: a row never mixes two different lengths unless
+    // one side is explicitly filler/companion material — none of these are).
+    // 79+1+79=159" would breach the 100" row-length cap, so the six 79s
+    // never pair and stay six singleton rows; 49s and 19s each pair fine
+    // (49+1+49=99, 19+1+19=39, both under 100). 6 + 3 + 3 = 12 rows.
     const perRowThickness = 1.18; // 3CM
     const expectedWidth = 12 * perRowThickness + DEFAULT_DIM_CONFIG.kv.widthMargin * 2;
     expect(dims.internal_width).toBeCloseTo(expectedWidth, 1);
+    expect(dims.internal_length).toBeCloseTo(49 + 1 + 49 + 1, 1); // longest row is a 49+49 pair (99") + lengthMargin*2
     expect(dims.internal_width).toBeLessThan(18 * perRowThickness + DEFAULT_DIM_CONFIG.kv.widthMargin * 2);
   });
 
-  it('consolidates three identical leftover pieces past the original cap (67 + 3x25)', () => {
+  it('pairs 2 of the 3 identical leftovers, leaving the third as its own row (never a same-length triple without a filler)', () => {
     const parts = [rangeTop('big', 67), rangeTop('a', 25), rangeTop('b', 25), rangeTop('c', 25)];
     const dims = computeCrateDimensions(parts, DEFAULT_DIM_CONFIG);
-    // 3x25 (77" raw) now determines length, not the original 67" piece.
-    const expectedLength = 77 + DEFAULT_DIM_CONFIG.kv.lengthMargin * 2;
+    // None of these are filler-tagged, so 25s only ever pair 2 at a time —
+    // the third 25 stays its own singleton row rather than joining as a
+    // same-length triple. Longest row is the 67" singleton.
+    const expectedLength = 67 + DEFAULT_DIM_CONFIG.kv.lengthMargin * 2;
     expect(dims.internal_length).toBeCloseTo(expectedLength, 1);
   });
 
@@ -228,11 +234,14 @@ describe('withIslandFamilyOverrides (regression: small island companion pieces l
   });
 
   it('partitionPartsByClassAndBuilding routes demoted companions into the kitchen partition, not the island one', () => {
-    const parts = [
+    // partitionPartsByClassAndBuilding expects overrides already decided
+    // against the full pool — withIslandFamilyOverrides runs once up front
+    // (at data-load time in the real app), not per filtered subset.
+    const parts = withIslandFamilyOverrides([
       family('slab', 112, 44),
       family('a', 18.5, 25.5),
       family('b', 18.5, 25.5),
-    ];
+    ]);
     const partitions = partitionPartsByClassAndBuilding(parts);
     const islandPartition = partitions.find((p) => p.crateClassOrder === 0);
     const kitchenPartition = partitions.find((p) => p.crateClassOrder === 1);

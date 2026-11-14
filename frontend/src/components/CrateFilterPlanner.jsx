@@ -4,7 +4,7 @@ import { API_BASE } from '../utils/plannerUtils';
 import { weightBatchParts } from '../utils/crateEstimator';
 import { thicknessInchesFromLabel } from '../utils/thicknessConstants';
 import {
-  groupPiecesIntoRows, rowRawLength, rowGroupingCap, rowLengthGrowthCandidates,
+  groupPiecesIntoRows, rowRawLength,
   CRATE_INTERNAL_WIDTH_MIN_IN, CRATE_INTERNAL_WIDTH_MAX_IN,
 } from '../utils/rowPacking';
 import MultiSelectDropdown from './MultiSelectDropdown';
@@ -194,6 +194,10 @@ export function withIslandFamilyOverrides(parts) {
 
 // Partition by (class, building) first, batch within each partition, so every
 // resulting crate is single-class and single-building like the manual plan.
+// Expects parts whose island-companion overrides were already decided
+// against the full pool (see withIslandFamilyOverrides) — annotating here
+// against whatever subset is passed in would be unsafe, since a filtered
+// subset can be missing a family's primary piece.
 export function partitionPartsByClassAndBuilding(parts) {
   const annotated = withIslandFamilyOverrides(parts);
   const byClass = new Map();
@@ -345,33 +349,19 @@ export function computeCrateDimensions(parts, dimConfig) {
   const maxSingleLong = Math.max(...parts.map((p) => Math.max(p.length || 0, p.width || 0)));
   const rowWidth = (rws) => rws.reduce((s, row) => s + Math.max(...row.map((p) => thicknessInches(p.thickness))), 0);
 
-  // Growing the row-length budget beyond the single-longest-piece cap when
-  // needed merges more pieces into fewer rows — trading crate length for
-  // crate width — so a batch like "one 68in piece + several 25in pieces"
-  // doesn't leave each distinct length its own row/thickness-slot pushing
-  // width past the 26in structural maximum. Stops as soon as width lands at
-  // or under 26in, or once growing the budget stops reducing row count.
-  // Mirrors _pack_main_rows_within_width_band() in dimensions.py.
-  let phaseACap = rowSource.length ? rowGroupingCap(rowSource, cfg.lengthMargin * 2) : 0;
-  let rows = rowSource.length ? groupPiecesIntoRows(rowSource, phaseACap) : [];
-  let rowThicknessSum = rowWidth(rows);
+  // Pairs matching-length pieces into a shared row (never more than
+  // MAX_PIECES_PER_ROW), with any already-identified filler/companion piece
+  // (see withIslandFamilyOverrides) used to top off a pair before it's ever
+  // paired with its own kind. Confirmed against the real packing list
+  // (8 crates, 336 physical rows, zero exceptions) — see rowPacking.js.
+  const rows = rowSource.length ? groupPiecesIntoRows(rowSource) : [];
+  const rowThicknessSum = rowWidth(rows);
   const widthWarnings = [];
-  if (rowSource.length) {
-    for (const candidateCap of rowLengthGrowthCandidates(rowSource)) {
-      if (rowThicknessSum + cfg.widthMargin * 2 <= CRATE_INTERNAL_WIDTH_MAX_IN) break;
-      if (candidateCap <= phaseACap) continue;
-      const candidateRows = groupPiecesIntoRows(rowSource, candidateCap);
-      if (candidateRows.length >= rows.length) break; // no further merging achievable
-      phaseACap = candidateCap;
-      rows = candidateRows;
-      rowThicknessSum = rowWidth(rows);
-    }
-    if (rowThicknessSum + cfg.widthMargin * 2 > CRATE_INTERNAL_WIDTH_MAX_IN) {
-      widthWarnings.push(
-        `Crate width ${(rowThicknessSum + cfg.widthMargin * 2).toFixed(1)}" exceeds the ` +
-        `${CRATE_INTERNAL_WIDTH_MAX_IN}" maximum even after merging rows by length — needs manual review.`
-      );
-    }
+  if (rowSource.length && rowThicknessSum + cfg.widthMargin * 2 > CRATE_INTERNAL_WIDTH_MAX_IN) {
+    widthWarnings.push(
+      `Crate width ${(rowThicknessSum + cfg.widthMargin * 2).toFixed(1)}" exceeds the ` +
+      `${CRATE_INTERNAL_WIDTH_MAX_IN}" maximum — needs manual review.`
+    );
   }
   const longestRowRaw = rows.length ? Math.max(...rows.map((r) => rowRawLength(r))) : 0;
 
@@ -762,7 +752,15 @@ const CrateFilterPlanner = ({ projectId }) => {
     setError(null);
     axios
       .get(`${API_BASE}/projects/${projectId}/dispatch-parts`)
-      .then((res) => setAllParts(res.data || []))
+      // Annotate island-companion overrides once, against the complete,
+      // unfiltered pool — never against whatever subset happens to be
+      // filtered/available at Auto-bucket time. The suggested workflow here
+      // is to filter and bucket in multiple passes (islands, then kitchen,
+      // then vanity); if a family's main slab is already allocated into an
+      // earlier pass's crates by the time its companion pieces are batched,
+      // the companions would see no sibling to compare against and could
+      // wrongly stay classified as islands themselves.
+      .then((res) => setAllParts(withIslandFamilyOverrides(res.data || [])))
       .catch((e) => setError(e?.response?.data?.detail || e.message || 'Failed to load parts'))
       .finally(() => setLoading(false));
   }, [projectId]);
