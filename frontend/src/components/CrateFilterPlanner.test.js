@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   computeCrateDimensions, DEFAULT_DIM_CONFIG, relaxFiltersUntilNonEmpty, EMPTY_FILTERS,
   partitionPartsByClassAndBuilding, islandBatchParts, withIslandFamilyOverrides,
+  assignLayersAndRows,
 } from './CrateFilterPlanner';
 import { CRATE_INTERNAL_WIDTH_MAX_IN } from '../utils/rowPacking';
 
@@ -287,5 +288,59 @@ describe('Vanity crates never use row-pairing (confirmed: real packing list show
     const pairedWidth = 8 * perRowThickness + DEFAULT_DIM_CONFIG.kv.widthMargin * 2;
     expect(dims.internal_width).toBeCloseTo(onePerRowWidth, 1);
     expect(dims.internal_width).toBeGreaterThan(pairedWidth);
+  });
+});
+
+describe('assignLayersAndRows (Layer #/Row # labels for the crate detail view and Excel export)', () => {
+  const islandTopPart = (id, length = 112.5, width = 44) => ({
+    id, part: 'Kitchen - Island Tops', category: 'island', length, width, thickness: '3CM',
+  });
+  const perimeterTop = (id, length, width = 25.5) => ({
+    id, part: 'Kitchen - Perimeter Tops', category: 'kitchen', length, width, thickness: '3CM',
+  });
+  const backSplash = (id, length, width = 4) => ({
+    id, part: 'Kitchen - Back Splash', category: 'kitchen', length, width, thickness: '3CM',
+  });
+  const sideSplash = (id, length, width = 4) => ({
+    id, part: 'Kitchen - Side Splash', category: 'kitchen', length, width, thickness: '3CM',
+  });
+  const vanityTop = (id, length, width = 22.5) => ({
+    id, part: 'Vanity - Top', category: 'vanity', length, width, thickness: '2CM',
+  });
+
+  it('gives each island piece its own row, all in layer 1 (matches Excel "Layer # 1 Row -N")', () => {
+    const parts = Array.from({ length: 10 }, (_, i) => islandTopPart(`i${i}`));
+    const byId = assignLayersAndRows(parts);
+    parts.forEach((p, i) => {
+      expect(byId.get(p.id)).toEqual({ layer: 1, row: i + 1 });
+    });
+  });
+
+  it('puts kitchen main tops in layer 1 (row-paired) and back/side splash in their own later layers', () => {
+    const parts = [
+      perimeterTop('t1', 24.5), perimeterTop('t2', 24.5),
+      backSplash('b1', 33), backSplash('b2', 33),
+      sideSplash('s1', 7.5),
+    ];
+    const byId = assignLayersAndRows(parts);
+    expect(byId.get('t1')).toEqual({ layer: 1, row: 1 });
+    expect(byId.get('t2')).toEqual({ layer: 1, row: 1 }); // paired into the same row
+    expect(byId.get('b1').layer).toBe(2);
+    expect(byId.get('b2').layer).toBe(2);
+    expect(byId.get('s1').layer).toBe(3);
+  });
+
+  it('gives vanity pieces one-per-row in every layer, never pairing (matches the real packing list)', () => {
+    const parts = [
+      vanityTop('v1', 55), vanityTop('v2', 55),
+      backSplash('vb1', 54.875), backSplash('vb2', 54.875),
+    ];
+    const byId = assignLayersAndRows(parts);
+    expect(byId.get('v1').row).not.toBe(byId.get('v2').row);
+    expect(byId.get('vb1').row).not.toBe(byId.get('vb2').row);
+  });
+
+  it('returns an empty map for no parts', () => {
+    expect(assignLayersAndRows([]).size).toBe(0);
   });
 });

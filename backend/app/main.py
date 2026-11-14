@@ -2988,14 +2988,19 @@ def export_manual_crate_plan_xlsx(project_id: int, body: Dict):
     ws2.append([
         "Crate #", "Part #", "Part Type", "Category", "Drawing", "Unit",
         "Building", "POD", "Floor", "Flat", "Length (in)", "Width (in)", "Thickness", "Qty",
-        "Sq Ft", "Weight (kg)", "Label",
+        "Sq Ft", "Weight (kg)", "Layer", "Row", "Label",
     ])
     _bold_header(ws2, 1)
     for c in crates:
+        layer_row_by_id = {
+            lr.get("id"): (lr.get("layer"), lr.get("row"))
+            for lr in (c.get("part_layers") or [])
+        }
         for pid in (c.get("part_ids") or []):
             p = pieces_by_id.get(pid)
             if not p:
                 continue
+            layer_v, row_v = layer_row_by_id.get(pid, (None, None))
             part_no = str(p.get("part_no", "") or "")
             unit = _compute_unit_suffix(str(p.get("unit", "") or ""), part_no)
             piece_thick = str(p.get("thickness") or project_thickness)
@@ -3043,6 +3048,8 @@ def export_manual_crate_plan_xlsx(project_id: int, body: Dict):
                     ),
                     2,
                 ),
+                layer_v,
+                row_v,
                 label_text,
             ])
     _auto_width(ws2)

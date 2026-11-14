@@ -416,6 +416,41 @@ export function computeCrateDimensions(parts, dimConfig) {
   };
 }
 
+// Layer # / Row # exactly mirrors the fabricator's own packing-list
+// convention (e.g. Excel's "Layer # 1 Row -3"): an island crate is one
+// layer with each piece in its own row; a kitchen/vanity/misc crate splits
+// into up to 3 layers in this order — main tops, back splash, side splash —
+// each with its own row numbering 1..N, using the same row-pairing rule
+// computeCrateDimensions uses for its width calc. Purely a placement label
+// for the crate detail view and Excel export; it has no effect on any
+// computed dimension.
+export function assignLayersAndRows(parts) {
+  const byId = new Map();
+  if (!parts.length) return byId;
+
+  const isIsland = parts.some((p) => bucketOrderForPart(p) === 0);
+  if (isIsland) {
+    parts.forEach((p, i) => byId.set(p.id, { layer: 1, row: i + 1 }));
+    return byId;
+  }
+
+  const backSplash = parts.filter(isBackSplashPart);
+  const sideSplash = parts.filter(isSideSplashPart);
+  const mainTops = parts.filter((p) => !isBackSplashPart(p) && !isSideSplashPart(p));
+  const usesRowPairing = parts.some((p) => bucketOrderForPart(p) === 1);
+  const rowsOf = (group) => (!group.length ? [] : (usesRowPairing ? groupPiecesIntoRows(group) : group.map((p) => [p])));
+
+  let layerNum = 1;
+  for (const group of [mainTops, backSplash, sideSplash]) {
+    if (!group.length) continue;
+    rowsOf(group).forEach((row, ri) => {
+      row.forEach((p) => byId.set(p.id, { layer: layerNum, row: ri + 1 }));
+    });
+    layerNum += 1;
+  }
+  return byId;
+}
+
 const DIM_CLASS_SECTIONS = [
   { key: 'kv', label: 'Vanity / Kitchen' },
   { key: 'island', label: 'Islands' },
@@ -446,12 +481,19 @@ const TABLE_COLUMNS = [
   { key: 'qty', label: 'Qty', numeric: true },
   { key: 'sqft', label: 'Sq Ft', numeric: true },
   { key: 'weight_kg', label: 'Weight (kg)', numeric: true },
+  { key: 'layer', label: 'Layer' },
+  { key: 'row', label: 'Row' },
 ];
 
 function crateFromParts(crateNo, parts, dimConfig) {
+  const layerRowById = assignLayersAndRows(parts);
+  const decoratedParts = parts.map((p) => {
+    const lr = layerRowById.get(p.id);
+    return { ...p, layer: lr ? lr.layer : null, row: lr ? lr.row : null };
+  });
   return {
     crate_no: crateNo,
-    parts,
+    parts: decoratedParts,
     total_weight_kg: parts.reduce((s, p) => s + (p.weight_kg || 0), 0),
     total_sqft: parts.reduce((s, p) => s + (p.sqft || 0), 0),
     ...computeCrateDimensions(parts, dimConfig),
@@ -1016,7 +1058,13 @@ const CrateFilterPlanner = ({ projectId }) => {
     axios
       .post(
         `${API_BASE}/projects/${projectId}/manual-crate-plan/export`,
-        { crates: crates.map((c) => ({ ...c, part_ids: c.parts.map((p) => p.id) })) },
+        {
+          crates: crates.map((c) => ({
+            ...c,
+            part_ids: c.parts.map((p) => p.id),
+            part_layers: c.parts.map((p) => ({ id: p.id, layer: p.layer, row: p.row })),
+          })),
+        },
         { responseType: 'blob' },
       )
       .then((res) => {
