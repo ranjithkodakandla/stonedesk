@@ -197,6 +197,18 @@ describe('islandBatchParts (regression: the 252.92" / 7-building crate bug)', ()
       expect(stackDepth + widthMarginTotal).toBeLessThanOrEqual(CRATE_INTERNAL_WIDTH_MAX_IN);
     }
   });
+
+  it('splits a 36-piece building into four even crates of 9, not 10+10+10+6 (buildings 13/14 regression)', () => {
+    // Confirmed against the real packing list: Concord Crossing buildings 13
+    // and 14 each have 36 island pieces at ~257.5kg. A 2600kg cap allows at
+    // most 10/crate, so the old greedy batcher packed three crates to 10 and
+    // left a mismatched 6-piece fourth crate — the real plan spreads all 36
+    // evenly across the same 4 crates instead (9 each).
+    const parts = Array.from({ length: 36 }, (_, i) => islandTop(`p${i}`, '13', 257.5));
+    const widthMarginTotal = 1;
+    const batches = islandBatchParts(parts, 2600, widthMarginTotal);
+    expect(batches.map((b) => b.length)).toEqual([9, 9, 9, 9]);
+  });
 });
 
 describe('withIslandFamilyOverrides (regression: small island companion pieces lumped with big slabs)', () => {

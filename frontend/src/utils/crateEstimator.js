@@ -120,6 +120,36 @@ function weightBatchBundles(bundles, targetWeightKg, overageTolerance = DEFAULT_
   return batches;
 }
 
+// Greedy weight-fill alone packs every crate as full as the cap allows and
+// dumps whatever's left into an undersized trailing crate (e.g. 36 pieces at
+// a 10-per-crate cap becomes 10+10+10+6). The real packing list spreads the
+// same total evenly across however many crates the cap says are needed
+// instead (36 -> four crates of 9) — confirmed against Concord Crossing's
+// island crates for a 36-piece building, zero exceptions. Once the greedy
+// pass has decided HOW MANY crates are required, re-chunk the original part
+// order into that many near-equal groups and keep that instead, as long as
+// every resulting group still respects the same cap(s) the greedy pass used
+// (`fitsFn`) — if an uneven weight/thickness mix means an even split would
+// breach a cap, fall back to the greedy result rather than force it.
+export function rebalanceBatchesEvenly(items, batchCount, fitsFn) {
+  if (batchCount <= 1) return null;
+  const n = items.length;
+  if (n < batchCount) return null;
+  const base = Math.floor(n / batchCount);
+  let remainder = n % batchCount;
+  const batches = [];
+  let idx = 0;
+  for (let i = 0; i < batchCount; i += 1) {
+    const size = base + (remainder > 0 ? 1 : 0);
+    if (remainder > 0) remainder -= 1;
+    const group = items.slice(idx, idx + size);
+    if (!group.length || !fitsFn(group)) return null;
+    batches.push(group);
+    idx += size;
+  }
+  return batches;
+}
+
 // Same greedy-fill idea as weightBatchBundles, but at raw-part granularity
 // (no crate-class splitting — this view is filter-driven, not geometry-driven).
 export function weightBatchParts(parts, targetWeightKg = 1900, overageTolerance = DEFAULT_OVERAGE_TOLERANCE) {
@@ -141,7 +171,11 @@ export function weightBatchParts(parts, targetWeightKg = 1900, overageTolerance 
     }
   }
   if (current.length > 0) batches.push(current);
-  return batches;
+  const balanced = rebalanceBatchesEvenly(
+    parts, batches.length,
+    (group) => group.reduce((s, p) => s + (p.weight_kg || 0), 0) <= cap,
+  );
+  return balanced || batches;
 }
 
 const CLASS_ORDER = ['island_vertical', 'kitchen_vertical', 'vanity_vertical', 'misc'];
