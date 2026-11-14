@@ -352,9 +352,17 @@ export function computeCrateDimensions(parts, dimConfig) {
   // Pairs matching-length pieces into a shared row (never more than
   // MAX_PIECES_PER_ROW), with any already-identified filler/companion piece
   // (see withIslandFamilyOverrides) used to top off a pair before it's ever
-  // paired with its own kind. Confirmed against the real packing list
-  // (8 crates, 336 physical rows, zero exceptions) — see rowPacking.js.
-  const rows = rowSource.length ? groupPiecesIntoRows(rowSource) : [];
+  // paired with its own kind. Confirmed specifically for "side top"/"range
+  // top" (kitchen/perimeter) crates against the real packing list (8
+  // crates, 336 physical rows, zero exceptions) — see rowPacking.js.
+  // Vanity crates do NOT follow this convention: the same real packing
+  // list shows every single Vanity row holding exactly one piece (checked
+  // across all 90 rows of a full Vanity crate, zero exceptions) — no
+  // pairing, no filler-topping. Misc has no confirming data either way, so
+  // it defaults to the same safe one-piece-per-row behavior as Vanity
+  // rather than assuming the kitchen/perimeter convention applies there too.
+  const usesRowPairing = parts.some((p) => bucketOrderForPart(p) === 1);
+  const rows = !rowSource.length ? [] : (usesRowPairing ? groupPiecesIntoRows(rowSource) : rowSource.map((p) => [p]));
   const rowThicknessSum = rowWidth(rows);
   const widthWarnings = [];
   if (rowSource.length && rowThicknessSum + cfg.widthMargin * 2 > CRATE_INTERNAL_WIDTH_MAX_IN) {

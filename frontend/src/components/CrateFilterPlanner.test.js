@@ -267,3 +267,25 @@ describe('withIslandFamilyOverrides (regression: small island companion pieces l
     expect(dims.internal_width).not.toBeCloseTo(islandDims.internal_width, 1);
   });
 });
+
+describe('Vanity crates never use row-pairing (confirmed: real packing list shows 1 piece per row, always)', () => {
+  const vanityTop = (id, length, width = 22.5, thickness = '2CM') => ({
+    id, part: 'Vanity - Top', category: 'vanity', length, width, thickness,
+  });
+
+  it('never pairs two identical-length Vanity pieces into a shared row', () => {
+    // If Vanity used the same pairing rule as kitchen/perimeter, two
+    // matching-length tops would share a row and width would come out
+    // lower than one-piece-per-row (half as many rows). Checked against
+    // the real packing list: all 90 rows of a full Vanity crate hold
+    // exactly one piece. Enough pieces here to clear the 10" width floor,
+    // so pairing-vs-not actually shows up in the result.
+    const parts = Array.from({ length: 16 }, (_, i) => vanityTop(`p${i}`, 55));
+    const dims = computeCrateDimensions(parts, DEFAULT_DIM_CONFIG);
+    const perRowThickness = 0.79; // 2CM
+    const onePerRowWidth = 16 * perRowThickness + DEFAULT_DIM_CONFIG.kv.widthMargin * 2;
+    const pairedWidth = 8 * perRowThickness + DEFAULT_DIM_CONFIG.kv.widthMargin * 2;
+    expect(dims.internal_width).toBeCloseTo(onePerRowWidth, 1);
+    expect(dims.internal_width).toBeGreaterThan(pairedWidth);
+  });
+});
