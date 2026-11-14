@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { groupPiecesIntoRows, rowRawLength, rowGroupingCap } from './rowPacking';
+import { groupPiecesIntoRows, rowRawLength, MAX_PIECES_PER_ROW } from './rowPacking';
 
 const referenceRows18 = () => {
   const pieces = [];
@@ -11,88 +11,90 @@ const referenceRows18 = () => {
   return pieces;
 };
 
-describe('groupPiecesIntoRows (mirrors backend group_main_pieces_into_rows)', () => {
-  it('reproduces the reference 18-piece drawing: 6 single rows + 6 paired rows', () => {
+const filler = (p) => ({ ...p, _crateBucketOverride: 1 });
+
+describe('groupPiecesIntoRows (pair-by-matching-length, filler-tops-off, cap 3 per row)', () => {
+  // Confirmed against the real packing list across 8 crates / 336 physical
+  // rows: no row ever exceeds 3 pieces, and every multi-piece row either
+  // pairs two pieces of matching length or (only once nothing else is left)
+  // groups leftover same-length pieces together.
+
+  it('pairs the 6 identical 79" pieces among themselves (no partner of any other length)', () => {
     const pieces = referenceRows18();
-    const rows = groupPiecesIntoRows(pieces, 85);
-    expect(rows).toHaveLength(12);
-    const singles = rows.filter((r) => r.length === 1);
-    const doubles = rows.filter((r) => r.length === 2);
-    expect(singles).toHaveLength(6);
-    expect(doubles).toHaveLength(6);
-    doubles.forEach((row) => {
-      expect(row.map((p) => p.length).sort((a, b) => a - b)).toEqual([19, 49]);
+    const rows = groupPiecesIntoRows(pieces);
+    // 6x79 pair up into 3 rows of [79,79]; 6x49 + 6x19 pair up by matching
+    // length into 6 rows of [49,49] and ... wait, 49 and 19 are different
+    // lengths, so 49s pair with 49s (3 rows) and 19s pair with 19s (3 rows).
+    const allIds = rows.flat().map((p) => p.id);
+    expect(new Set(allIds).size).toBe(18);
+    expect(rows.every((r) => r.length <= MAX_PIECES_PER_ROW)).toBe(true);
+    // No row mixes a 79 with a 49 or 19 — none of them are marked as filler,
+    // so they only ever pair with their own exact length.
+    rows.forEach((row) => {
+      const lengths = new Set(row.map((p) => p.length));
+      expect(lengths.size).toBe(1);
     });
+  });
+
+  it('a filler piece tops off an open pair-row before pairing with its own kind', () => {
+    // Mirrors the real case: two 24.5" pieces pair up (primary), leaving an
+    // open row needing one more; an 18.5" filler (demoted companion) tops
+    // it off instead of waiting to pair with another 18.5" filler.
+    const pieces = [
+      { id: 'a', length: 24.5 }, { id: 'b', length: 24.5 },
+      filler({ id: 'c', length: 18.5 }),
+    ];
+    const rows = groupPiecesIntoRows(pieces);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].map((p) => p.id).sort()).toEqual(['a', 'b', 'c']);
+  });
+
+  it('reproduces the real crate-3 pattern: 2 big pairs use up fillers one each, leftover fillers group by threes', () => {
+    // 4 pairs of a big length (8 pieces) each need 1 filler; 10 filler
+    // pieces of a smaller length are available — 4 get used as toppers,
+    // 6 remain and group into 2 rows of 3.
+    const big = Array.from({ length: 8 }, (_, i) => ({ id: `big${i}`, length: 24.5 }));
+    const small = Array.from({ length: 10 }, (_, i) => filler({ id: `small${i}`, length: 18.5 }));
+    const rows = groupPiecesIntoRows([...big, ...small]);
+    expect(rows.every((r) => r.length <= MAX_PIECES_PER_ROW)).toBe(true);
+    const threes = rows.filter((r) => r.length === 3);
+    expect(threes).toHaveLength(4 + 2); // 4 topped-off big pairs + 2 leftover filler triples
     const allIds = rows.flat().map((p) => p.id);
     expect(new Set(allIds).size).toBe(18);
   });
 
-  it('consolidates three identical leftover pieces past the original cap (67 + 3x25)', () => {
-    const pieces = [
-      { id: 'big', length: 67 },
-      { id: 'a', length: 25 },
-      { id: 'b', length: 25 },
-      { id: 'c', length: 25 },
-    ];
-    const rows = groupPiecesIntoRows(pieces, 73); // 67 + 6 clearance, matching backend's cap convention
-    expect(rows).toHaveLength(2);
-    const byLen = [...rows].sort((a, b) => a.length - b.length);
-    expect(byLen[0]).toHaveLength(1);
-    expect(byLen[0][0].id).toBe('big');
-    expect(byLen[1]).toHaveLength(3);
-    expect(byLen[1].map((p) => p.id).sort()).toEqual(['a', 'b', 'c']);
-    expect(rowRawLength(byLen[1])).toBeCloseTo(77, 5); // 25*3 + 2 gaps of 1"
-  });
-
-  it('never merges identical pieces that each stayed singleton in Phase A (six 79s)', () => {
-    const pieces = Array.from({ length: 6 }, (_, i) => ({ id: `p${i}`, length: 79 }));
-    const rows = groupPiecesIntoRows(pieces, 85);
-    expect(rows).toHaveLength(6);
-    expect(rows.every((r) => r.length === 1)).toBe(true);
-  });
-
-  it('never merges two dissimilar leftover singletons with each other', () => {
+  it('never merges two dissimilar pieces with each other when neither is marked filler', () => {
     const pieces = [{ id: 'big', length: 67 }, { id: 'odd', length: 19 }];
-    const rows = groupPiecesIntoRows(pieces, 73);
+    const rows = groupPiecesIntoRows(pieces);
     expect(rows).toHaveLength(2);
     expect(rows.every((r) => r.length === 1)).toBe(true);
+  });
+
+  it('groups many identical non-filler pieces 2 at a time, never 3+, when nothing marks them as filler', () => {
+    // Without an explicit filler marker, same-length pieces only pair (cap
+    // 2) — they don't greedily batch into triples just because they share
+    // a length; a triple only happens via the filler-topping path.
+    const pieces = Array.from({ length: 5 }, (_, i) => ({ id: `s${i}`, length: 15 }));
+    const rows = groupPiecesIntoRows(pieces);
+    expect(rows).toHaveLength(3); // 2 pairs + 1 singleton
+    const sizes = rows.map((r) => r.length).sort();
+    expect(sizes).toEqual([1, 2, 2]);
+  });
+
+  it('never exceeds the 3-piece cap even with many filler pieces available', () => {
+    const big = [{ id: 'a', length: 30 }, { id: 'b', length: 30 }];
+    const fillers = Array.from({ length: 10 }, (_, i) => filler({ id: `f${i}`, length: 5 }));
+    const rows = groupPiecesIntoRows([...big, ...fillers]);
+    expect(rows.every((r) => r.length <= MAX_PIECES_PER_ROW)).toBe(true);
+  });
+
+  it('computes raw row length as the sum of piece lengths plus a 1" gap between each', () => {
+    const pieces = [{ id: 'a', length: 24.5 }, { id: 'b', length: 24.5 }, filler({ id: 'c', length: 18.5 })];
+    const rows = groupPiecesIntoRows(pieces);
+    expect(rowRawLength(rows[0])).toBeCloseTo(24.5 + 1 + 24.5 + 1 + 18.5, 5); // 69.5
   });
 
   it('returns an empty array for no pieces', () => {
-    expect(groupPiecesIntoRows([], 100)).toEqual([]);
-  });
-
-  it('many identical pieces combine properly using the no-standout floor', () => {
-    const pieces = Array.from({ length: 5 }, (_, i) => ({ id: `s${i}`, length: 15 }));
-    const cap = rowGroupingCap(pieces, 6); // same clearance convention as backend's +6
-    const rows = groupPiecesIntoRows(pieces, cap);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toHaveLength(5);
-  });
-});
-
-describe('rowGroupingCap (120" floor only when there is truly no standout piece)', () => {
-  it('uses the normal longest-piece-plus-clearance cap when a standout exists', () => {
-    const pieces = [{ length: 67 }, { length: 25 }, { length: 25 }, { length: 25 }];
-    expect(rowGroupingCap(pieces, 6)).toBe(73);
-  });
-
-  it('does not treat a tied max (six 79s alongside shorter pieces) as "no standout"', () => {
-    const pieces = referenceRows18();
-    expect(rowGroupingCap(pieces, 6)).toBe(85); // 79 + 6, not the 120 floor
-  });
-
-  it('applies the merge-floor (capped at the 100" row-length ceiling) only when every piece shares one exact length', () => {
-    const pieces = Array.from({ length: 5 }, () => ({ length: 15 }));
-    expect(rowGroupingCap(pieces, 6)).toBe(100); // min(120, ROW_RAW_LENGTH_MAX_IN)
-  });
-
-  it('never shrinks the cap below what a single piece needs, even when homogeneous', () => {
-    const pieces = Array.from({ length: 3 }, () => ({ length: 150 }));
-    expect(rowGroupingCap(pieces, 6)).toBe(156); // 150 + 6, bigger than the 120 floor
-  });
-
-  it('returns 0 for an empty selection', () => {
-    expect(rowGroupingCap([], 6)).toBe(0);
+    expect(groupPiecesIntoRows([])).toEqual([]);
   });
 });

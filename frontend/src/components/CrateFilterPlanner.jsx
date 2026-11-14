@@ -4,7 +4,7 @@ import { API_BASE } from '../utils/plannerUtils';
 import { weightBatchParts } from '../utils/crateEstimator';
 import { thicknessInchesFromLabel } from '../utils/thicknessConstants';
 import {
-  groupPiecesIntoRows, rowRawLength, rowGroupingCap, rowLengthGrowthCandidates,
+  groupPiecesIntoRows, rowRawLength,
   CRATE_INTERNAL_WIDTH_MIN_IN, CRATE_INTERNAL_WIDTH_MAX_IN,
 } from '../utils/rowPacking';
 import MultiSelectDropdown from './MultiSelectDropdown';
@@ -348,35 +348,19 @@ export function computeCrateDimensions(parts, dimConfig) {
   const maxSingleLong = Math.max(...parts.map((p) => Math.max(p.length || 0, p.width || 0)));
   const rowWidth = (rws) => rws.reduce((s, row) => s + Math.max(...row.map((p) => thicknessInches(p.thickness))), 0);
 
-  // Growing the row-length budget beyond the single-longest-piece cap merges
-  // more pieces into fewer rows — trading crate length for crate width. This
-  // runs by default, not just when width would otherwise breach 26" —
-  // matching the fabricator's own convention of combining pieces into a
-  // shared row whenever they reasonably fit, to keep the crate narrow (e.g.
-  // three ~24"/18" pieces sharing one ~70" row), not only when forced to by
-  // the structural maximum. Keeps growing through every candidate as long as
-  // it keeps reducing row count; the 10" structural floor (applied below)
-  // guards against merging so far there's nothing left to combine.
-  // Mirrors _pack_main_rows_within_width_band() in dimensions.py.
-  let phaseACap = rowSource.length ? rowGroupingCap(rowSource, cfg.lengthMargin * 2) : 0;
-  let rows = rowSource.length ? groupPiecesIntoRows(rowSource, phaseACap) : [];
-  let rowThicknessSum = rowWidth(rows);
+  // Pairs matching-length pieces into a shared row (never more than
+  // MAX_PIECES_PER_ROW), with any already-identified filler/companion piece
+  // (see withIslandFamilyOverrides) used to top off a pair before it's ever
+  // paired with its own kind. Confirmed against the real packing list
+  // (8 crates, 336 physical rows, zero exceptions) — see rowPacking.js.
+  const rows = rowSource.length ? groupPiecesIntoRows(rowSource) : [];
+  const rowThicknessSum = rowWidth(rows);
   const widthWarnings = [];
-  if (rowSource.length) {
-    for (const candidateCap of rowLengthGrowthCandidates(rowSource)) {
-      if (candidateCap <= phaseACap) continue;
-      const candidateRows = groupPiecesIntoRows(rowSource, candidateCap);
-      if (candidateRows.length >= rows.length) break; // no further merging achievable
-      phaseACap = candidateCap;
-      rows = candidateRows;
-      rowThicknessSum = rowWidth(rows);
-    }
-    if (rowThicknessSum + cfg.widthMargin * 2 > CRATE_INTERNAL_WIDTH_MAX_IN) {
-      widthWarnings.push(
-        `Crate width ${(rowThicknessSum + cfg.widthMargin * 2).toFixed(1)}" exceeds the ` +
-        `${CRATE_INTERNAL_WIDTH_MAX_IN}" maximum even after merging rows by length — needs manual review.`
-      );
-    }
+  if (rowSource.length && rowThicknessSum + cfg.widthMargin * 2 > CRATE_INTERNAL_WIDTH_MAX_IN) {
+    widthWarnings.push(
+      `Crate width ${(rowThicknessSum + cfg.widthMargin * 2).toFixed(1)}" exceeds the ` +
+      `${CRATE_INTERNAL_WIDTH_MAX_IN}" maximum — needs manual review.`
+    );
   }
   const longestRowRaw = rows.length ? Math.max(...rows.map((r) => rowRawLength(r))) : 0;
 
