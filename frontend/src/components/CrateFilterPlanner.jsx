@@ -199,8 +199,9 @@ export function withIslandFamilyOverrides(parts) {
 // against whatever subset is passed in would be unsafe, since a filtered
 // subset can be missing a family's primary piece.
 export function partitionPartsByClassAndBuilding(parts) {
+  const annotated = withIslandFamilyOverrides(parts);
   const byClass = new Map();
-  for (const part of parts) {
+  for (const part of annotated) {
     const cls = bucketOrderForPart(part);
     if (!byClass.has(cls)) byClass.set(cls, []);
     byClass.get(cls).push(part);
