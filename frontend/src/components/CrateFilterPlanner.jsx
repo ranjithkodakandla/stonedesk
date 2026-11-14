@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { API_BASE } from '../utils/plannerUtils';
-import { weightBatchParts } from '../utils/crateEstimator';
+import { weightBatchParts, rebalanceBatchesEvenly } from '../utils/crateEstimator';
 import { thicknessInchesFromLabel } from '../utils/thicknessConstants';
 import {
   groupPiecesIntoRows, rowRawLength,
@@ -252,7 +252,17 @@ export function islandBatchParts(parts, targetWeightKg, widthMarginTotal, overag
     }
   }
   if (current.length) batches.push(current);
-  return batches;
+  // Spread evenly across however many crates the weight/width cap requires
+  // instead of packing every crate to the brim and leaving a small leftover
+  // (e.g. 36 pieces at a 10-per-crate cap becomes four crates of 9, not
+  // 10+10+10+6) — see rebalanceBatchesEvenly. Falls back to the greedy
+  // result if an even split would itself breach either cap.
+  const balanced = rebalanceBatchesEvenly(parts, batches.length, (group) => {
+    const w = group.reduce((s, p) => s + (p.weight_kg || 0), 0);
+    const td = group.reduce((s, p) => s + thicknessInches(p.thickness) * (p.qty || 1), 0);
+    return w <= weightCap && td <= widthCap;
+  });
+  return balanced || batches;
 }
 
 // ─── Crate dimension configuration ────────────────────────────────────────────
