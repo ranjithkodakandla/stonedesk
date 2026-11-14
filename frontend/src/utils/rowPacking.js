@@ -22,11 +22,25 @@ const roundLen = (n) => Math.round(n * 1000) / 1000;
 // place.
 export const NO_STANDOUT_ROW_CAP_IN = 120;
 
+// Hard ceiling on a single row's raw length (sum of its pieces' lengths plus
+// the gaps between them) — a real physical limit on the "side top"/"range
+// top" family of pieces that get packed side by side in a shared row
+// (mirrors CRATE_INTERNAL_WIDTH_MIN_IN/MAX_IN below: width has a floor and a
+// ceiling, length has a ceiling only). Nothing merges rows past this.
+export const ROW_RAW_LENGTH_MAX_IN = 100.0;
+
 export const rowGroupingCap = (pieces, clearanceIn) => {
   if (!pieces || !pieces.length) return 0;
   const normalCap = Math.max(...pieces.map(pieceLength)) + clearanceIn;
   const distinctLengths = new Set(pieces.map((p) => roundLen(pieceLength(p))));
-  if (distinctLengths.size <= 1) return Math.max(normalCap, NO_STANDOUT_ROW_CAP_IN);
+  if (distinctLengths.size <= 1) {
+    // Never shrink below what a single piece needs on its own (a 150" piece
+    // still needs a 150"+ row even though that exceeds the merge ceiling —
+    // the ceiling only limits how far pieces get COMBINED, not a piece's
+    // own unavoidable length), but the "let identical pieces combine" floor
+    // itself is capped at the real row-length ceiling, not 120" uncapped.
+    return Math.max(normalCap, Math.min(NO_STANDOUT_ROW_CAP_IN, ROW_RAW_LENGTH_MAX_IN));
+  }
   return normalCap;
 };
 
@@ -77,16 +91,32 @@ export const CRATE_INTERNAL_WIDTH_MIN_IN = 10.0;
 export const CRATE_INTERNAL_WIDTH_MAX_IN = 26.0;
 
 // Candidate row-length budgets beyond the single-longest-piece cap, built
-// from this crate's own distinct piece lengths — never an arbitrary
-// multiplier. Mirrors _row_length_growth_candidates() in dimensions.py.
+// from this crate's own piece lengths — never an arbitrary multiplier. Uses
+// every piece's length, not just the distinct values: a pool with many
+// duplicates of the longest length (e.g. twenty 24.5" pieces) needs a
+// candidate wide enough to fit TWO of that length plus a smaller piece
+// (2x24.5+18.5+2 gaps = 69.5"), which a distinct-lengths-only cumulative sum
+// can never produce — it only ever uses each length once. Capped at
+// ROW_RAW_LENGTH_MAX_IN: without a real length ceiling, "try combining more"
+// has no stopping point and will eventually merge everything into one row.
+// Mirrors _row_length_growth_candidates() in dimensions.py, which needs the
+// same fix.
 export const rowLengthGrowthCandidates = (pieces) => {
-  const lengths = [...new Set(pieces.map((p) => roundLen(pieceLength(p))))].sort((a, b) => b - a);
+  const lengths = pieces.map((p) => roundLen(pieceLength(p))).sort((a, b) => b - a);
   const candidates = [];
   let running = 0;
-  lengths.forEach((length, i) => {
-    running += (i > 0 ? ROW_PIECE_GAP_IN : 0) + length;
+  let started = false;
+  for (let i = 0; i < lengths.length; i += 1) {
+    const next = running + (started ? ROW_PIECE_GAP_IN : 0) + lengths[i];
+    // A later (smaller) length that still fits under the cap can be worth
+    // trying even after an earlier, larger length didn't — e.g. a second
+    // 79" piece doesn't fit, but a 19" one does. Skip past pieces that don't
+    // fit instead of stopping the whole search there.
+    if (next > ROW_RAW_LENGTH_MAX_IN) continue;
+    running = next;
+    started = true;
     candidates.push(running);
-  });
+  }
   return candidates;
 };
 

@@ -25,12 +25,17 @@ describe('computeCrateDimensions (the actual "Filter parts and build crates" scr
     // Row-growth combines pieces into a shared row whenever they reasonably
     // fit, by default — not only when forced to by the 26" cap (see the
     // fabricator's own convention: a 24.5+24.5+18.5 row combined on purpose
-    // even though its width was already well under 26"). Here each 79/49/19
-    // triple combines into one row (79+1+49+1+19=149"), 6 rows total — width
-    // bottoms out at the 10" structural floor, not 18 raw pieces' worth.
+    // even though its width was already well under 26"). But a single row's
+    // raw length is capped at ROW_RAW_LENGTH_MAX_IN (100") — a real
+    // structural limit, not just "merge until nothing improves" (which has
+    // no stopping point and would merge everything into one giant row). A
+    // 79+49+19 row would need 149", over that cap, so here the best fit is
+    // six [79,19] pairs (99" each) plus three [49,49] pairs (99" each) — 9
+    // rows total, not 18 raw pieces' worth and not the 79+49+19 combo either.
     const perRowThickness = 1.18; // 3CM
-    expect(dims.internal_width).toBe(10); // CRATE_INTERNAL_WIDTH_MIN_IN floor
-    expect(dims.internal_length).toBeCloseTo(79 + 1 + 49 + 1 + 19 + 1, 1); // 149 + lengthMargin*2
+    const expectedWidth = 9 * perRowThickness + DEFAULT_DIM_CONFIG.kv.widthMargin * 2;
+    expect(dims.internal_width).toBeCloseTo(expectedWidth, 1);
+    expect(dims.internal_length).toBeCloseTo(79 + 1 + 19 + 1, 1); // longest row (79+19) + lengthMargin*2
     expect(dims.internal_width).toBeLessThan(18 * perRowThickness + DEFAULT_DIM_CONFIG.kv.widthMargin * 2);
   });
 

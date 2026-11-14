@@ -82,9 +82,9 @@ describe('rowGroupingCap (120" floor only when there is truly no standout piece)
     expect(rowGroupingCap(pieces, 6)).toBe(85); // 79 + 6, not the 120 floor
   });
 
-  it('applies the 120" floor only when every piece shares one exact length', () => {
+  it('applies the merge-floor (capped at the 100" row-length ceiling) only when every piece shares one exact length', () => {
     const pieces = Array.from({ length: 5 }, () => ({ length: 15 }));
-    expect(rowGroupingCap(pieces, 6)).toBe(120);
+    expect(rowGroupingCap(pieces, 6)).toBe(100); // min(120, ROW_RAW_LENGTH_MAX_IN)
   });
 
   it('never shrinks the cap below what a single piece needs, even when homogeneous', () => {
